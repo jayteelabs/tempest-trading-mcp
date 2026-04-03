@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+      fail-fast: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
+
+      - name: Install ta-lib system library
+        run: |
+          sudo apt-get update && sudo apt-get install -y build-essential wget
+          wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
+          tar -xzf ta-lib-0.4.0-src.tar.gz
+          cd ta-lib && ./configure && make && sudo make install
+          cd .. && rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
+          sudo ldconfig
+        env:
+          TA_LIBRARY_PATH: /usr/lib
+          TA_INCLUDE_PATH: /usr/include
+
+      - name: Install dependencies
+        run: |
+          uv pip install -e .
+          uv pip install ".[dev]"
+          uv pip install ta-lib
+
+      - name: Lint with ruff
+        run: uv run ruff check src/ tests/
+
+      - name: Run tests with pytest
+        run: uv run pytest tests/ -v --tb=short
