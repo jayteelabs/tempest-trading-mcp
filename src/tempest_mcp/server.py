@@ -29,13 +29,30 @@ TOOLS = {
 }
 
 TOOL_SCHEMAS = [
+    # Market Data (3)
     Tool(name="fetch_ticker", description="Fetch real-time ticker", inputSchema={"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}),
     Tool(name="fetch_klines", description="Fetch OHLCV klines", inputSchema={"type": "object", "properties": {"symbol": {"type": "string"}, "timeframe": {"type": "string", "default": "1h"}}, "required": ["symbol"]}),
-    Tool(name="indicator_rsi", description="Calculate RSI", inputSchema={"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}),
+    Tool(name="fetch_orderbook", description="Fetch orderbook depth", inputSchema={"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}),
+    # Indicators (13)
+    Tool(name="indicator_ema", description="Calculate EMA (Exponential Moving Average)", inputSchema={"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}),
+    Tool(name="indicator_vwap", description="Calculate VWAP (Volume Weighted Average Price)", inputSchema={"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}),
+    Tool(name="indicator_rsi", description="Calculate RSI (Relative Strength Index)", inputSchema={"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}),
     Tool(name="indicator_macd", description="Calculate MACD", inputSchema={"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}),
-    Tool(name="indicator_atr", description="Calculate ATR", inputSchema={"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}),
+    Tool(name="indicator_atr", description="Calculate ATR (Average True Range)", inputSchema={"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}),
+    Tool(name="indicator_supertrend", description="Calculate Supertrend indicator", inputSchema={"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}),
+    Tool(name="indicator_session_levels", description="Calculate session levels", inputSchema={"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}),
+    Tool(name="indicator_adx", description="Calculate ADX (Average Directional Index)", inputSchema={"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}),
+    Tool(name="indicator_stochastic", description="Calculate Stochastic oscillator", inputSchema={"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}),
+    Tool(name="indicator_bollinger_width", description="Calculate Bollinger Band Width", inputSchema={"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}),
+    Tool(name="indicator_obv", description="Calculate OBV (On-Balance Volume)", inputSchema={"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}),
+    Tool(name="indicator_mfi", description="Calculate MFI (Money Flow Index)", inputSchema={"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}),
+    Tool(name="indicator_historical_volatility", description="Calculate historical volatility", inputSchema={"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}),
+    # Backtest (2)
     Tool(name="backtest_strategy", description="Run backtest", inputSchema={"type": "object", "properties": {"symbol": {"type": "string"}, "strategy_id": {"type": "string"}}, "required": ["symbol"]}),
+    Tool(name="compare_strategies", description="Compare multiple strategies", inputSchema={"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}),
+    # Screener (2)
     Tool(name="screener_scan", description="Scan for opportunities", inputSchema={"type": "object", "properties": {}}),
+    Tool(name="session_breakout_scan", description="Detect session breakouts", inputSchema={"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}),
 ]
 
 async def run_server():
