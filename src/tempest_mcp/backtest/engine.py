@@ -1,11 +1,19 @@
 """Backtesting engine."""
-from dataclasses import dataclass, field
 import uuid
+from dataclasses import dataclass, field
+
 import numpy as np
+
 from tempest_mcp.backtest.commission import CommissionModel, create_binance_model
 from tempest_mcp.config import ErrorCodes
 from tempest_mcp.logging_config import get_logger
-from tempest_mcp.models.backtest import BacktestResult, BacktestTrade, OrderSide, Position, calculate_performance_metrics
+from tempest_mcp.models.backtest import (
+    BacktestResult,
+    BacktestTrade,
+    OrderSide,
+    Position,
+    calculate_performance_metrics,
+)
 from tempest_mcp.models.market import Kline
 
 logger = get_logger(__name__)
@@ -46,7 +54,7 @@ class BacktestEngine:
             context = {"index": i, "open": data["open"][: i + 1], "high": data["high"][: i + 1], "low": data["low"][: i + 1], "close": data["close"][: i + 1], "volume": data["volume"][: i + 1], "timestamp": data["timestamp"][: i + 1], "current_price": data["close"][i], "position": self._position}
             try:
                 signal = strategy_func(context)
-            except Exception as e:
+            except Exception:
                 signal = 0
             self._process_signal(signal, data["close"][i], data["timestamp"][i], self._calculate_atr(data, i))
             equity = self._calculate_equity(data["close"][i])

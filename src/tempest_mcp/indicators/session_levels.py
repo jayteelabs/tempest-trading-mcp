@@ -1,6 +1,8 @@
 """Session levels: Asia, London, New York PDH/PDL detection."""
-from datetime import datetime, timedelta
+from datetime import datetime
+
 import numpy as np
+
 from tempest_mcp.config import ErrorCodes
 from tempest_mcp.indicators.ta_wrapper import IndicatorError
 from tempest_mcp.models.indicator import SessionLevels, SessionType

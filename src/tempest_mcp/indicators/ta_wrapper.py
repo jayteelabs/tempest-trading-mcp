@@ -1,8 +1,10 @@
 """ta-lib wrapper for high-performance indicator calculations."""
 import numpy as np
 import talib
+
 from tempest_mcp.config import ErrorCodes
 from tempest_mcp.logging_config import get_logger
+
 logger = get_logger(__name__)
 
 class IndicatorError(Exception):

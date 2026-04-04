@@ -1,10 +1,13 @@
 """Tests for backtest engine."""
-import pytest
 from datetime import datetime
-from tempest_mcp.backtest.commission import CommissionModel, create_binance_model
-from tempest_mcp.backtest.engine import BacktestEngine, BacktestError
+
+import pytest
+
+from tempest_mcp.backtest.commission import CommissionModel
+from tempest_mcp.backtest.engine import BacktestEngine
 from tempest_mcp.models.backtest import OrderSide
 from tempest_mcp.models.market import Kline
+
 
 class TestCommission:
     def test_commission(self):

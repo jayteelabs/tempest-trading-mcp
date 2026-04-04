@@ -1,10 +1,10 @@
 """Tests for technical indicators."""
 import pytest
-import numpy as np
-from tempest_mcp.indicators.ta_wrapper import calculate_ema, calculate_rsi, IndicatorError
-from tempest_mcp.indicators.trend import calculate_vwap, calculate_supertrend
-from tempest_mcp.indicators.momentum import calculate_rsi_result, calculate_macd_result
-from tempest_mcp.indicators.volatility import calculate_atr_result
+
+from tempest_mcp.indicators.momentum import calculate_macd_result, calculate_rsi_result
+from tempest_mcp.indicators.ta_wrapper import IndicatorError, calculate_ema, calculate_rsi
+from tempest_mcp.indicators.trend import calculate_supertrend, calculate_vwap
+
 
 class TestTAWrapper:
     def test_ema(self, price_data):

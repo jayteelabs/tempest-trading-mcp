@@ -5,16 +5,16 @@ from typing import Any
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+from mcp.types import TextContent, Tool
 
 from tempest_mcp.config import ErrorCodes, get_config
 from tempest_mcp.logging_config import get_logger, setup_logging
 from tempest_mcp.tools import (
-    fetch_ticker,
+    backtest_strategy,
     fetch_klines,
     fetch_orderbook,
+    fetch_ticker,
     indicator_rsi,
-    backtest_strategy,
     screener_scan,
 )
 
