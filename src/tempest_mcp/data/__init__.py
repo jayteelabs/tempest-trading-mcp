@@ -16,6 +16,8 @@ Design Decisions:
 - D16: TradingViewAdapter delegates orderbook to CCXT
 """
 
+from __future__ import annotations
+
 import os
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
@@ -30,59 +32,59 @@ logger = structlog.get_logger()
 @runtime_checkable
 class LiveDataAdapter(Protocol):
     """Protocol defining the interface for live data adapters.
-    
+
     All adapters must implement these three methods:
     - fetch_live_price: Get latest trade price
     - fetch_ohlcv_live: Get OHLCV candlestick data
     - fetch_orderbook_snapshot: Get order book depth
     """
-    
+
     def fetch_live_price(
         self,
         symbol: str,
         exchange: str = "binance",
     ) -> float:
         """Fetch latest trade price for a symbol.
-        
+
         Args:
             symbol: Symbol in any supported format
             exchange: Target exchange (default: "binance")
-        
+
         Returns:
             Latest trade price as float, or float('nan') on error
         """
         ...
-    
+
     def fetch_ohlcv_live(
         self,
         symbol: str,
         timeframe: str = "1m",
         limit: int = 100,
-    ) -> "pd.DataFrame":
+    ) -> pd.DataFrame:
         """Fetch OHLCV candlestick data.
-        
+
         Args:
             symbol: Symbol in any supported format
             timeframe: Timeframe string (e.g., "1m", "5m", "1h")
             limit: Number of candles to fetch
-        
+
         Returns:
             DataFrame with OHLCV columns and UTC-aware index,
             or empty DataFrame on error
         """
         ...
-    
+
     def fetch_orderbook_snapshot(
         self,
         symbol: str,
         limit: int = 20,
     ) -> dict:
         """Fetch order book snapshot.
-        
+
         Args:
             symbol: Symbol in any supported format
             limit: Depth of orderbook to fetch
-        
+
         Returns:
             Dict with bids, asks, and timestamp,
             or empty structure on error
@@ -92,23 +94,23 @@ class LiveDataAdapter(Protocol):
 
 def get_live_adapter() -> LiveDataAdapter:
     """Get the appropriate live data adapter based on environment.
-    
+
     Selection logic:
     1. If TRADINGVIEW_API_KEY is set → TradingViewAdapter (primary)
     2. Otherwise → CCXTAdapter (fallback)
-    
+
     Returns:
         LiveDataAdapter instance (TradingViewAdapter or CCXTAdapter)
-    
+
     Example:
         >>> adapter = get_live_adapter()
         >>> price = adapter.fetch_live_price("BTCUSDT")
     """
     api_key = os.environ.get("TRADINGVIEW_API_KEY")
-    
+
     if api_key:
         from tempest_mcp.data.tv_adapter import TradingViewAdapter
-        
+
         logger.info(
             "adapter_selected",
             adapter="TradingViewAdapter",
@@ -117,7 +119,7 @@ def get_live_adapter() -> LiveDataAdapter:
         return TradingViewAdapter(api_key=api_key)
     else:
         from tempest_mcp.data.ccxt_adapter import CCXTAdapter
-        
+
         logger.warning(
             "adapter_selected",
             adapter="CCXTAdapter",
@@ -126,13 +128,19 @@ def get_live_adapter() -> LiveDataAdapter:
         return CCXTAdapter()
 
 
-# Re-export key components
-from tempest_mcp.data._symbols import (
-    get_base_currency,
-    normalize_to_ccxt,
-    normalize_to_tradingview,
-    validate_symbol,
-)
+# Lazy re-exports via __getattr__ to avoid E402
+def __getattr__(name: str):
+    if name in (
+        "get_base_currency",
+        "normalize_to_ccxt",
+        "normalize_to_tradingview",
+        "validate_symbol",
+    ):
+        import tempest_mcp.data._symbols as _symbols
+
+        return getattr(_symbols, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "LiveDataAdapter",
