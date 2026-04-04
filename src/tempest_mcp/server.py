@@ -423,6 +423,13 @@ def create_app() -> Starlette:
     async def message_handler(scope: dict, receive: callable, send: callable) -> None:
         await transport.handle_post_message(scope, receive, send)
 
+    @asynccontextmanager
+    async def lifespan(app: Starlette):
+        """Gracefully cancel background tasks on shutdown."""
+        yield
+        cancel_rate_limit_cleanup()
+        logger.info("Rate limit cleanup task cancelled on shutdown")
+
     # TODO: In-memory rate limiting is per-process. If uvicorn is run with multiple
     # workers (--workers N), each worker has independent state — a client could
     # bypass rate limits by hitting different workers. For multi-worker deployments,
