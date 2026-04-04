@@ -1,8 +1,10 @@
 """Tests for data adapters."""
 import pytest
-from tempest_mcp.data.yf_adapter import YFAdapter
+
 from tempest_mcp.data.ccxt_adapter import CCXTAdapter, CCXTError
-from tempest_mcp.models.market import Kline, Ticker, OrderBook, OrderBookLevel
+from tempest_mcp.data.yf_adapter import YFAdapter
+from tempest_mcp.models.market import Kline, Ticker
+
 
 class TestYFAdapter:
     def test_convert_symbol(self):

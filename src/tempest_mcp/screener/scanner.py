@@ -1,17 +1,18 @@
 """Multi-factor crypto screener."""
+
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
-import numpy as np
-from tempest_mcp.config import ErrorCodes, get_config
+
+from tempest_mcp.config import get_config
 from tempest_mcp.data.ccxt_adapter import CCXTAdapter
 from tempest_mcp.indicators.momentum import calculate_rsi_result
 from tempest_mcp.indicators.trend import calculate_ema_result
-from tempest_mcp.indicators.volatility import calculate_atr_result
 from tempest_mcp.logging_config import get_logger
 from tempest_mcp.models.indicator import SessionType
 
 logger = get_logger(__name__)
+
 
 class ScanFilter(Enum):
     RSI_OVERSOLD = "rsi_oversold"
@@ -21,6 +22,7 @@ class ScanFilter(Enum):
     HIGH_VOLATILITY = "high_volatility"
     LOW_VOLATILITY = "low_volatility"
     VOLUME_SPIKE = "volume_spike"
+
 
 @dataclass
 class ScanResult:
@@ -32,6 +34,7 @@ class ScanResult:
     indicator_values: dict[str, float]
     score: float = 0.0
     metadata: dict[str, Any] = field(default_factory=dict)
+
 
 @dataclass
 class Screener:
@@ -57,7 +60,9 @@ class Screener:
     def scan(self, symbols: list[str] | None = None) -> list[ScanResult]:
         symbols_to_scan = symbols or list(self.symbols)
         results = []
-        logger.info("Starting scan", symbols=len(symbols_to_scan), filters=[f.value for f in self.filters])
+        logger.info(
+            "Starting scan", symbols=len(symbols_to_scan), filters=[f.value for f in self.filters]
+        )
         for symbol in symbols_to_scan:
             try:
                 result = self._scan_symbol(symbol)
@@ -75,9 +80,6 @@ class Screener:
             return None
         klines = kline_data.klines
         close = [k.close for k in klines]
-        high = [k.high for k in klines]
-        low = [k.low for k in klines]
-        volume = [k.volume for k in klines]
         indicator_values = {}
         filters_matched = []
         try:
@@ -95,7 +97,15 @@ class Screener:
             indicator_values["ema_20"] = close[-1]
             indicator_values["ema_50"] = close[-1]
         score = self._calculate_score(filters_matched, indicator_values)
-        return ScanResult(symbol=symbol, exchange=self.exchange, timestamp=klines[-1].timestamp, price=close[-1], filters_matched=filters_matched, indicator_values=indicator_values, score=score)
+        return ScanResult(
+            symbol=symbol,
+            exchange=self.exchange,
+            timestamp=klines[-1].timestamp,
+            price=close[-1],
+            filters_matched=filters_matched,
+            indicator_values=indicator_values,
+            score=score,
+        )
 
     def _calculate_score(self, filters_matched, indicator_values):
         if not self.filters:
@@ -109,8 +119,11 @@ class Screener:
         match_ratio = len(filters_matched) / len(self.filters)
         return min(100, match_ratio * 100)
 
-    def session_breakout_scan(self, session: SessionType, symbols: list[str] | None = None) -> list[ScanResult]:
+    def session_breakout_scan(
+        self, session: SessionType, symbols: list[str] | None = None
+    ) -> list[ScanResult]:
         from tempest_mcp.indicators.session_levels import calculate_session_levels
+
         symbols_to_scan = symbols or list(self.symbols)
         results = []
         for symbol in symbols_to_scan:
@@ -135,7 +148,21 @@ class Screener:
                 if session_low > 0 and current_price < session_low:
                     filters_matched.append(f"{session_key}_low_breakout")
                 score = 80.0 if filters_matched else 0.0
-                results.append(ScanResult(symbol=symbol, exchange=self.exchange, timestamp=klines[-1].timestamp, price=current_price, filters_matched=filters_matched, indicator_values={"session_high": session_high, "session_low": session_low, "current_price": current_price}, score=score))
+                results.append(
+                    ScanResult(
+                        symbol=symbol,
+                        exchange=self.exchange,
+                        timestamp=klines[-1].timestamp,
+                        price=current_price,
+                        filters_matched=filters_matched,
+                        indicator_values={
+                            "session_high": session_high,
+                            "session_low": session_low,
+                            "current_price": current_price,
+                        },
+                        score=score,
+                    )
+                )
             except Exception as e:
                 logger.warning("Session scan failed", symbol=symbol, error=str(e))
         results.sort(key=lambda r: r.score, reverse=True)

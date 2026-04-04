@@ -1,7 +1,9 @@
 """Volume indicators: OBV, MFI."""
 import numpy as np
 import talib
-from tempest_mcp.models.indicator import OBVResult, MFIResult
+
+from tempest_mcp.models.indicator import MFIResult, OBVResult
+
 
 def calculate_obv_result(close, volume, ema_period: int = 20) -> OBVResult:
     close_arr = np.array(close, dtype=np.float64)

@@ -1,9 +1,11 @@
 """Test configuration."""
-import pytest
-import numpy as np
-from datetime import datetime, timedelta
 import os
 import sys
+from datetime import datetime, timedelta
+
+import numpy as np
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../src"))
 
 @pytest.fixture

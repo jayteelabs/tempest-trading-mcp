@@ -1,7 +1,6 @@
 """Tests for screener."""
-import pytest
-from tempest_mcp.screener.scanner import Screener, ScanFilter, ScanResult
-from tempest_mcp.models.indicator import SessionType
+from tempest_mcp.screener.scanner import ScanFilter, ScanResult, Screener
+
 
 class TestScreener:
     def test_init(self):

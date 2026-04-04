@@ -1,7 +1,9 @@
 """Commission and slippage model."""
 from dataclasses import dataclass
 from enum import Enum
+
 from tempest_mcp.models.backtest import OrderSide
+
 
 class SlippageModel(Enum):
     FIXED = "fixed"

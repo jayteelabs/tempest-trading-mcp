@@ -1,9 +1,9 @@
 """Trend indicators: EMA, VWAP, Supertrend, ADX."""
 import numpy as np
 import talib
-from tempest_mcp.config import ErrorCodes
-from tempest_mcp.indicators.ta_wrapper import IndicatorError
-from tempest_mcp.models.indicator import EMAResult, VWAPResult, SupertrendResult, ADXResult
+
+from tempest_mcp.models.indicator import ADXResult, EMAResult, SupertrendResult, VWAPResult
+
 
 def calculate_ema_result(close, periods: list[int] | None = None) -> EMAResult:
     close_arr = np.array(close, dtype=np.float64)

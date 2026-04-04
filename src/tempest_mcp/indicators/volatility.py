@@ -1,8 +1,9 @@
 """Volatility indicators: ATR, Historical Volatility, Bollinger Width."""
 import numpy as np
 import talib
-from tempest_mcp.config import ErrorCodes
+
 from tempest_mcp.models.indicator import ATRResult, BollingerWidthResult, HistoricalVolatilityResult
+
 
 def calculate_atr_result(high, low, close, period: int = 14) -> ATRResult:
     high_arr = np.array(high, dtype=np.float64)

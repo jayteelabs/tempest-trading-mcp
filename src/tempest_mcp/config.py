@@ -4,10 +4,11 @@ Configuration management for Tempest MCP Server.
 Environment variables with TEMPEST_ prefix, SCREAMING_SNAKE_CASE.
 """
 
+import os
 from dataclasses import dataclass
 from functools import lru_cache
-import os
 from typing import Final
+
 from dotenv import load_dotenv
 
 load_dotenv()
