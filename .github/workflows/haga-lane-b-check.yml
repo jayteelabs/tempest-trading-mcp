@@ -12,20 +12,12 @@ permissions:
 
 jobs:
   lane-b-check:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Install opencode
-        run: npm install -g @opencode-ai/plugin@latest
 
       - name: Get PR diff
         id: diff
@@ -45,7 +37,6 @@ jobs:
             mv /tmp/pr_diff_truncated.txt /tmp/pr_diff.txt
             echo "DIFF_TRUNCATED=true" >> $GITHUB_OUTPUT
           fi
-          echo "DIFF_PATH=/tmp/pr_diff.txt" >> $GITHUB_OUTPUT
 
       - name: Run Lane B adversarial review
         id: lane-b
@@ -58,7 +49,7 @@ jobs:
           REPO="${{ github.repository }}"
           DIFF=$(cat /tmp/pr_diff.txt)
 
-          LANE_B_RESULT=$(opencode run \
+          LANE_B_RESULT=$(/home/tempest/.opencode/bin/opencode run \
             --agent Haga \
             --model minimax/MiniMax-M2.7-highspeed \
             "You are running Lane B (Logic/Edge/Adversarial) review for this PR:
@@ -90,11 +81,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           LANE_B_RESULT=$(cat /tmp/lane_b_result.txt)
-          if grep -q "Lane B: FAIL" /tmp/lane_b_result.txt; then
-            CONCLUSION="failure"
-          else
-            CONCLUSION="success"
-          fi
+          CONCLUSION=$(grep -q "Lane B: FAIL" /tmp/lane_b_result.txt && echo "failure" || echo "success")
 
           python3 << 'PYEOF'
 import json, urllib.request, os
