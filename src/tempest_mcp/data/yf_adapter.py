@@ -9,6 +9,7 @@ import yfinance as yf
 
 from tempest_mcp.config import ErrorCodes, get_config
 from tempest_mcp.logging_config import get_logger
+from tempest_mcp.models.market import Kline, KlineData, Ticker
 
 logger = get_logger(__name__)
 
@@ -300,7 +301,6 @@ class YFAdapter:
 
     def fetch_ticker(self, symbol: str) -> Ticker:
         """Fetch ticker data. DEPRECATED: use fetch_ohlcv for OHLCV data."""
-        from tempest_mcp.models.market import Ticker
 
         yf_symbol = self._convert_symbol(symbol)
         try:
@@ -337,7 +337,6 @@ class YFAdapter:
         self, symbol: str, timeframe: str = "1d", since: datetime | None = None, limit: int = 100
     ) -> KlineData:
         """Fetch klines. DEPRECATED: use fetch_ohlcv for OHLCV data."""
-        from tempest_mcp.models.market import Kline, KlineData
 
         yf_symbol = self._convert_symbol(symbol)
         interval = self._convert_timeframe(timeframe)
