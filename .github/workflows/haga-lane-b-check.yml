@@ -82,14 +82,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          LANE_B_RESULT=$(cat /tmp/lane_b_result.txt)
-          CONCLUSION=$(grep -q "Lane B: FAIL" /tmp/lane_b_result.txt && echo "failure" || echo "success")
-
           python3 << 'PYEOF'
           import json, urllib.request, os
 
           lane_b_result = open('/tmp/lane_b_result.txt').read()
-          conclusion = os.environ['CONCLUSION']
+          conclusion = "failure" if "Lane B: FAIL" in lane_b_result else "success"
 
           payload = {
               "name": "Haga Lane B (Code Review)",

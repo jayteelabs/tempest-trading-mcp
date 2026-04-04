@@ -72,8 +72,8 @@ jobs:
       - name: Post PR comment
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          PR_NUMBER=${{ github.event.pull_request.number }}
           LANE_A_RESULT=$(cat /tmp/lane_a_result.txt)
 
           python3 << 'PYEOF'
