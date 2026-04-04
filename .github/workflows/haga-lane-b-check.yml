@@ -1,5 +1,4 @@
 # Haga Lane B — adversarial code review check
-# Testing: self-hosted runner on tempesti-01
 name: Haga Lane B Check
 
 on:
@@ -14,7 +13,7 @@ permissions:
 
 jobs:
   lane-b-check:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -86,35 +85,35 @@ jobs:
           CONCLUSION=$(grep -q "Lane B: FAIL" /tmp/lane_b_result.txt && echo "failure" || echo "success")
 
           python3 << 'PYEOF'
-import json, urllib.request, os
+          import json, urllib.request, os
 
-lane_b_result = open('/tmp/lane_b_result.txt').read()
-conclusion = os.environ['CONCLUSION']
+          lane_b_result = open('/tmp/lane_b_result.txt').read()
+          conclusion = os.environ['CONCLUSION']
 
-payload = {
-    "name": "Haga Lane B (Code Review)",
-    "head_sha": os.environ['GITHUB_SHA'],
-    "status": "completed",
-    "conclusion": conclusion,
-    "output": {
-        "title": "Haga Lane B — Logic & Edge Review",
-        "summary": f"Lane B result: {conclusion}",
-        "text": lane_b_result
-    }
-}
+          payload = {
+              "name": "Haga Lane B (Code Review)",
+              "head_sha": os.environ['GITHUB_SHA'],
+              "status": "completed",
+              "conclusion": conclusion,
+              "output": {
+                  "title": "Haga Lane B — Logic & Edge Review",
+                  "summary": f"Lane B result: {conclusion}",
+                  "text": lane_b_result
+              }
+          }
 
-data = json.dumps(payload).encode()
-req = urllib.request.Request(
-    f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/check-runs",
-    data=data,
-    headers={
-        "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "Content-Type": "application/json"
-    },
-    method="POST"
-)
-with urllib.request.urlopen(req) as resp:
-    print(resp.read().decode())
-PYEOF
+          data = json.dumps(payload).encode()
+          req = urllib.request.Request(
+              f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/check-runs",
+              data=data,
+              headers={
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "Content-Type": "application/json"
+              },
+              method="POST"
+          )
+          with urllib.request.urlopen(req) as resp:
+              print(resp.read().decode())
+          PYEOF
