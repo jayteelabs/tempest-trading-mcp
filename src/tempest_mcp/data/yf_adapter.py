@@ -1,5 +1,6 @@
 """Yahoo Finance data adapter for historical market data. NO API KEYS REQUIRED."""
 
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
@@ -14,8 +15,10 @@ logger = get_logger(__name__)
 # Error code constants (3xxx range per D8)
 _YF_RATE_LIMIT_CODE: Final[int] = 3004
 _YF_NETWORK_CODE: Final[int] = 3005
-_YF_NOT_FOUND_CODE: Final[int] = 3003
 _YF_GENERAL_CODE: Final[int] = 3001
+
+# Check if yfinance has YFRateLimitError at module load time
+_YF_HAS_RATE_LIMIT_ERROR = hasattr(yf.exceptions, "YFRateLimitError")
 
 
 class TempestError(Exception):
@@ -46,6 +49,15 @@ def _get_empty_ohlcv() -> pd.DataFrame:
     return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
 
+def _is_rate_limit_error(e: Exception) -> bool:
+    """Check if exception is a yfinance rate limit error, safely."""
+    if _YF_HAS_RATE_LIMIT_ERROR:
+        return isinstance(e, yf.exceptions.YFRateLimitError)
+    # Fallback: check message content
+    error_str = str(e).lower()
+    return "rate limit" in error_str or "429" in error_str
+
+
 def fetch_ohlcv(
     symbol: str,
     interval: str = "1d",
@@ -72,22 +84,23 @@ def fetch_ohlcv(
         This function does NOT raise exceptions. All errors are logged and return empty DataFrame.
     """
     config = get_config()
-    timeout: int = config.yf_timeout
-    max_retries: int = config.yf_retries
+    # Validate timeout and max_retries - ensure positive values
+    timeout: int = max(1, config.yf_timeout)
+    max_retries: int = max(1, config.yf_retries)
 
     # Normalize dates to UTC
     now_utc = datetime.now(timezone.utc)
-    if end is None:
-        end = now_utc
     if start is None:
         # Default: 30 days for daily, shorter for intraday
         start = now_utc - timedelta(days=30)
 
-    # Ensure timezone-aware
+    # Ensure timezone-aware - naive datetimes are interpreted as UTC
     if start.tzinfo is None:
         start = start.replace(tzinfo=timezone.utc)
-    if end.tzinfo is None:
+        logger.warning("fetch_ohlcv: naive start datetime interpreted as UTC", start=start)
+    if end is not None and end.tzinfo is None:
         end = end.replace(tzinfo=timezone.utc)
+        logger.warning("fetch_ohlcv: naive end datetime interpreted as UTC", end=end)
 
     # Map interval to yfinance format
     interval_map: dict[str, str] = {
@@ -96,12 +109,31 @@ def fetch_ohlcv(
         "15m": "15m",
         "30m": "30m",
         "1h": "1h",
-        "4h": "1h",  # yfinance uses 1h for 4h
         "1d": "1d",
         "1wk": "1wk",
         "1mo": "1mo",
     }
-    yf_interval = interval_map.get(interval, "1d")
+    yf_interval = interval_map.get(interval)
+    if yf_interval is None:
+        logger.error(
+            "fetch_ohlcv: unsupported interval",
+            interval=interval,
+            supported_intervals=list(interval_map.keys()),
+        )
+        return _get_empty_ohlcv()
+
+    # 4h is not supported by yfinance - reject with clear error
+    if interval == "4h":
+        logger.error(
+            "fetch_ohlcv: 4h interval not supported by yfinance. Use 1h and aggregate client-side.",
+            interval=interval,
+        )
+        return _get_empty_ohlcv()
+
+    # Determine end for yfinance query
+    # If end is None (defaulting to now), don't pass end to yfinance to avoid
+    # returning open/NaN data near midnight - use yfinance default behavior
+    query_end = end if end is not None else None
 
     last_exception: Exception | None = None
     for attempt in range(max_retries):
@@ -109,7 +141,7 @@ def fetch_ohlcv(
             df = yf.download(
                 tickers=symbol,
                 start=start,
-                end=end,
+                end=query_end,
                 interval=yf_interval,
                 auto_adjust=auto_adjust,
                 progress=False,
@@ -145,6 +177,16 @@ def fetch_ohlcv(
 
             result = df[ohlcv_cols].copy()
 
+            # Handle all-NaN DataFrame (yfinance returns this for some symbols/data gaps)
+            if result.isnull().all().all():
+                logger.warning(
+                    "fetch_ohlcv: all-NaN data for symbol",
+                    symbol=symbol,
+                    interval=interval,
+                    attempt=attempt + 1,
+                )
+                return _get_empty_ohlcv()
+
             # Ensure index is UTC-aware
             if isinstance(result.index, pd.DatetimeIndex):
                 if result.index.tz is None:
@@ -161,47 +203,57 @@ def fetch_ohlcv(
             )
             return result
 
-        except yf.exceptions.YFRateLimitError:
-            last_exception = YFinanceError(
-                f"Rate limit exceeded for {symbol}",
-                code=_YF_RATE_LIMIT_CODE,
-            )
-            logger.warning(
-                "fetch_ohlcv: rate limit, retrying",
-                symbol=symbol,
-                interval=interval,
-                attempt=attempt + 1,
-                max_retries=max_retries,
-            )
-
-        except OSError as e:
-            # Network errors — retry
-            last_exception = YFinanceError(
-                f"Network error fetching {symbol}: {e}",
-                code=_YF_NETWORK_CODE,
-            )
-            logger.warning(
-                "fetch_ohlcv: network error, retrying",
-                symbol=symbol,
-                interval=interval,
-                attempt=attempt + 1,
-                max_retries=max_retries,
-                error=str(e),
-            )
-
         except Exception as e:
-            last_exception = YFinanceError(
-                f"Failed to fetch OHLCV for {symbol}: {e}",
-                code=_YF_GENERAL_CODE,
-            )
-            logger.warning(
-                "fetch_ohlcv: error, retrying",
+            if _is_rate_limit_error(e):
+                last_exception = YFinanceError(
+                    f"Rate limit exceeded for {symbol}",
+                    code=_YF_RATE_LIMIT_CODE,
+                )
+                logger.warning(
+                    "fetch_ohlcv: rate limit, retrying",
+                    symbol=symbol,
+                    interval=interval,
+                    attempt=attempt + 1,
+                    max_retries=max_retries,
+                )
+            elif isinstance(e, OSError):
+                # Network errors — retry
+                last_exception = YFinanceError(
+                    f"Network error fetching {symbol}: {e}",
+                    code=_YF_NETWORK_CODE,
+                )
+                logger.warning(
+                    "fetch_ohlcv: network error, retrying",
+                    symbol=symbol,
+                    interval=interval,
+                    attempt=attempt + 1,
+                    max_retries=max_retries,
+                    error=str(e),
+                )
+            else:
+                last_exception = YFinanceError(
+                    f"Failed to fetch OHLCV for {symbol}: {e}",
+                    code=_YF_GENERAL_CODE,
+                )
+                logger.warning(
+                    "fetch_ohlcv: error, retrying",
+                    symbol=symbol,
+                    interval=interval,
+                    attempt=attempt + 1,
+                    max_retries=max_retries,
+                    error=str(e),
+                )
+
+        # Exponential backoff before retry (skip on last attempt)
+        if attempt < max_retries - 1:
+            sleep_time = 2**attempt
+            logger.debug(
+                "fetch_ohlcv: sleeping before retry",
                 symbol=symbol,
                 interval=interval,
-                attempt=attempt + 1,
-                max_retries=max_retries,
-                error=str(e),
+                sleep_seconds=sleep_time,
             )
+            time.sleep(sleep_time)
 
     # All retries exhausted — log error and return empty DataFrame
     logger.error(
@@ -239,7 +291,6 @@ class YFAdapter:
             "15m": "15m",
             "30m": "30m",
             "1h": "1h",
-            "4h": "1h",
             "1d": "1d",
             "1w": "1wk",
             "1M": "1mo",

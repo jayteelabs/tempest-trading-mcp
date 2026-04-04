@@ -3,6 +3,7 @@
 Environment variables with TEMPEST_ prefix, SCREAMING_SNAKE_CASE.
 """
 
+import logging
 import os
 from dataclasses import dataclass
 from functools import lru_cache
@@ -11,6 +12,8 @@ from typing import Final
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -41,6 +44,11 @@ def _get_int(key: str, default: int) -> int:
     try:
         return int(value)
     except ValueError:
+        logger.warning(
+            "config: invalid integer for %s, using default %s",
+            f"TEMPEST_{key}",
+            default,
+        )
         return default
 
 
@@ -51,6 +59,11 @@ def _get_float(key: str, default: float) -> float:
     try:
         return float(value)
     except ValueError:
+        logger.warning(
+            "config: invalid float for %s, using default %s",
+            f"TEMPEST_{key}",
+            default,
+        )
         return default
 
 
