@@ -34,20 +34,18 @@ jobs:
           PR_NUM: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
-          echo "PR_NUM=$PR_NUM"
-          echo "REPO=$REPO"
-          echo "TOKEN_LEN=${#GITHUB_TOKEN}"
           curl -s -L "https://github.com/$REPO/pull/$PR_NUM.diff" \
             -H "Authorization: token $GITHUB_TOKEN" \
-            -o /tmp/diff.txt
-          DIFF_LEN=$(wc -c < /tmp/diff.txt)
+            -o /tmp/pr_diff.txt
+          DIFF_LEN=$(wc -c < /tmp/pr_diff.txt)
           echo "DIFF_LEN=$DIFF_LEN"
-          DIFF=$(cat /tmp/diff.txt)
           if [ "$DIFF_LEN" -gt 60000 ]; then
-            DIFF="${DIFF:0:60000}"$'n\n[Diff truncated]'
-            echo "DIFF_TRUNCATED=true" >> $GITHUB_ENV
+            head -c 60000 /tmp/pr_diff.txt > /tmp/pr_diff_truncated.txt
+            echo -e "\n\n[Diff truncated — too large for display]" >> /tmp/pr_diff_truncated.txt
+            mv /tmp/pr_diff_truncated.txt /tmp/pr_diff.txt
+            echo "DIFF_TRUNCATED=true" >> $GITHUB_OUTPUT
           fi
-          echo "DIFF=$DIFF" >> $GITHUB_ENV
+          echo "DIFF_PATH=/tmp/pr_diff.txt" >> $GITHUB_OUTPUT
 
       - name: Run Lane B adversarial review
         id: lane-b
@@ -58,6 +56,7 @@ jobs:
           PR_TITLE="${{ github.event.pull_request.title }}"
           PR_URL="${{ github.event.pull_request.html_url }}"
           REPO="${{ github.repository }}"
+          DIFF=$(cat /tmp/pr_diff.txt)
 
           LANE_B_RESULT=$(opencode run \
             --agent Haga \
@@ -70,7 +69,7 @@ jobs:
             URL: $PR_URL
 
             Diff (code changes):
-            ${{ env.DIFF }}
+            $DIFF
 
             Focus: Error states, data transformation, multi-file interactions, edge cases, logic correctness, adversarial/breaker mindset. Be harsh. Look for ways this code can fail, crash, or be exploited.
             Format your response as a structured finding list. For each issue found: severity (Critical/High/Medium/Low), file, line, description, recommendation.
@@ -79,34 +78,54 @@ jobs:
             IMPORTANT: If you find ANY High or Critical severity issues, your final line must be exactly 'Lane B: FAIL'
             If only Medium/Low or no issues, your final line must be exactly 'Lane B: PASS'")
 
-          echo "LANE_B_RESULT=$LANE_B_RESULT" >> $GITHUB_ENV
-
+          echo "$LANE_B_RESULT" > /tmp/lane_b_result.txt
           if echo "$LANE_B_RESULT" | grep -q "Lane B: FAIL"; then
-            echo "CONCLUSION=failure" >> $GITHUB_ENV
+            echo "CONCLUSION=failure" >> $GITHUB_OUTPUT
           else
-            echo "CONCLUSION=success" >> $GITHUB_ENV
+            echo "CONCLUSION=success" >> $GITHUB_OUTPUT
           fi
 
       - name: Create GitHub Check Run
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          LANE_B_ESCAPED=$(echo "${{ env.LANE_B_RESULT }}" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
+          LANE_B_RESULT=$(cat /tmp/lane_b_result.txt)
+          if grep -q "Lane B: FAIL" /tmp/lane_b_result.txt; then
+            CONCLUSION="failure"
+          else
+            CONCLUSION="success"
+          fi
 
-          CHECK_RESPONSE=$(curl -s -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/${{ github.repository }}/check-runs \
-            -d "{
-              \"name\": \"Haga Lane B (Code Review)\",
-              \"head_sha\": \"${{ github.sha }}\",
-              \"status\": \"completed\",
-              \"conclusion\": \"${{ env.CONCLUSION }}\",
-              \"output\": {
-                \"title\": \"Haga Lane B — Logic & Edge Review\",
-                \"summary\": \"Lane B result: ${{ env.CONCLUSION }}\",
-                \"text\": $LANE_B_ESCAPED
-              }
-            }")
-          echo "Check run response: $CHECK_RESPONSE"
+          python3 << 'PYEOF'
+import json, urllib.request, os
+
+lane_b_result = open('/tmp/lane_b_result.txt').read()
+conclusion = os.environ['CONCLUSION']
+
+payload = {
+    "name": "Haga Lane B (Code Review)",
+    "head_sha": os.environ['GITHUB_SHA'],
+    "status": "completed",
+    "conclusion": conclusion,
+    "output": {
+        "title": "Haga Lane B — Logic & Edge Review",
+        "summary": f"Lane B result: {conclusion}",
+        "text": lane_b_result
+    }
+}
+
+data = json.dumps(payload).encode()
+req = urllib.request.Request(
+    f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/check-runs",
+    data=data,
+    headers={
+        "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json"
+    },
+    method="POST"
+)
+with urllib.request.urlopen(req) as resp:
+    print(resp.read().decode())
+PYEOF

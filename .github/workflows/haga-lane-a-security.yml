@@ -33,20 +33,18 @@ jobs:
           PR_NUM: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
-          echo "PR_NUM=$PR_NUM"
-          echo "REPO=$REPO"
-          echo "TOKEN_LEN=${#GITHUB_TOKEN}"
           curl -s -L "https://github.com/$REPO/pull/$PR_NUM.diff" \
             -H "Authorization: token $GITHUB_TOKEN" \
-            -o /tmp/diff.txt
-          DIFF_LEN=$(wc -c < /tmp/diff.txt)
+            -o /tmp/pr_diff.txt
+          DIFF_LEN=$(wc -c < /tmp/pr_diff.txt)
           echo "DIFF_LEN=$DIFF_LEN"
-          DIFF=$(cat /tmp/diff.txt)
           if [ "$DIFF_LEN" -gt 60000 ]; then
-            DIFF="${DIFF:0:60000}"$'n\n[Diff truncated]'
-            echo "DIFF_TRUNCATED=true" >> $GITHUB_ENV
+            head -c 60000 /tmp/pr_diff.txt > /tmp/pr_diff_truncated.txt
+            echo -e "\n\n[Diff truncated — too large for display]" >> /tmp/pr_diff_truncated.txt
+            mv /tmp/pr_diff_truncated.txt /tmp/pr_diff.txt
+            echo "DIFF_TRUNCATED=true" >> $GITHUB_OUTPUT
           fi
-          echo "DIFF=$DIFF" >> $GITHUB_ENV
+          echo "DIFF_PATH=/tmp/pr_diff.txt" >> $GITHUB_OUTPUT
 
       - name: Run Lane A security review
         id: lane-a
@@ -57,6 +55,7 @@ jobs:
           PR_TITLE="${{ github.event.pull_request.title }}"
           PR_URL="${{ github.event.pull_request.html_url }}"
           REPO="${{ github.repository }}"
+          DIFF=$(cat /tmp/pr_diff.txt)
 
           # Use MiniMax M2.7-highspeed — always available, no OpenRouter credits required
           LANE_A_RESULT=$(opencode run \
@@ -70,7 +69,7 @@ jobs:
             URL: $PR_URL
 
             Diff (code changes):
-            ${{ env.DIFF }}
+            $DIFF
 
             Focus: Auth, sessions, input validation, SQL queries, API endpoints, file uploads, permissions, vulnerability detection. Think like a security researcher. Look for SQL injection, XSS, auth bypasses, insecure deserialization, hardcoded secrets, unsafe imports.
             Format your response as security findings with severity (Critical/High/Medium/Low), file, line, description, and recommendation.
@@ -78,14 +77,15 @@ jobs:
 
             IMPORTANT: Your final line must be 'Lane A: [PASS or FAIL]' based on whether you found Critical or High severity issues.")
 
-          echo "LANE_A_RESULT=$LANE_A_RESULT" >> $GITHUB_ENV
+          echo "$LANE_A_RESULT" > /tmp/lane_a_result.txt
 
       - name: Post PR comment
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PR_NUMBER=${{ github.event.pull_request.number }}
-          SECURITY_RESULT_JSON=$(echo "${{ env.LANE_A_RESULT }}" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
+          LANE_A_RESULT=$(cat /tmp/lane_a_result.txt)
+          SECURITY_RESULT_JSON=$(python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))' <<< "$LANE_A_RESULT")
 
           COMMENT_RESPONSE=$(curl -s -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \
