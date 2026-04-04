@@ -49,9 +49,8 @@ jobs:
           DIFF=$(cat /tmp/pr_diff.txt)
 
           LANE_A_RESULT=$(/home/tempest/.opencode/bin/opencode run \
-            --agent haga \
+            --agent "haga/PROMPT" \
             --model minimax/MiniMax-M2.7-highspeed \
-            --api-key "$MINIMAX_API_KEY" \
             "You are running Lane A (Security) review for this PR:
 
             Repository: $REPO
