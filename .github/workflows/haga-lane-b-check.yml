@@ -1,4 +1,5 @@
 # Haga Lane B — adversarial code review check
+# Testing: self-hosted runner on tempesti-01
 name: Haga Lane B Check
 
 on:
