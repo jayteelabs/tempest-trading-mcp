@@ -29,17 +29,20 @@ jobs:
 
       - name: Get PR diff
         id: diff
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
-          echo "PR_NUM=${{ github.event.pull_request.number }}"
-          echo "REPO=${{ github.repository }}"
+          echo "PR_NUM=$PR_NUM"
+          echo "REPO=$REPO"
           echo "TOKEN_LEN=${#GITHUB_TOKEN}"
-          DIFF_FILE=/tmp/pr_diff.txt
-          curl -s -L -H "Authorization: token $GITHUB_TOKEN" \
-            "https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}.diff" \
-            -o "$DIFF_FILE"
-          DIFF_LEN=$(wc -c < "$DIFF_FILE")
+          curl -s -L "https://github.com/$REPO/pull/$PR_NUM.diff" \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -o /tmp/diff.txt
+          DIFF_LEN=$(wc -c < /tmp/diff.txt)
           echo "DIFF_LEN=$DIFF_LEN"
-          DIFF=$(cat "$DIFF_FILE")
+          DIFF=$(cat /tmp/diff.txt)
           if [ "$DIFF_LEN" -gt 60000 ]; then
             DIFF="${DIFF:0:60000}"$'n\n[Diff truncated]'
             echo "DIFF_TRUNCATED=true" >> $GITHUB_ENV
