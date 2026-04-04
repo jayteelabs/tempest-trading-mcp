@@ -11,19 +11,20 @@ permissions:
 
 jobs:
   lane-a-security:
-    runs-on: [self-hosted, tempesti-01]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Authenticate with GitHub App
-        id: auth
-        run: |
-          OUTPUT=$(python3 /home/tempest/bin/github-app-auth.sh /home/tempest/apps/${{ github.event.repository.name }})
-          TOKEN=$(echo "$OUTPUT" | grep '^TOKEN=' | sed 's/^TOKEN=//')
-          echo "TOKEN=$TOKEN" >> $GITHUB_ENV
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install opencode
+        run: npm install -g @opencode-ai/plugin@latest
 
       - name: Get PR diff
         id: diff
@@ -31,13 +32,15 @@ jobs:
           DIFF=$(git diff origin/${{ github.base_ref }}...HEAD)
           # Truncate if too large for display
           if [ ${#DIFF} -gt 60000 ]; then
-            DIFF="${DIFF:0:60000}"$'\n\n[Diff truncated — too large for display]'
+            DIFF="${DIFF:0:60000}"$'n\n[Diff truncated — too large for display]'
             echo "DIFF_TRUNCATED=true" >> $GITHUB_ENV
           fi
           echo "DIFF=$DIFF" >> $GITHUB_ENV
 
       - name: Run Lane A security review
         id: lane-a
+        env:
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
         run: |
           PR_NUMBER=${{ github.event.pull_request.number }}
           PR_TITLE="${{ github.event.pull_request.title }}"
@@ -45,7 +48,7 @@ jobs:
           REPO="${{ github.repository }}"
 
           # Use MiniMax M2.7-highspeed — always available, no OpenRouter credits required
-          LANE_A_RESULT=$(/home/tempest/.opencode/bin/opencode run \
+          LANE_A_RESULT=$(opencode run \
             --agent Haga \
             --model minimax/MiniMax-M2.7-highspeed \
             "You are running Lane A (Security) review for this PR:
@@ -67,12 +70,14 @@ jobs:
           echo "LANE_A_RESULT=$LANE_A_RESULT" >> $GITHUB_ENV
 
       - name: Post PR comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PR_NUMBER=${{ github.event.pull_request.number }}
           SECURITY_RESULT_JSON=$(echo "${{ env.LANE_A_RESULT }}" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
 
           COMMENT_RESPONSE=$(curl -s -X POST \
-            -H "Authorization: Bearer ${{ env.TOKEN }}" \
+            -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments \
