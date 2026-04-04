@@ -1,0 +1,247 @@
+# Error Envelope Contract — Data Layer
+
+**Document:** Error Envelope Contract  
+**Date:** 2026-04-04  
+**Owner:** eru  
+**Status:** Draft for Haga's Security Review  
+**Design Decision:** D14 (Empty DataFrame on error, no exception propagation)
+
+---
+
+## Purpose
+
+This document defines the contract between `data/` adapters and `market_tools.py` (and other downstream consumers) for error handling. Per D14, data adapters **NEVER propagate exceptions** to callers — instead, they return error envelopes that downstream tools must interpret.
+
+---
+
+## Adapter Return Contracts
+
+### `fetch_live_price(symbol, exchange) -> float`
+
+| Condition | Return Value | Log Level |
+|-----------|--------------|-----------|
+| Success | `float` (actual price) | INFO |
+| Invalid symbol | `float('nan')` | ERROR |
+| Network error | `float('nan')` | ERROR |
+| Rate limit exceeded | `float('nan')` | ERROR |
+| API unavailable | `float('nan')` | ERROR |
+
+**Downstream Handling:**
+```python
+price = adapter.fetch_live_price("BTCUSDT")
+if math.isnan(price):
+    # Handle error case - no price available
+    return {"success": False, "error": {"code": 3004, "message": "Price unavailable"}}
+```
+
+---
+
+### `fetch_ohlcv_live(symbol, timeframe, limit) -> pd.DataFrame`
+
+| Condition | Return Value | Log Level |
+|-----------|--------------|-----------|
+| Success | DataFrame with OHLCV columns, UTC index | INFO |
+| Invalid symbol | Empty DataFrame with correct columns | ERROR |
+| Network error | Empty DataFrame with correct columns | ERROR |
+| API unavailable | Empty DataFrame with correct columns | ERROR |
+
+**DataFrame Columns (always present):**
+- `open`: float
+- `high`: float
+- `low`: float
+- `close`: float
+- `volume`: float
+- Index: `pd.DatetimeIndex` (UTC-aware)
+
+**Downstream Handling:**
+```python
+df = adapter.fetch_ohlcv_live("BTCUSDT", "1m", 100)
+if df.empty:
+    # Handle error case - no OHLCV data available
+    return {"success": False, "error": {"code": 3004, "message": "OHLCV data unavailable"}}
+
+# DataFrame is valid - proceed with analysis
+```
+
+---
+
+### `fetch_orderbook_snapshot(symbol, limit) -> dict`
+
+| Condition | Return Value | Log Level |
+|-----------|--------------|-----------|
+| Success | `{"bids": [...], "asks": [...], "timestamp": Timestamp}` | INFO |
+| Invalid symbol | `{"bids": [], "asks": [], "timestamp": None}` | ERROR |
+| Network error | `{"bids": [], "asks": [], "timestamp": None}` | ERROR |
+| API unavailable | `{"bids": [], "asks": [], "timestamp": None}` | ERROR |
+
+**Structure:**
+```python
+{
+    "bids": [[price: float, amount: float], ...],  # Sorted by price desc
+    "asks": [[price: float, amount: float], ...],  # Sorted by price asc
+    "timestamp": pd.Timestamp(tz="UTC") | None,
+}
+```
+
+**Downstream Handling:**
+```python
+ob = adapter.fetch_orderbook_snapshot("BTCUSDT", 20)
+if ob["timestamp"] is None or len(ob["bids"]) == 0:
+    # Handle error case - no orderbook data
+    return {"success": False, "error": {"code": 3104, "message": "Orderbook unavailable"}}
+
+# Orderbook is valid - proceed with analysis
+```
+
+---
+
+## Error Code Taxonomy
+
+Per D8, error codes are organized in ranges:
+
+| Range | Category | Source |
+|-------|----------|--------|
+| 1xxx | Validation errors | Input validation |
+| 2xxx | Auth/authorization errors | Key/permission issues |
+| **3001-3005** | TradingView errors | TradingView API |
+| **3101-3105** | CCXT errors | CCXT adapter |
+| 3201-3205 | YFinance errors | Yahoo Finance |
+| 5xxx | Indicator errors | Calculation failures |
+| 9xxx | Internal errors | Unexpected failures |
+
+### TradingView Error Codes (3001-3005)
+
+| Code | Name | Description |
+|------|------|-------------|
+| 3001 | AUTH_ERROR | Invalid or missing API key |
+| 3002 | RATE_LIMIT | TradingView rate limit exceeded |
+| 3003 | INVALID_SYMBOL | Symbol not found on TradingView |
+| 3004 | DATA_UNAVAILABLE | Data temporarily unavailable |
+| 3005 | CONNECTION_ERROR | Network/timeout error |
+
+### CCXT Error Codes (3101-3105)
+
+| Code | Name | Description |
+|------|------|-------------|
+| 3101 | CONNECTION_ERROR | Exchange connection failed |
+| 3102 | RATE_LIMIT | Exchange rate limit exceeded |
+| 3103 | INVALID_SYMBOL | Symbol not found on exchange |
+| 3104 | DATA_UNAVAILABLE | Data temporarily unavailable |
+| 3105 | TIMEOUT | Network timeout |
+
+---
+
+## Logging Requirements
+
+### Log Levels by Outcome
+
+| Outcome | Level | Keys Required |
+|---------|-------|---------------|
+| Success | INFO | `source`, `symbol`, `timeframe` (if applicable) |
+| Fallback activation | WARNING | `reason`, `fallback_to` |
+| Failure | ERROR | `error`, `symbol`, `source` |
+
+### Example Log Entries
+
+**Success:**
+```json
+{
+  "level": "info",
+  "message": "fetch_live_price_success",
+  "source": "ccxt",
+  "exchange": "binance",
+  "symbol": "BTCUSDT",
+  "price": 67234.50
+}
+```
+
+**Fallback:**
+```json
+{
+  "level": "warning",
+  "message": "adapter_selected",
+  "adapter": "CCXTAdapter",
+  "reason": "TRADINGVIEW_API_KEY not set - using CCXT fallback"
+}
+```
+
+**Error:**
+```json
+{
+  "level": "error",
+  "message": "fetch_ohlcv_network_error",
+  "source": "ccxt",
+  "symbol": "BTCUSDT",
+  "timeframe": "1m",
+  "error": "Connection refused"
+}
+```
+
+---
+
+## market_tools.py Integration
+
+The `market_tools.py` module should:
+
+1. **Never catch exceptions from adapters** — they don't raise any
+2. **Check return values for error indicators:**
+   - `math.isnan(price)` for `fetch_live_price`
+   - `df.empty` for `fetch_ohlcv_live`
+   - `ob["timestamp"] is None` for `fetch_orderbook_snapshot`
+3. **Map to appropriate MCP response envelope:**
+
+```python
+# Example market_tools.py pattern
+def fetch_ticker(symbol: str) -> dict:
+    """MCP tool wrapper for ticker data."""
+    adapter = get_live_adapter()
+    price = adapter.fetch_live_price(symbol)
+    
+    if math.isnan(price):
+        return {
+            "success": False,
+            "error": {
+                "code": 3004,
+                "message": f"Unable to fetch price for {symbol}",
+            }
+        }
+    
+    return {
+        "success": True,
+        "data": {
+            "symbol": symbol,
+            "price": price,
+            "timestamp": pd.Timestamp.now(tz="UTC").isoformat(),
+        }
+    }
+```
+
+---
+
+## Testing Requirements
+
+Tests must verify:
+
+1. **Error conditions return correct envelopes:**
+   - Invalid symbol -> `float('nan')` / empty DataFrame / empty dict
+   - Network errors -> same as above
+   
+2. **No exceptions propagate:**
+   ```python
+   # This should NEVER raise
+   price = adapter.fetch_live_price("DEFINITELY_NOT_A_REAL_SYMBOL")
+   assert math.isnan(price)
+   ```
+
+3. **Structured logging occurs:**
+   - INFO on success
+   - WARNING on fallback
+   - ERROR on failure
+
+---
+
+## Revision History
+
+| Date | Author | Changes |
+|------|--------|---------|
+| 2026-04-04 | eru | Initial draft for security review |

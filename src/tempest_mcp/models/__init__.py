@@ -1,52 +1,74 @@
-"""Data models for market data, indicators, and backtesting."""
+"""
+Data models for Tempest MCP.
 
-from tempest_mcp.models.backtest import (
-    BacktestResult,
-    BacktestTrade,
-    CommissionModel,
-    OrderSide,
-    OrderType,
-    Position,
-    StrategyResult,
-    calculate_performance_metrics,
-)
-from tempest_mcp.models.indicator import (
-    ADXResult,
-    ATRResult,
-    BollingerWidthResult,
-    CCIResult,
-    EMAResult,
-    HistoricalVolatilityResult,
-    IndicatorResult,
-    MACDResult,
-    MFIResult,
-    OBVResult,
-    ROCResult,
-    RSIResult,
-    SessionLevels,
-    SessionType,
-    StochasticResult,
-    SupertrendResult,
-    VWAPResult,
-    WilliamsRResult,
-)
-from tempest_mcp.models.market import (
-    Kline,
-    KlineData,
-    OrderBook,
-    OrderBookLevel,
-    Ticker,
-    dataframe_to_klines,
-    klines_to_dataframe,
-)
+Using dataclasses over pydantic for lower dependencies (D6).
+"""
+
+from dataclasses import dataclass
+
+import pandas as pd
+
+
+@dataclass
+class Ticker:
+    """Real-time ticker data."""
+
+    symbol: str
+    price: float
+    bid: float
+    ask: float
+    volume_24h: float
+    timestamp: pd.Timestamp
+
+    def __post_init__(self) -> None:
+        """Ensure timestamp is UTC-aware."""
+        if self.timestamp.tz is None:
+            self.timestamp = self.timestamp.tz_localize("UTC")
+
+
+@dataclass
+class Kline:
+    """OHLCV candlestick data point."""
+
+    timestamp: pd.Timestamp
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+    def __post_init__(self) -> None:
+        """Ensure timestamp is UTC-aware."""
+        if self.timestamp.tz is None:
+            self.timestamp = self.timestamp.tz_localize("UTC")
+
+
+@dataclass
+class OrderBookLevel:
+    """Single order book level."""
+
+    price: float
+    amount: float
+
+
+@dataclass
+class OrderBook:
+    """Order book snapshot."""
+
+    symbol: str
+    bids: list[OrderBookLevel]
+    asks: list[OrderBookLevel]
+    timestamp: pd.Timestamp | None
+
+    def __post_init__(self) -> None:
+        """Ensure timestamp is UTC-aware if present."""
+        if self.timestamp is not None and self.timestamp.tz is None:
+            self.timestamp = self.timestamp.tz_localize("UTC")
+
 
 __all__ = [
-    "Ticker", "Kline", "KlineData", "OrderBook", "OrderBookLevel",
-    "klines_to_dataframe", "dataframe_to_klines",
-    "IndicatorResult", "SessionType", "EMAResult", "VWAPResult", "RSIResult",
-    "MACDResult", "ATRResult", "SupertrendResult", "SessionLevels", "ADXResult",
-    "StochasticResult", "CCIResult", "WilliamsRResult", "ROCResult",
-    "BollingerWidthResult", "OBVResult", "MFIResult", "HistoricalVolatilityResult",
-    "OrderSide", "OrderType", "BacktestTrade", "BacktestResult",
-    "CommissionModel", "Position", "StrategyResult", "calculate_performance_metrics",
+    "Ticker",
+    "Kline",
+    "OrderBook",
+    "OrderBookLevel",
 ]
