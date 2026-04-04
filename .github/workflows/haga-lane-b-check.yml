@@ -52,7 +52,7 @@ jobs:
           DIFF=$(cat /tmp/pr_diff.txt)
 
           LANE_B_RESULT=$(/home/tempest/.opencode/bin/opencode run \
-            --agent Haga \
+            --agent haga \
             --model minimax/MiniMax-M2.7-highspeed \
             --api-key "$MINIMAX_API_KEY" \
             <<'PROMPT'
