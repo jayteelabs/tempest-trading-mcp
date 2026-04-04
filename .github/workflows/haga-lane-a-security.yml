@@ -18,9 +18,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Fetch base ref
-        run: git fetch origin ${{ github.base_ref }}:${{ github.base_ref }}
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -31,8 +28,10 @@ jobs:
 
       - name: Get PR diff
         id: diff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          DIFF=$(git diff origin/${{ github.base_ref }}...HEAD)
+          DIFF=$(gh pr diff ${{ github.event.pull_request.number }})
           # Truncate if too large for display
           if [ ${#DIFF} -gt 60000 ]; then
             DIFF="${DIFF:0:60000}"$'n\n[Diff truncated — too large for display]'
