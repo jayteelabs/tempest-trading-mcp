@@ -1,5 +1,6 @@
 """MCP Server entry point — SSE/HTTP transport."""
 
+import asyncio
 import json
 import re
 import time
@@ -12,6 +13,7 @@ from mcp.types import TextContent, Tool
 from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from tempest_mcp.config import ErrorCodes, get_config
@@ -142,42 +144,76 @@ TOOL_SCHEMAS: list[Tool] = [
 
 # ── Rate Limiting ──────────────────────────────────────────────────────────────
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Simple in-memory rate limiter per client IP."""
+    """In-memory rate limiter per client IP — thread-safe for asyncio."""
 
     def __init__(self, app: Any, max_requests: int, window_seconds: int) -> None:
         super().__init__(app)
         self.max_requests = max_requests
         self.window_seconds = window_seconds
         self._requests: dict[str, list[float]] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._global_lock = asyncio.Lock()
+        self._cleanup_task: asyncio.Task | None = None
 
-    def _clean_old(self, client_ip: str, now: float) -> None:
-        if client_ip in self._requests:
-            self._requests[client_ip] = [
-                t for t in self._requests[client_ip] if now - t < self.window_seconds
-            ]
+    def _get_lock(self, client_ip: str) -> asyncio.Lock:
+        """Get or create a lock for a specific client IP."""
+        if client_ip not in self._locks:
+            self._locks[client_ip] = asyncio.Lock()
+        return self._locks[client_ip]
+
+    def _clean_stale(self, now: float) -> None:
+        """Remove all IPs with no recent requests to prevent memory leak."""
+        stale = [
+            ip
+            for ip, times in self._requests.items()
+            if not times or now - max(times) >= self.window_seconds * 2
+        ]
+        for ip in stale:
+            del self._requests[ip]
+            self._locks.pop(ip, None)
+
+    async def _periodic_cleanup(self) -> None:
+        """Background task: clean stale entries every window period."""
+        while True:
+            await asyncio.sleep(self.window_seconds * 2)
+            async with self._global_lock:
+                self._clean_stale(time.time())
 
     async def dispatch(self, request: Request, call_next: Any) -> Any:
-        # Only rate-limit /messages (not /sse which is streaming)
-        if request.url.path != "/messages":
-            return await call_next(request)
-
         client_ip = request.client.host if request.client else "unknown"
         now = time.time()
-        self._clean_old(client_ip, now)
 
-        if client_ip not in self._requests:
-            self._requests[client_ip] = []
+        # Rate limit /messages endpoint
+        if request.url.path == "/messages":
+            lock = self._get_lock(client_ip)
+            async with lock:
+                # Periodic cleanup on first request after sleep
+                if self._cleanup_task is None or self._cleanup_task.done():
+                    self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
 
-        if len(self._requests[client_ip]) >= self.max_requests:
-            logger.warning("Rate limit exceeded", client_ip=client_ip)
-            from starlette.responses import JSONResponse
+                async with self._global_lock:
+                    self._clean_stale(now)
 
-            return JSONResponse(
-                {"success": False, "error": {"code": 429, "message": "Rate limit exceeded"}},
-                status_code=429,
-            )
+                if client_ip not in self._requests:
+                    self._requests[client_ip] = []
 
-        self._requests[client_ip].append(now)
+                # Remove expired entries for this IP
+                self._requests[client_ip] = [
+                    t for t in self._requests[client_ip] if now - t < self.window_seconds
+                ]
+
+                if len(self._requests[client_ip]) >= self.max_requests:
+                    logger.warning("Rate limit exceeded", client_ip=client_ip)
+                    return JSONResponse(
+                        {
+                            "success": False,
+                            "error": {"code": 429, "message": "Rate limit exceeded"},
+                        },
+                        status_code=429,
+                    )
+
+                self._requests[client_ip].append(now)
+
         return await call_next(request)
 
 
@@ -186,6 +222,8 @@ def validate_symbol(symbol: str, field_name: str = "symbol") -> str | None:
     """Validate symbol format. Returns None if valid, error message if invalid."""
     if not isinstance(symbol, str):
         return f"{field_name} must be a string"
+    if not symbol:
+        return f"{field_name} cannot be empty"
     if not SYMBOL_PATTERN.match(symbol):
         return f"Invalid {field_name} format: {symbol!r} — must be 2-20 uppercase alphanumeric characters"
     return None
@@ -194,15 +232,25 @@ def validate_symbol(symbol: str, field_name: str = "symbol") -> str | None:
 def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> str | None:
     """Validate tool arguments. Returns error message or None if valid."""
     if name == "fetch_ticker":
-        return validate_symbol(arguments.get("symbol", ""))
+        return validate_symbol(arguments.get("symbol", ""), "symbol")
     if name == "fetch_klines":
-        return validate_symbol(arguments.get("symbol", ""))
+        return validate_symbol(arguments.get("symbol", ""), "symbol")
     if name == "fetch_orderbook":
-        return validate_symbol(arguments.get("symbol", ""))
+        return validate_symbol(arguments.get("symbol", ""), "symbol")
     if name == "indicator_rsi":
-        return validate_symbol(arguments.get("symbol", ""))
+        return validate_symbol(arguments.get("symbol", ""), "symbol")
     if name == "backtest_strategy":
-        return validate_symbol(arguments.get("symbol", ""))
+        return validate_symbol(arguments.get("symbol", ""), "symbol")
+    if name == "screener_scan":
+        symbols = arguments.get("symbols")
+        if symbols is None:
+            return None
+        if not isinstance(symbols, list):
+            return "symbols must be an array of strings"
+        for i, sym in enumerate(symbols):
+            if err := validate_symbol(sym, f"symbols[{i}]"):
+                return err
+        return None
     return None
 
 
