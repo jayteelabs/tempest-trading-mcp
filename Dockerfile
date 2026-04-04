@@ -1,5 +1,5 @@
 # Multi-stage Dockerfile for tempest-tradingview-mcp
-# D9: uv package manager | D7: stdio transport only | D4: ta-lib from source
+# D9: uv package manager | D7: HTTP/SSE transport on :9001 | D4: ta-lib from source
 
 # ── Stage 1: Builder — install ta-lib C library + Python dependencies ──
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
@@ -82,5 +82,6 @@ ENV PATH="/home/tempest/.venv/bin:$PATH" \
 # Switch to non-root user
 USER tempest
 
-# MCP server entry point (stdio transport — D7)
+# MCP server entry point (HTTP/SSE transport — D7)
+EXPOSE 9001
 CMD ["python", "-m", "tempest_mcp.server"]
