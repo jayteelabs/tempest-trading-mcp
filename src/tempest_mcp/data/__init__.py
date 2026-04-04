@@ -2,11 +2,11 @@
 Data layer for Tempest MCP.
 
 This module provides adapters for fetching market data from various sources:
-- Yahoo Finance: Historical data for backtesting
+- Yahoo Finance: Historical data for backtesting (YFAdapter)
 - TradingView: Real-time data (primary when API key is set)
 - CCXT: Real-time data fallback / orderbook data
 
-Adapter Selection:
+Adapter Selection (live data):
 - If TRADINGVIEW_API_KEY is set → TradingViewAdapter (primary)
 - Otherwise → CCXTAdapter (fallback)
 
@@ -23,10 +23,29 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import structlog
 
+# Backward-compatible exports from YFAdapter and CCXTAdapter (ENG-4/ENG-6)
+# Must be at module level (not inside TYPE_CHECKING) for runtime exports
+from tempest_mcp.data.ccxt_adapter import CCXTAdapter
+from tempest_mcp.data.yf_adapter import YFAdapter
+
 if TYPE_CHECKING:
     import pandas as pd
 
 logger = structlog.get_logger()
+
+__all__ = [
+    # Historical data adapters
+    "YFAdapter",
+    "CCXTAdapter",
+    # Live data protocol and factory
+    "LiveDataAdapter",
+    "get_live_adapter",
+    # Symbol utilities
+    "normalize_to_ccxt",
+    "normalize_to_tradingview",
+    "get_base_currency",
+    "validate_symbol",
+]
 
 
 @runtime_checkable
@@ -128,7 +147,7 @@ def get_live_adapter() -> LiveDataAdapter:
         return CCXTAdapter()
 
 
-# Lazy re-exports via __getattr__ to avoid E402
+# Lazy re-exports via __getattr__ to avoid E402 for _symbols imports
 def __getattr__(name: str):
     if name in (
         "get_base_currency",
@@ -140,13 +159,3 @@ def __getattr__(name: str):
 
         return getattr(_symbols, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-__all__ = [
-    "LiveDataAdapter",
-    "get_live_adapter",
-    "normalize_to_ccxt",
-    "normalize_to_tradingview",
-    "get_base_currency",
-    "validate_symbol",
-]

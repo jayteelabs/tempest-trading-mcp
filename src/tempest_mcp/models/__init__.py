@@ -5,8 +5,6 @@ Using dataclasses over pydantic for lower dependencies (D6).
 """
 
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Optional
 
 import pandas as pd
 
