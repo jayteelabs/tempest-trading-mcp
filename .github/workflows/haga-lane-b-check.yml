@@ -22,7 +22,8 @@ jobs:
       - name: Authenticate with GitHub App
         id: auth
         run: |
-          TOKEN=$(python3 /home/tempest/bin/github-app-auth.sh /home/tempest/apps/tempest-tradingview-mcp)
+          OUTPUT=$(python3 /home/tempest/bin/github-app-auth.sh /home/tempest/apps/tempest-tradingview-mcp)
+          TOKEN=$(echo "$OUTPUT" | grep '^TOKEN=' | sed 's/^TOKEN=//')
           echo "token::$TOKEN"
           echo "TOKEN=$TOKEN" >> $GITHUB_ENV
 
