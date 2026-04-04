@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import time
+from contextlib import asynccontextmanager
 from typing import Any
 
 import uvicorn
@@ -35,6 +36,9 @@ SERVER_HOST = "127.0.0.1"
 # Rate limiting: max requests per client per window
 RATE_LIMIT_REQUESTS = 100
 RATE_LIMIT_WINDOW_SECONDS = 60
+
+# SSE connection limiting: max concurrent SSE connections per IP
+SSE_MAX_CONNECTIONS_PER_IP = 10
 
 # Symbol format: uppercase alphanumeric, 2-20 chars
 SYMBOL_PATTERN = re.compile(r"^[A-Z0-9]{2,20}$")
@@ -143,14 +147,24 @@ TOOL_SCHEMAS: list[Tool] = [
 
 
 # ── Rate Limiting ──────────────────────────────────────────────────────────────
+# Module-level registry for cleanup task — accessible from lifespan handler
+_rate_limit_cleanup_task: asyncio.Task | None = None
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """In-memory rate limiter per client IP — thread-safe for asyncio."""
+    """In-memory rate limiter per client IP — thread-safe for asyncio.
+
+    Handles both:
+    - /messages: request-count rate limiting (100 req/min per IP)
+    - /sse: concurrent connection limiting (10 per IP)
+    """
 
     def __init__(self, app: Any, max_requests: int, window_seconds: int) -> None:
         super().__init__(app)
         self.max_requests = max_requests
         self.window_seconds = window_seconds
-        self._requests: dict[str, list[float]] = {}
+        self._requests: dict[str, list[float]] = {}  # IP -> list of request timestamps
+        self._sse_connections: dict[str, int] = {}  # IP -> active SSE connection count
         self._locks: dict[str, asyncio.Lock] = {}
         self._global_lock = asyncio.Lock()
         self._cleanup_task: asyncio.Task | None = None
@@ -161,60 +175,122 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             self._locks[client_ip] = asyncio.Lock()
         return self._locks[client_ip]
 
-    def _clean_stale(self, now: float) -> None:
+    def _clean_stale_requests(self, now: float) -> None:
         """Remove all IPs with no recent requests to prevent memory leak."""
-        stale = [
-            ip
-            for ip, times in self._requests.items()
-            if not times or now - max(times) >= self.window_seconds * 2
-        ]
+        stale = []
+        for ip, times in list(self._requests.items()):
+            try:
+                # Guard against race: times could become empty between check and max()
+                if times:
+                    if now - max(times) >= self.window_seconds * 2:
+                        stale.append(ip)
+                else:
+                    stale.append(ip)
+            except ValueError:
+                # max() arg empty — treat as stale
+                stale.append(ip)
         for ip in stale:
-            del self._requests[ip]
+            self._requests.pop(ip, None)
             self._locks.pop(ip, None)
 
-    async def _periodic_cleanup(self) -> None:
+    def _clean_stale_sse(self, now: float) -> None:
+        """Clean SSE connections dict of entries with zero count."""
+        stale = [ip for ip, count in self._sse_connections.items() if count <= 0]
+        for ip in stale:
+            self._sse_connections.pop(ip, None)
+
+    async def _periodic_request_cleanup(self) -> None:
         """Background task: clean stale entries every window period."""
-        while True:
-            await asyncio.sleep(self.window_seconds * 2)
-            async with self._global_lock:
-                self._clean_stale(time.time())
+        global _rate_limit_cleanup_task
+        try:
+            while True:
+                await asyncio.sleep(self.window_seconds * 2)
+                async with self._global_lock:
+                    self._clean_stale_requests(time.time())
+                    self._clean_stale_sse(time.time())
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if _rate_limit_cleanup_task is self._cleanup_task:
+                _rate_limit_cleanup_task = None
 
     async def dispatch(self, request: Request, call_next: Any) -> Any:
+        global _rate_limit_cleanup_task
         client_ip = request.client.host if request.client else "unknown"
         now = time.time()
 
-        # Rate limit /messages endpoint
+        # Start cleanup task on first request (singleton — cancel previous if exists)
+        if self._cleanup_task is None:
+            self._cleanup_task = asyncio.create_task(self._periodic_request_cleanup())
+            _rate_limit_cleanup_task = self._cleanup_task
+        elif self._cleanup_task.done():
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+            self._cleanup_task = asyncio.create_task(self._periodic_request_cleanup())
+            _rate_limit_cleanup_task = self._cleanup_task
+
         if request.url.path == "/messages":
+            # Request-count rate limiting
             lock = self._get_lock(client_ip)
             async with lock:
-                # Periodic cleanup on first request after sleep
-                if self._cleanup_task is None or self._cleanup_task.done():
-                    self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
-
                 async with self._global_lock:
-                    self._clean_stale(now)
+                    self._clean_stale_requests(now)
+                    if client_ip not in self._requests:
+                        self._requests[client_ip] = []
+                    # Remove expired entries for this IP
+                    self._requests[client_ip] = [
+                        t for t in self._requests[client_ip] if now - t < self.window_seconds
+                    ]
+                    if len(self._requests[client_ip]) >= self.max_requests:
+                        logger.warning("Rate limit exceeded", client_ip=client_ip)
+                        return JSONResponse(
+                            {
+                                "success": False,
+                                "error": {"code": 429, "message": "Rate limit exceeded"},
+                            },
+                            status_code=429,
+                        )
+                    self._requests[client_ip].append(now)
 
-                if client_ip not in self._requests:
-                    self._requests[client_ip] = []
-
-                # Remove expired entries for this IP
-                self._requests[client_ip] = [
-                    t for t in self._requests[client_ip] if now - t < self.window_seconds
-                ]
-
-                if len(self._requests[client_ip]) >= self.max_requests:
-                    logger.warning("Rate limit exceeded", client_ip=client_ip)
+        elif request.url.path == "/sse":
+            # Concurrent SSE connection limiting
+            async with self._global_lock:
+                current = self._sse_connections.get(client_ip, 0)
+                if current >= SSE_MAX_CONNECTIONS_PER_IP:
+                    logger.warning("SSE connection limit exceeded", client_ip=client_ip)
                     return JSONResponse(
                         {
                             "success": False,
-                            "error": {"code": 429, "message": "Rate limit exceeded"},
+                            "error": {"code": 429, "message": "Too many SSE connections"},
                         },
                         status_code=429,
                     )
+                self._sse_connections[client_ip] = current + 1
 
-                self._requests[client_ip].append(now)
+            # Decrement on connection close
+            async def decrement_sse():
+                try:
+                    await call_next(request)
+                finally:
+                    async with self._global_lock:
+                        self._sse_connections[client_ip] = max(
+                            0, self._sse_connections.get(client_ip, 1) - 1
+                        )
+
+            return await decrement_sse()
 
         return await call_next(request)
+
+
+def cancel_rate_limit_cleanup() -> None:
+    """Cancel the rate limit background cleanup task. Call from lifespan shutdown."""
+    global _rate_limit_cleanup_task
+    if _rate_limit_cleanup_task is not None:
+        _rate_limit_cleanup_task.cancel()
+        _rate_limit_cleanup_task = None
 
 
 # ── Input Validation ──────────────────────────────────────────────────────────
@@ -347,6 +423,12 @@ def create_app() -> Starlette:
     async def message_handler(scope: dict, receive: callable, send: callable) -> None:
         await transport.handle_post_message(scope, receive, send)
 
+    # TODO: In-memory rate limiting is per-process. If uvicorn is run with multiple
+    # workers (--workers N), each worker has independent state — a client could
+    # bypass rate limits by hitting different workers. For multi-worker deployments,
+    # replace with Redis-backed rate limiting (e.g., Redis + lua script for atomic
+    # check-and-increment). This is not a concern for single-worker deployments.
+
     return Starlette(
         middleware=[
             (
@@ -358,6 +440,7 @@ def create_app() -> Starlette:
             Route("/sse", sse_handler, methods=["GET"]),
             Route("/messages", message_handler, methods=["POST"]),
         ],
+        lifespan=lifespan,
     )
 
 
