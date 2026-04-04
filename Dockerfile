@@ -25,6 +25,10 @@ WORKDIR /app
 
 # Copy project metadata for dependency resolution
 COPY pyproject.toml ./
+COPY README.md ./
+
+# Copy source code BEFORE installing package (required for hatchling)
+COPY src/ ./src/
 
 # Create venv and install production dependencies only (V3 fix: no dev extras)
 RUN uv venv && \
@@ -39,9 +43,6 @@ RUN uv venv && \
         "structlog>=23.0.0" \
         "httpx>=0.25.0" \
         "python-dotenv>=1.0.0"
-
-# Copy source code
-COPY src/ ./src/
 
 # ── Stage 2: Production — minimal runtime ──
 FROM python:3.12-slim AS production
@@ -75,7 +76,8 @@ ENV PATH="/home/tempest/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     TA_LIBRARY_PATH=/usr/lib \
-    TA_INCLUDE_PATH=/usr/include
+    TA_INCLUDE_PATH=/usr/include \
+    PYTHONPATH=/app/src
 
 # Switch to non-root user
 USER tempest
