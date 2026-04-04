@@ -29,18 +29,18 @@ jobs:
       - name: Get PR diff
         id: diff
         run: |
-          PR_NUM="${{ github.event.pull_request.number }}"
-          REPO="${{ github.repository }}"
-          TOKEN="${{ secrets.GITHUB_TOKEN }}"
-          echo "PR_NUM=$PR_NUM"
-          echo "REPO=$REPO"
-          echo "TOKEN_SET=$([ -n "$TOKEN" ] && echo yes || echo no)"
-          DIFF=$(curl -s -L -H "Authorization: token $TOKEN" \
-            "https://github.com/$REPO/pull/$PR_NUM.diff")
-          echo "DIFF_LEN=${#DIFF}"
-          # Truncate if too large for display
-          if [ ${#DIFF} -gt 60000 ]; then
-            DIFF="${DIFF:0:60000}"$'n\n[Diff truncated — too large for display]'
+          echo "PR_NUM=${{ github.event.pull_request.number }}"
+          echo "REPO=${{ github.repository }}"
+          echo "TOKEN_LEN=${#GITHUB_TOKEN}"
+          DIFF_FILE=/tmp/pr_diff.txt
+          curl -s -L -H "Authorization: token $GITHUB_TOKEN" \
+            "https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}.diff" \
+            -o "$DIFF_FILE"
+          DIFF_LEN=$(wc -c < "$DIFF_FILE")
+          echo "DIFF_LEN=$DIFF_LEN"
+          DIFF=$(cat "$DIFF_FILE")
+          if [ "$DIFF_LEN" -gt 60000 ]; then
+            DIFF="${DIFF:0:60000}"$'n\n[Diff truncated]'
             echo "DIFF_TRUNCATED=true" >> $GITHUB_ENV
           fi
           echo "DIFF=$DIFF" >> $GITHUB_ENV
