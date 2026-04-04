@@ -25,6 +25,7 @@ WORKDIR /app
 
 # Copy project metadata for dependency resolution
 COPY pyproject.toml ./
+COPY README.md ./
 
 # Create venv and install production dependencies only (V3 fix: no dev extras)
 RUN uv venv && \
