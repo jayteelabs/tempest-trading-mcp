@@ -21,21 +21,18 @@ jobs:
       - name: Authenticate with GitHub App
         id: auth
         run: |
-          OUTPUT=$(python3 /home/tempest/bin/github-app-auth.sh /home/tempest/apps/tempest-tradingview-mcp)
+          OUTPUT=$(python3 /home/tempest/bin/github-app-auth.sh /home/tempest/apps/${{ github.event.repository.name }})
           TOKEN=$(echo "$OUTPUT" | grep '^TOKEN=' | sed 's/^TOKEN=//')
-          echo "token::$TOKEN"
           echo "TOKEN=$TOKEN" >> $GITHUB_ENV
 
       - name: Get PR diff
         id: diff
         run: |
           DIFF=$(git diff origin/${{ github.base_ref }}...HEAD)
-          echo "diff::$DIFF"
-          # Store diff in GITHUB_ENV for later use (truncate if too large)
+          # Truncate if too large for display
           if [ ${#DIFF} -gt 60000 ]; then
+            DIFF="${DIFF:0:60000}"$'\n\n[Diff truncated — too large for display]'
             echo "DIFF_TRUNCATED=true" >> $GITHUB_ENV
-            DIFF="${DIFF:0:60000}"
-            DIFF="$DIFF\n\n[Diff truncated - too large for display]"
           fi
           echo "DIFF=$DIFF" >> $GITHUB_ENV
 
@@ -46,33 +43,34 @@ jobs:
           PR_TITLE="${{ github.event.pull_request.title }}"
           PR_URL="${{ github.event.pull_request.html_url }}"
           REPO="${{ github.repository }}"
-          
-          LANE_A_RESULT=$(OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }} /home/tempest/.opencode/bin/opencode run --agent Haga --model openrouter/deepseek/deepseek-r1 "You are running Lane A (Security) review for this PR:
-          
-          Repository: $REPO
-          PR #: $PR_NUMBER
-          Title: $PR_TITLE
-          URL: $PR_URL
-          
-          Diff (code changes):
-          ${{ env.DIFF }}
-          
-          Focus: Auth, sessions, input validation, SQL queries, API endpoints, file uploads, permissions, vulnerability detection. Think like a security researcher. Look for SQL injection, XSS, auth bypasses, insecure deserialization, hardcoded secrets, unsafe imports.
-          Format your response as security findings with severity (Critical/High/Medium/Low), file, line, description, and recommendation.
-          If no security issues found: respond with exactly 'Lane A: PASS — no security concerns identified.'
-          
-          IMPORTANT: Your final line must be 'Lane A: [PASS or FAIL]' based on whether you found Critical or High severity issues.")
-          
-          echo "lane_a_result::$LANE_A_RESULT"
+
+          # Use MiniMax M2.7-highspeed — always available, no OpenRouter credits required
+          LANE_A_RESULT=$(/home/tempest/.opencode/bin/opencode run \
+            --agent Haga \
+            --model minimax/MiniMax-M2.7-highspeed \
+            "You are running Lane A (Security) review for this PR:
+
+            Repository: $REPO
+            PR #: $PR_NUMBER
+            Title: $PR_TITLE
+            URL: $PR_URL
+
+            Diff (code changes):
+            ${{ env.DIFF }}
+
+            Focus: Auth, sessions, input validation, SQL queries, API endpoints, file uploads, permissions, vulnerability detection. Think like a security researcher. Look for SQL injection, XSS, auth bypasses, insecure deserialization, hardcoded secrets, unsafe imports.
+            Format your response as security findings with severity (Critical/High/Medium/Low), file, line, description, and recommendation.
+            If no security issues found: respond with exactly 'Lane A: PASS — no security concerns identified.'
+
+            IMPORTANT: Your final line must be 'Lane A: [PASS or FAIL]' based on whether you found Critical or High severity issues.")
+
           echo "LANE_A_RESULT=$LANE_A_RESULT" >> $GITHUB_ENV
 
       - name: Post PR comment
         run: |
           PR_NUMBER=${{ github.event.pull_request.number }}
-          
-          # Escape the result for JSON body
           SECURITY_RESULT_JSON=$(echo "${{ env.LANE_A_RESULT }}" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
-          
+
           COMMENT_RESPONSE=$(curl -s -X POST \
             -H "Authorization: Bearer ${{ env.TOKEN }}" \
             -H "Accept: application/vnd.github+json" \
