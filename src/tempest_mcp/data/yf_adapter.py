@@ -71,7 +71,7 @@ def fetch_ohlcv(
     Args:
         symbol: Asset symbol in yfinance native format (e.g., BTC-USD, ETH-USD).
                 Option B: no symbol conversion needed — BTC-USD and ETH-USD work as-is.
-        interval: Data interval (1m, 5m, 15m, 30m, 1h, 4h, 1d, 1wk, 1mo). Default: 1d.
+        interval: Data interval (1m, 5m, 15m, 30m, 1h, 1d, 1wk, 1mo). Default: 1d.
         start: Start datetime (UTC). Defaults to 30 days ago for 1d interval.
         end: End datetime (UTC). Defaults to now.
         auto_adjust: Whether to adjust prices for splits/dividends. Default: True.
@@ -149,14 +149,15 @@ def fetch_ohlcv(
             )
 
             if df.empty:
-                # Invalid or no data for symbol — return empty DataFrame, log warning
+                # Empty DataFrame could be transient network issue — retry before giving up
                 logger.warning(
-                    "fetch_ohlcv: no data for symbol",
+                    "fetch_ohlcv: empty DataFrame, retrying",
                     symbol=symbol,
                     interval=interval,
                     attempt=attempt + 1,
+                    max_retries=max_retries,
                 )
-                return _get_empty_ohlcv()
+                # Don't return here — continue to retry loop
 
             # Flatten multi-index columns if present (yfinance returns multi-index when single ticker)
             if isinstance(df.columns, pd.MultiIndex):
@@ -297,7 +298,7 @@ class YFAdapter:
         }
         return mapping.get(timeframe, "1d")
 
-    def fetch_ticker(self, symbol: str) -> dict:
+    def fetch_ticker(self, symbol: str) -> Ticker:
         """Fetch ticker data. DEPRECATED: use fetch_ohlcv for OHLCV data."""
         from tempest_mcp.models.market import Ticker
 
@@ -334,7 +335,7 @@ class YFAdapter:
 
     def fetch_klines(
         self, symbol: str, timeframe: str = "1d", since: datetime | None = None, limit: int = 100
-    ) -> dict:
+    ) -> KlineData:
         """Fetch klines. DEPRECATED: use fetch_ohlcv for OHLCV data."""
         from tempest_mcp.models.market import Kline, KlineData
 

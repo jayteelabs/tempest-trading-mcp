@@ -45,9 +45,10 @@ def _get_int(key: str, default: int) -> int:
         return int(value)
     except ValueError:
         logger.warning(
-            "config: invalid integer for %s, using default %s",
+            "config: invalid integer for %s, falling back to default %s (value: %r)",
             f"TEMPEST_{key}",
             default,
+            value,
         )
         return default
 
@@ -60,9 +61,10 @@ def _get_float(key: str, default: float) -> float:
         return float(value)
     except ValueError:
         logger.warning(
-            "config: invalid float for %s, using default %s",
+            "config: invalid float for %s, falling back to default %s (value: %r)",
             f"TEMPEST_{key}",
             default,
+            value,
         )
         return default
 
