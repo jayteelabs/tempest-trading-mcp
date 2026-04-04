@@ -1,168 +1,387 @@
-"""CCXT data adapter for real-time market data. NO API KEYS REQUIRED."""
+"""
+CCXT Data Adapter for cryptocurrency market data.
 
-from dataclasses import dataclass
-from datetime import datetime
+This adapter provides real-time market data via CCXT library, supporting
+Binance and other exchanges through their public REST APIs.
+
+Design Decisions:
+- D13: Orderbook data via CCXT adapter (TV has no orderbook endpoint)
+- D14: Empty DataFrame on error - NO exception propagation
+- D15: CCXTError in 3101-3105 range
+
+Rate Limiting (D14):
+- Binance: 1200 requests/minute weighted
+- Adapter respects exchange-specific rate limits
+"""
+
+import time
+from typing import Final
 
 import ccxt
+import pandas as pd
+import structlog
 
-from tempest_mcp.config import ErrorCodes, get_config
-from tempest_mcp.logging_config import get_logger
-from tempest_mcp.models.market import Kline, KlineData, OrderBook, OrderBookLevel, Ticker
+from tempest_mcp.data._symbols import normalize_to_ccxt, validate_symbol
 
-logger = get_logger(__name__)
+logger = structlog.get_logger()
 
+# OHLCV column names
+OHLCV_COLUMNS: Final[list[str]] = ["open", "high", "low", "close", "volume"]
 
-class CCXTError(Exception):
-    def __init__(self, message: str, code: int = ErrorCodes.CCXT_ERROR):
-        super().__init__(message)
-        self.code = code
-        self.message = message
-
-
-SUPPORTED_EXCHANGES = ("binance", "bybit")
+# Rate limit tracking
+_rate_limit_tracker: dict[str, float] = {}
 
 
-@dataclass
 class CCXTAdapter:
-    exchange: str = "binance"
-    timeout: int = 30
-    _exchange_instance: ccxt.Exchange | None = None
+    """CCXT-based data adapter for cryptocurrency market data.
 
-    def __post_init__(self):
-        config = get_config()
-        if self.exchange == "binance":
-            self.exchange = config.default_exchange
-        if self.timeout == 30:
-            self.timeout = config.ccxt_timeout
-        if self.exchange.lower() not in SUPPORTED_EXCHANGES:
-            raise CCXTError(
-                f"Unsupported exchange: {self.exchange}. Supported: {SUPPORTED_EXCHANGES}",
-                code=ErrorCodes.INVALID_EXCHANGE,
-            )
-        self._create_exchange()
+    Provides real-time price, OHLCV, and orderbook data via CCXT library.
+    Uses public REST APIs - no API keys required for read operations.
 
-    def _create_exchange(self) -> None:
-        exchange_class = getattr(ccxt, self.exchange.lower())
-        self._exchange_instance = exchange_class(
-            {
-                "enableRateLimit": True,
-                "timeout": self.timeout * 1000,
-                "options": {"defaultType": "spot"},
-            }
+    Attributes:
+        exchange: CCXT exchange instance
+        exchange_name: Name of the exchange (default: "binance")
+
+    Example:
+        >>> adapter = CCXTAdapter()
+        >>> price = adapter.fetch_live_price("BTCUSDT")
+        >>> df = adapter.fetch_ohlcv_live("BTCUSDT", "1m", 100)
+        >>> orderbook = adapter.fetch_orderbook_snapshot("BTCUSDT", 20)
+    """
+
+    def __init__(self, exchange_name: str = "binance") -> None:
+        """Initialize CCXT adapter.
+
+        Args:
+            exchange_name: Exchange to use (default: "binance")
+        """
+        self.exchange_name = exchange_name.lower()
+
+        # Get exchange class
+        exchange_classes = {
+            "binance": ccxt.binance,
+            "bybit": ccxt.bybit,
+            "kraken": ccxt.kraken,
+            "coinbase": ccxt.coinbase,
+        }
+
+        exchange_class = exchange_classes.get(self.exchange_name, ccxt.binance)
+        self.exchange = exchange_class({
+            "enableRateLimit": True,
+            "options": {
+                "defaultType": "spot",
+            },
+        })
+
+        logger.info(
+            "ccxt_adapter_initialized",
+            exchange=self.exchange_name,
         )
 
-    @property
-    def client(self) -> ccxt.Exchange:
-        if self._exchange_instance is None:
-            self._create_exchange()
-        return self._exchange_instance
+    def _check_rate_limit(self) -> None:
+        """Check and enforce rate limiting."""
+        current_time = time.time()
+        last_request = _rate_limit_tracker.get(self.exchange_name, 0)
 
-    def fetch_ticker(self, symbol: str) -> Ticker:
+        # Minimum interval between requests (50ms for 1200 req/min)
+        min_interval = 0.05
+
+        if current_time - last_request < min_interval:
+            time.sleep(min_interval - (current_time - last_request))
+
+        _rate_limit_tracker[self.exchange_name] = time.time()
+
+    def fetch_live_price(
+        self,
+        symbol: str,
+        exchange: str = "binance",
+    ) -> float:
+        """Fetch the latest trade price for a symbol.
+
+        Args:
+            symbol: Symbol in any format (e.g., "BTCUSD", "BTCUSDT")
+            exchange: Target exchange (future extension point)
+
+        Returns:
+            Latest trade price as float. Returns float('nan') on error.
+
+        Note:
+            Per D14, this function NEVER raises exceptions to callers.
+            On failure, logs ERROR and returns NaN.
+
+        Example:
+            >>> adapter = CCXTAdapter()
+            >>> price = adapter.fetch_live_price("BTCUSDT")
+            >>> isinstance(price, float)
+            True
+        """
         try:
-            logger.debug("Fetching ticker", symbol=symbol, exchange=self.exchange)
-            ticker_data = self.client.fetch_ticker(symbol)
-            return Ticker(
-                symbol=symbol,
-                exchange=self.exchange,
-                price=float(ticker_data.get("last", 0)),
-                timestamp=float(ticker_data.get("timestamp", 0) / 1000),
-                volume_24h=float(ticker_data.get("baseVolume", 0)),
-                high_24h=float(ticker_data.get("high", 0)),
-                low_24h=float(ticker_data.get("low", 0)),
-                change_percent_24h=float(ticker_data.get("percentage", 0)),
-                bid=float(ticker_data.get("bid", 0)),
-                ask=float(ticker_data.get("ask", 0)),
+            # Normalize symbol to CCXT format
+            ccxt_symbol = normalize_to_ccxt(symbol)
+
+            if not validate_symbol(ccxt_symbol):
+                logger.error(
+                    "invalid_symbol",
+                    symbol=symbol,
+                    ccxt_symbol=ccxt_symbol,
+                )
+                return float("nan")
+
+            self._check_rate_limit()
+
+            # Fetch ticker from exchange
+            ticker = self.exchange.fetch_ticker(ccxt_symbol)
+            price = float(ticker["last"])
+
+            logger.info(
+                "fetch_live_price_success",
+                source="ccxt",
+                exchange=self.exchange_name,
+                symbol=ccxt_symbol,
+                price=price,
             )
-        except ccxt.BadSymbol as err:
-            raise CCXTError(f"Invalid symbol: {symbol}", code=ErrorCodes.INVALID_SYMBOL) from err
-        except ccxt.NetworkError as e:
-            logger.error("CCXT network error", symbol=symbol, error=str(e))
-            raise CCXTError(
-                f"Network error fetching {symbol}: {e}", code=ErrorCodes.NETWORK_ERROR
-            ) from e
-        except Exception as e:
-            logger.error("CCXT ticker fetch failed", symbol=symbol, error=str(e))
-            raise CCXTError(
-                f"Failed to fetch ticker for {symbol}: {e}", code=ErrorCodes.CCXT_ERROR
-            ) from e
 
-    def fetch_klines(
-        self, symbol: str, timeframe: str = "1h", since: datetime | None = None, limit: int = 100
-    ) -> KlineData:
-        try:
-            since_ms = int(since.timestamp() * 1000) if since else None
-            logger.debug(
-                "Fetching klines",
+            return price
+
+        except ccxt.NetworkError as e:
+            logger.error(
+                "fetch_live_price_network_error",
+                source="ccxt",
                 symbol=symbol,
+                error=str(e),
+            )
+            return float("nan")
+
+        except ccxt.ExchangeError as e:
+            logger.error(
+                "fetch_live_price_exchange_error",
+                source="ccxt",
+                symbol=symbol,
+                error=str(e),
+            )
+            return float("nan")
+
+        except Exception as e:
+            logger.error(
+                "fetch_live_price_unexpected_error",
+                source="ccxt",
+                symbol=symbol,
+                error=str(e),
+            )
+            return float("nan")
+
+    def fetch_ohlcv_live(
+        self,
+        symbol: str,
+        timeframe: str = "1m",
+        limit: int = 100,
+    ) -> pd.DataFrame:
+        """Fetch OHLCV candlestick data for a symbol.
+
+        Args:
+            symbol: Symbol in any format (e.g., "BTCUSD", "BTCUSDT")
+            timeframe: Timeframe string (e.g., "1m", "5m", "1h", "1d")
+            limit: Number of candles to fetch (default: 100)
+
+        Returns:
+            DataFrame with columns [open, high, low, close, volume] and
+            UTC-aware DatetimeIndex. Returns empty DataFrame on error.
+
+        Note:
+            Per D14, this function NEVER raises exceptions to callers.
+            On failure, logs ERROR and returns empty DataFrame with correct columns.
+
+        Example:
+            >>> adapter = CCXTAdapter()
+            >>> df = adapter.fetch_ohlcv_live("BTCUSDT", "1m", 100)
+            >>> list(df.columns)
+            ['open', 'high', 'low', 'close', 'volume']
+        """
+        try:
+            # Normalize symbol to CCXT format
+            ccxt_symbol = normalize_to_ccxt(symbol)
+
+            if not validate_symbol(ccxt_symbol):
+                logger.error(
+                    "invalid_symbol",
+                    symbol=symbol,
+                    ccxt_symbol=ccxt_symbol,
+                )
+                return pd.DataFrame(columns=OHLCV_COLUMNS)
+
+            self._check_rate_limit()
+
+            # Fetch OHLCV from exchange
+            # CCXT returns: [[timestamp, open, high, low, close, volume], ...]
+            ohlcv_data = self.exchange.fetch_ohlcv(
+                ccxt_symbol,
                 timeframe=timeframe,
                 limit=limit,
-                exchange=self.exchange,
             )
-            ohlcv = self.client.fetch_ohlcv(
-                symbol, timeframe=timeframe, since=since_ms, limit=min(limit, 1000)
-            )
-            if not ohlcv:
-                raise CCXTError(f"No kline data found for {symbol}", code=ErrorCodes.DATA_NOT_FOUND)
-            klines = [
-                Kline(
-                    timestamp=c[0] / 1000,
-                    open=float(c[1]),
-                    high=float(c[2]),
-                    low=float(c[3]),
-                    close=float(c[4]),
-                    volume=float(c[5]),
+
+            if not ohlcv_data:
+                logger.error(
+                    "fetch_ohlcv_empty_response",
+                    source="ccxt",
+                    symbol=ccxt_symbol,
+                    timeframe=timeframe,
                 )
-                for c in ohlcv
-            ]
+                return pd.DataFrame(columns=OHLCV_COLUMNS)
+
+            # Convert to DataFrame
+            df = pd.DataFrame(
+                ohlcv_data,
+                columns=["timestamp", "open", "high", "low", "close", "volume"],
+            )
+
+            # Set UTC-aware index
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+            df.set_index("timestamp", inplace=True)
+
+            # Select only OHLCV columns
+            df = df[OHLCV_COLUMNS]
+
             logger.info(
-                "Fetched klines",
-                symbol=symbol,
-                count=len(klines),
+                "fetch_ohlcv_success",
+                source="ccxt",
+                exchange=self.exchange_name,
+                symbol=ccxt_symbol,
                 timeframe=timeframe,
-                exchange=self.exchange,
+                rows=len(df),
             )
-            return KlineData(
-                symbol=symbol, timeframe=timeframe, exchange=self.exchange, klines=klines
-            )
-        except ccxt.BadSymbol as err:
-            raise CCXTError(f"Invalid symbol: {symbol}", code=ErrorCodes.INVALID_SYMBOL) from err
-        except CCXTError:
-            raise
-        except Exception as e:
-            logger.error("CCXT klines fetch failed", symbol=symbol, error=str(e))
-            raise CCXTError(
-                f"Failed to fetch klines for {symbol}: {e}", code=ErrorCodes.CCXT_ERROR
-            ) from e
 
-    def fetch_orderbook(self, symbol: str, limit: int = 20) -> OrderBook:
-        try:
-            logger.debug("Fetching orderbook", symbol=symbol, limit=limit, exchange=self.exchange)
-            ob = self.client.fetch_order_book(symbol, limit=limit)
-            bids = [
-                OrderBookLevel(price=float(b[0]), volume=float(b[1])) for b in ob.get("bids", [])
-            ]
-            asks = [
-                OrderBookLevel(price=float(a[0]), volume=float(a[1])) for a in ob.get("asks", [])
-            ]
-            return OrderBook(
+            return df
+
+        except ccxt.NetworkError as e:
+            logger.error(
+                "fetch_ohlcv_network_error",
+                source="ccxt",
                 symbol=symbol,
-                exchange=self.exchange,
-                bids=bids,
-                asks=asks,
-                timestamp=ob.get("timestamp", 0) / 1000 if ob.get("timestamp") else 0,
+                timeframe=timeframe,
+                error=str(e),
             )
-        except ccxt.BadSymbol as err:
-            raise CCXTError(f"Invalid symbol: {symbol}", code=ErrorCodes.INVALID_SYMBOL) from err
-        except Exception as e:
-            logger.error("CCXT orderbook fetch failed", symbol=symbol, error=str(e))
-            raise CCXTError(
-                f"Failed to fetch orderbook for {symbol}: {e}", code=ErrorCodes.CCXT_ERROR
-            ) from e
+            return pd.DataFrame(columns=OHLCV_COLUMNS)
 
-    def get_symbols(self) -> list[str]:
-        try:
-            markets = self.client.load_markets()
-            return list(markets.keys())
+        except ccxt.ExchangeError as e:
+            logger.error(
+                "fetch_ohlcv_exchange_error",
+                source="ccxt",
+                symbol=symbol,
+                timeframe=timeframe,
+                error=str(e),
+            )
+            return pd.DataFrame(columns=OHLCV_COLUMNS)
+
         except Exception as e:
-            logger.error("Failed to fetch symbols", error=str(e))
-            raise CCXTError(f"Failed to fetch symbols: {e}", code=ErrorCodes.CCXT_ERROR) from e
+            logger.error(
+                "fetch_ohlcv_unexpected_error",
+                source="ccxt",
+                symbol=symbol,
+                timeframe=timeframe,
+                error=str(e),
+            )
+            return pd.DataFrame(columns=OHLCV_COLUMNS)
+
+    def fetch_orderbook_snapshot(
+        self,
+        symbol: str,
+        limit: int = 20,
+    ) -> dict:
+        """Fetch order book snapshot for a symbol.
+
+        Args:
+            symbol: Symbol in any format (e.g., "BTCUSD", "BTCUSDT")
+            limit: Depth of orderbook to fetch (default: 20)
+
+        Returns:
+            Dict with keys:
+            - bids: List of [price, amount] pairs, sorted by price desc
+            - asks: List of [price, amount] pairs, sorted by price asc
+            - timestamp: UTC-aware pandas Timestamp
+
+        Note:
+            Per D14, this function NEVER raises exceptions to callers.
+            On failure, logs ERROR and returns empty bids/asks with None timestamp.
+
+        Example:
+            >>> adapter = CCXTAdapter()
+            >>> ob = adapter.fetch_orderbook_snapshot("BTCUSDT", 20)
+            >>> "bids" in ob and "asks" in ob
+            True
+        """
+        try:
+            # Normalize symbol to CCXT format
+            ccxt_symbol = normalize_to_ccxt(symbol)
+
+            if not validate_symbol(ccxt_symbol):
+                logger.error(
+                    "invalid_symbol",
+                    symbol=symbol,
+                    ccxt_symbol=ccxt_symbol,
+                )
+                return {
+                    "bids": [],
+                    "asks": [],
+                    "timestamp": None,
+                }
+
+            self._check_rate_limit()
+
+            # Fetch orderbook from exchange
+            orderbook = self.exchange.fetch_order_book(ccxt_symbol, limit=limit)
+
+            result = {
+                "bids": orderbook.get("bids", [])[:limit],
+                "asks": orderbook.get("asks", [])[:limit],
+                "timestamp": pd.Timestamp.now(tz="UTC"),
+            }
+
+            logger.info(
+                "fetch_orderbook_success",
+                source="ccxt",
+                exchange=self.exchange_name,
+                symbol=ccxt_symbol,
+                bid_depth=len(result["bids"]),
+                ask_depth=len(result["asks"]),
+            )
+
+            return result
+
+        except ccxt.NetworkError as e:
+            logger.error(
+                "fetch_orderbook_network_error",
+                source="ccxt",
+                symbol=symbol,
+                error=str(e),
+            )
+            return {
+                "bids": [],
+                "asks": [],
+                "timestamp": None,
+            }
+
+        except ccxt.ExchangeError as e:
+            logger.error(
+                "fetch_orderbook_exchange_error",
+                source="ccxt",
+                symbol=symbol,
+                error=str(e),
+            )
+            return {
+                "bids": [],
+                "asks": [],
+                "timestamp": None,
+            }
+
+        except Exception as e:
+            logger.error(
+                "fetch_orderbook_unexpected_error",
+                source="ccxt",
+                symbol=symbol,
+                error=str(e),
+            )
+            return {
+                "bids": [],
+                "asks": [],
+                "timestamp": None,
+            }
