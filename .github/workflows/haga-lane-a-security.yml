@@ -1,0 +1,80 @@
+name: Haga Lane A Security
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  lane-a-security:
+    runs-on: [self-hosted, tempesti-01]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Authenticate with GitHub App
+        id: auth
+        run: |
+          OUTPUT=$(python3 /home/tempest/bin/github-app-auth.sh /home/tempest/apps/${{ github.event.repository.name }})
+          TOKEN=$(echo "$OUTPUT" | grep '^TOKEN=' | sed 's/^TOKEN=//')
+          echo "TOKEN=$TOKEN" >> $GITHUB_ENV
+
+      - name: Get PR diff
+        id: diff
+        run: |
+          DIFF=$(git diff origin/${{ github.base_ref }}...HEAD)
+          # Truncate if too large for display
+          if [ ${#DIFF} -gt 60000 ]; then
+            DIFF="${DIFF:0:60000}"$'\n\n[Diff truncated — too large for display]'
+            echo "DIFF_TRUNCATED=true" >> $GITHUB_ENV
+          fi
+          echo "DIFF=$DIFF" >> $GITHUB_ENV
+
+      - name: Run Lane A security review
+        id: lane-a
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          PR_URL="${{ github.event.pull_request.html_url }}"
+          REPO="${{ github.repository }}"
+
+          # Use MiniMax M2.7-highspeed — always available, no OpenRouter credits required
+          LANE_A_RESULT=$(/home/tempest/.opencode/bin/opencode run \
+            --agent Haga \
+            --model minimax/MiniMax-M2.7-highspeed \
+            "You are running Lane A (Security) review for this PR:
+
+            Repository: $REPO
+            PR #: $PR_NUMBER
+            Title: $PR_TITLE
+            URL: $PR_URL
+
+            Diff (code changes):
+            ${{ env.DIFF }}
+
+            Focus: Auth, sessions, input validation, SQL queries, API endpoints, file uploads, permissions, vulnerability detection. Think like a security researcher. Look for SQL injection, XSS, auth bypasses, insecure deserialization, hardcoded secrets, unsafe imports.
+            Format your response as security findings with severity (Critical/High/Medium/Low), file, line, description, and recommendation.
+            If no security issues found: respond with exactly 'Lane A: PASS — no security concerns identified.'
+
+            IMPORTANT: Your final line must be 'Lane A: [PASS or FAIL]' based on whether you found Critical or High severity issues.")
+
+          echo "LANE_A_RESULT=$LANE_A_RESULT" >> $GITHUB_ENV
+
+      - name: Post PR comment
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          SECURITY_RESULT_JSON=$(echo "${{ env.LANE_A_RESULT }}" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
+
+          COMMENT_RESPONSE=$(curl -s -X POST \
+            -H "Authorization: Bearer ${{ env.TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments \
+            -d "{\"body\": $SECURITY_RESULT_JSON}")
+          echo "Comment response: $COMMENT_RESPONSE"
