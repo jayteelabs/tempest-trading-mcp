@@ -284,6 +284,11 @@ def create_app() -> Starlette:
     transport = SseServerTransport("/messages")
 
     async def sse_handler(scope: dict, receive: callable, send: callable) -> None:
+        # TODO: Add authentication before allowing SSE connection.
+        # Currently the service binds to 127.0.0.1 and is accessible only via
+        # Docker port mapping + VPS firewall + Tailscale. Production deployment
+        # may require API key, Bearer token, or mTLS. Investigate MCP HTTP/SSE
+        # auth patterns before exposing beyond trusted networks.
         async with transport.connect_sse(scope, receive, send) as (read_stream, write_stream):
             await server.run(
                 read_stream,
