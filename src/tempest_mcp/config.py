@@ -1,5 +1,4 @@
-"""
-Configuration management for Tempest MCP Server.
+"""Configuration management for Tempest MCP Server.
 
 Environment variables with TEMPEST_ prefix, SCREAMING_SNAKE_CASE.
 """
@@ -19,6 +18,8 @@ class Config:
     log_level: str = "INFO"
     log_format: str = "json"
     yf_cache_ttl: int = 300
+    yf_timeout: int = 30
+    yf_retries: int = 3
     ccxt_timeout: int = 30
     default_exchange: str = "binance"
     mcp_server_name: str = "tempest-tradingview-mcp"
@@ -66,6 +67,8 @@ def get_config() -> Config:
         log_level=_get_str("LOG_LEVEL", "INFO"),
         log_format=_get_str("LOG_FORMAT", "json"),
         yf_cache_ttl=_get_int("YF_CACHE_TTL", 300),
+        yf_timeout=_get_int("YF_TIMEOUT", 30),
+        yf_retries=_get_int("YF_RETRIES", 3),
         ccxt_timeout=_get_int("CCXT_TIMEOUT", 30),
         default_exchange=_get_str("DEFAULT_EXCHANGE", "binance"),
         mcp_server_name=_get_str("MCP_SERVER_NAME", "tempest-tradingview-mcp"),
