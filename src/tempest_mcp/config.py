@@ -1,9 +1,9 @@
-"""
-Configuration management for Tempest MCP Server.
+"""Configuration management for Tempest MCP Server.
 
 Environment variables with TEMPEST_ prefix, SCREAMING_SNAKE_CASE.
 """
 
+import logging
 import os
 from dataclasses import dataclass
 from functools import lru_cache
@@ -13,12 +13,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class Config:
     log_level: str = "INFO"
     log_format: str = "json"
     yf_cache_ttl: int = 300
+    yf_timeout: int = 30
+    yf_retries: int = 3
     ccxt_timeout: int = 30
     default_exchange: str = "binance"
     mcp_server_name: str = "tempest-tradingview-mcp"
@@ -40,6 +44,12 @@ def _get_int(key: str, default: int) -> int:
     try:
         return int(value)
     except ValueError:
+        logger.warning(
+            "config: invalid integer for %s, falling back to default %s (value: %r)",
+            f"TEMPEST_{key}",
+            default,
+            value,
+        )
         return default
 
 
@@ -50,6 +60,12 @@ def _get_float(key: str, default: float) -> float:
     try:
         return float(value)
     except ValueError:
+        logger.warning(
+            "config: invalid float for %s, falling back to default %s (value: %r)",
+            f"TEMPEST_{key}",
+            default,
+            value,
+        )
         return default
 
 
@@ -66,6 +82,8 @@ def get_config() -> Config:
         log_level=_get_str("LOG_LEVEL", "INFO"),
         log_format=_get_str("LOG_FORMAT", "json"),
         yf_cache_ttl=_get_int("YF_CACHE_TTL", 300),
+        yf_timeout=_get_int("YF_TIMEOUT", 30),
+        yf_retries=_get_int("YF_RETRIES", 3),
         ccxt_timeout=_get_int("CCXT_TIMEOUT", 30),
         default_exchange=_get_str("DEFAULT_EXCHANGE", "binance"),
         mcp_server_name=_get_str("MCP_SERVER_NAME", "tempest-tradingview-mcp"),
