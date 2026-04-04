@@ -8,6 +8,9 @@ Design Decisions (D11, D12):
 - D11: Symbol conversion via _symbols.py - canonical format is CCXT/Binance (BTCUSDT)
 - D12: TV uses BTCUSD, CCXT uses BTCUSDT - adapter normalizes
 
+WARNING: BTCUSD and BTCUSDT are DIFFERENT instruments on some exchanges.
+Never silently convert between them without being explicit about the intent.
+
 The `exchange` param on `fetch_live_price` is a future extension point for
 multi-exchange support.
 """
@@ -24,9 +27,29 @@ ExchangeName = Literal["binance", "bybit", "coinbase", "kraken"]
 # Symbol format type
 SymbolFormat = Literal["tradingview", "ccxt"]
 
+# Supported timeframe strings
+SUPPORTED_TIMEFRAMES: frozenset[str] = frozenset(
+    {
+        "1m",
+        "5m",
+        "15m",
+        "30m",
+        "1h",
+        "4h",
+        "1d",
+        "1wk",
+        "1mo",
+    }
+)
+
+# Limit bounds
+MIN_LIMIT: int = 1
+MAX_LIMIT: int = 1000
+
 
 class SymbolMapping(TypedDict):
     """Mapping between TradingView and CCXT symbol formats."""
+
     tradingview: str
     ccxt: str
     base: str
@@ -35,6 +58,7 @@ class SymbolMapping(TypedDict):
 
 # Canonical symbol mappings for v1 crypto scope
 # Design: TV uses BTCUSD, CCXT/Binance uses BTCUSDT
+# WARNING: BTCUSD ≠ BTCUSDT — they are different instruments
 SYMBOL_MAPPINGS: dict[str, SymbolMapping] = {
     "BTCUSDT": {
         "tradingview": "BTCUSD",
@@ -75,6 +99,21 @@ SYMBOL_MAPPINGS: dict[str, SymbolMapping] = {
 }
 
 
+def _sanitize_symbol(symbol: str) -> str:
+    """Strip whitespace and control characters from symbol for safe logging."""
+    return "".join(c for c in symbol if c.isprintable())
+
+
+def _validate_timeframe(timeframe: str) -> bool:
+    """Check if timeframe is supported."""
+    return timeframe in SUPPORTED_TIMEFRAMES
+
+
+def _validate_limit(limit: int) -> int:
+    """Clamp limit to valid range."""
+    return max(MIN_LIMIT, min(MAX_LIMIT, limit))
+
+
 def normalize_to_ccxt(symbol: str, exchange: ExchangeName = "binance") -> str:
     """Convert a symbol to CCXT canonical format.
 
@@ -91,7 +130,7 @@ def normalize_to_ccxt(symbol: str, exchange: ExchangeName = "binance") -> str:
         Symbol in CCXT canonical format (e.g., "BTCUSDT")
 
     Raises:
-        ValueError: If symbol is not recognized
+        ValueError: If symbol is not recognized or is invalid
 
     Example:
         >>> normalize_to_ccxt("BTCUSD")
@@ -101,7 +140,11 @@ def normalize_to_ccxt(symbol: str, exchange: ExchangeName = "binance") -> str:
         >>> normalize_to_ccxt("ethusdt")
         'ETHUSDT'
     """
-    symbol_upper = symbol.upper()
+    # Reject empty/whitespace-only symbols early
+    if not symbol or not symbol.strip():
+        raise ValueError("Symbol cannot be empty or whitespace")
+
+    symbol_upper = symbol.strip().upper()
 
     # Direct lookup in mappings
     if symbol_upper in SYMBOL_MAPPINGS:
@@ -110,28 +153,25 @@ def normalize_to_ccxt(symbol: str, exchange: ExchangeName = "binance") -> str:
     # Try to infer format
     # If ends with USDT, already in CCXT format
     if symbol_upper.endswith("USDT"):
-        logger.debug(
-            "symbol_inferred_as_ccxt",
-            symbol=symbol,
-            inferred_format="ccxt",
-        )
         return symbol_upper
 
     # If ends with USD but not USDT, likely TradingView format
+    # WARNING: BTCUSD and BTCUSDT are DIFFERENT instruments
     if symbol_upper.endswith("USD") and not symbol_upper.endswith("USDT"):
-        # Convert to USDT for CCXT
         base = symbol_upper[:-3]  # Remove USD
         ccxt_symbol = f"{base}USDT"
-        logger.debug(
+        logger.warning(
             "symbol_converted_tv_to_ccxt",
-            symbol=symbol,
+            symbol=symbol_upper,
             ccxt_symbol=ccxt_symbol,
+            warning="BTCUSD and BTCUSDT are different instruments - confirm this is intentional",
         )
         return ccxt_symbol
 
-    # Unknown format - raise error
+    # Unknown format
+    safe_symbol = _sanitize_symbol(symbol)
     raise ValueError(
-        f"Unrecognized symbol format: {symbol}. "
+        f"Unrecognized symbol format: '{safe_symbol}'. "
         f"Expected TradingView (BTCUSD) or CCXT (BTCUSDT) format."
     )
 
@@ -148,7 +188,7 @@ def normalize_to_tradingview(symbol: str) -> str:
         Symbol in TradingView format (e.g., "BTCUSD")
 
     Raises:
-        ValueError: If symbol is not recognized
+        ValueError: If symbol is not recognized or is invalid
 
     Example:
         >>> normalize_to_tradingview("BTCUSDT")
@@ -156,7 +196,10 @@ def normalize_to_tradingview(symbol: str) -> str:
         >>> normalize_to_tradingview("BTCUSD")
         'BTCUSD'
     """
-    symbol_upper = symbol.upper()
+    if not symbol or not symbol.strip():
+        raise ValueError("Symbol cannot be empty or whitespace")
+
+    symbol_upper = symbol.strip().upper()
 
     # Direct lookup in mappings
     if symbol_upper in SYMBOL_MAPPINGS:
@@ -166,10 +209,11 @@ def normalize_to_tradingview(symbol: str) -> str:
     if symbol_upper.endswith("USDT"):
         base = symbol_upper[:-4]  # Remove USDT
         tv_symbol = f"{base}USD"
-        logger.debug(
+        logger.warning(
             "symbol_converted_ccxt_to_tv",
-            symbol=symbol,
+            symbol=symbol_upper,
             tv_symbol=tv_symbol,
+            warning="BTCUSDT and BTCUSD are different instruments - confirm this is intentional",
         )
         return tv_symbol
 
@@ -177,8 +221,9 @@ def normalize_to_tradingview(symbol: str) -> str:
     if symbol_upper.endswith("USD"):
         return symbol_upper
 
+    safe_symbol = _sanitize_symbol(symbol)
     raise ValueError(
-        f"Unrecognized symbol format: {symbol}. "
+        f"Unrecognized symbol format: '{safe_symbol}'. "
         f"Expected TradingView (BTCUSD) or CCXT (BTCUSDT) format."
     )
 
@@ -198,7 +243,10 @@ def get_base_currency(symbol: str) -> str:
         >>> get_base_currency("BTCUSD")
         'BTC'
     """
-    symbol_upper = symbol.upper()
+    if not symbol or not symbol.strip():
+        return ""
+
+    symbol_upper = symbol.strip().upper()
 
     if symbol_upper in SYMBOL_MAPPINGS:
         return SYMBOL_MAPPINGS[symbol_upper]["base"]
@@ -206,7 +254,7 @@ def get_base_currency(symbol: str) -> str:
     # Fallback: strip quote currency
     for quote in ["USDT", "USD", "BTC", "ETH", "BUSD"]:
         if symbol_upper.endswith(quote):
-            return symbol_upper[:-len(quote)]
+            return symbol_upper[: -len(quote)]
 
     return symbol_upper
 
@@ -225,14 +273,22 @@ def validate_symbol(symbol: str) -> bool:
         True
         >>> validate_symbol("BTCUSD")
         True
+        >>> validate_symbol("")
+        False
         >>> validate_symbol("INVALID")
         False
     """
-    symbol_upper = symbol.upper()
+    if not symbol or not symbol.strip():
+        return False
+
+    symbol_upper = symbol.strip().upper()
 
     # Check direct mapping
     if symbol_upper in SYMBOL_MAPPINGS:
         return True
 
     # Check inferred formats
-    return bool(symbol_upper.endswith("USDT") or symbol_upper.endswith("USD"))
+    if symbol_upper.endswith("USDT") or symbol_upper.endswith("USD"):
+        return True
+
+    return False

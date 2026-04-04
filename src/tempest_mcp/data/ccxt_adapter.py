@@ -14,22 +14,30 @@ Rate Limiting (D14):
 - Adapter respects exchange-specific rate limits
 """
 
+import threading
 import time
+import warnings
 from typing import Final
 
 import ccxt
 import pandas as pd
 import structlog
 
-from tempest_mcp.data._symbols import normalize_to_ccxt, validate_symbol
+from tempest_mcp.data._symbols import (
+    _validate_limit,
+    _validate_timeframe,
+    normalize_to_ccxt,
+    validate_symbol,
+)
 
 logger = structlog.get_logger()
 
 # OHLCV column names
 OHLCV_COLUMNS: Final[list[str]] = ["open", "high", "low", "close", "volume"]
 
-# Rate limit tracking
+# Rate limit tracking with thread-safe lock
 _rate_limit_tracker: dict[str, float] = {}
+_rate_limit_lock = threading.Lock()
 
 
 class CCXTAdapter:
@@ -66,12 +74,14 @@ class CCXTAdapter:
         }
 
         exchange_class = exchange_classes.get(self.exchange_name, ccxt.binance)
-        self.exchange = exchange_class({
-            "enableRateLimit": True,
-            "options": {
-                "defaultType": "spot",
-            },
-        })
+        self.exchange = exchange_class(
+            {
+                "enableRateLimit": True,
+                "options": {
+                    "defaultType": "spot",
+                },
+            }
+        )
 
         logger.info(
             "ccxt_adapter_initialized",
@@ -79,17 +89,15 @@ class CCXTAdapter:
         )
 
     def _check_rate_limit(self) -> None:
-        """Check and enforce rate limiting."""
+        """Check and enforce rate limiting (thread-safe)."""
         current_time = time.time()
-        last_request = _rate_limit_tracker.get(self.exchange_name, 0)
-
-        # Minimum interval between requests (50ms for 1200 req/min)
         min_interval = 0.05
 
-        if current_time - last_request < min_interval:
-            time.sleep(min_interval - (current_time - last_request))
-
-        _rate_limit_tracker[self.exchange_name] = time.time()
+        with _rate_limit_lock:
+            last_request = _rate_limit_tracker.get(self.exchange_name, 0)
+            if current_time - last_request < min_interval:
+                time.sleep(min_interval - (current_time - last_request))
+            _rate_limit_tracker[self.exchange_name] = time.time()
 
     def fetch_live_price(
         self,
@@ -100,7 +108,10 @@ class CCXTAdapter:
 
         Args:
             symbol: Symbol in any format (e.g., "BTCUSD", "BTCUSDT")
-            exchange: Target exchange (future extension point)
+            exchange: Target exchange (default: "binance").
+                Note: Multi-exchange support requires creating separate
+                CCXTAdapter instances. The exchange param is deprecated
+                and will be removed in a future version.
 
         Returns:
             Latest trade price as float. Returns float('nan') on error.
@@ -115,6 +126,17 @@ class CCXTAdapter:
             >>> isinstance(price, float)
             True
         """
+        # Warn if exchange param differs from adapter's exchange (future removal)
+        if exchange != self.exchange_name:
+            warnings.warn(
+                f"The 'exchange' parameter is deprecated and will be ignored. "
+                f"This CCXTAdapter instance is configured for '{self.exchange_name}'. "
+                f"For a different exchange, create a separate CCXTAdapter instance: "
+                f"CCXTAdapter(exchange_name='{exchange}')",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         try:
             # Normalize symbol to CCXT format
             ccxt_symbol = normalize_to_ccxt(symbol)
@@ -197,6 +219,18 @@ class CCXTAdapter:
             >>> list(df.columns)
             ['open', 'high', 'low', 'close', 'volume']
         """
+        # Validate timeframe
+        if not _validate_timeframe(timeframe):
+            logger.error(
+                "invalid_timeframe",
+                timeframe=timeframe,
+                supported=sorted({"1m", "5m", "15m", "30m", "1h", "4h", "1d", "1wk", "1mo"}),
+            )
+            return pd.DataFrame(columns=OHLCV_COLUMNS)
+
+        # Validate and clamp limit
+        limit = _validate_limit(limit)
+
         try:
             # Normalize symbol to CCXT format
             ccxt_symbol = normalize_to_ccxt(symbol)
@@ -309,6 +343,9 @@ class CCXTAdapter:
             >>> "bids" in ob and "asks" in ob
             True
         """
+        # Validate and clamp limit
+        limit = _validate_limit(limit)
+
         try:
             # Normalize symbol to CCXT format
             ccxt_symbol = normalize_to_ccxt(symbol)

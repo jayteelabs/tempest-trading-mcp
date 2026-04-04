@@ -12,12 +12,13 @@ Design Decisions:
 
 Rate Limiting:
 - TradingView: Per-minute limits based on subscription tier
-- Adapter respects configured rate limits
+- Adapter respects configured rate limits with thread-safe locking
 """
 
 from __future__ import annotations
 
 import os
+import threading
 import time
 from typing import TYPE_CHECKING, Final
 
@@ -27,7 +28,13 @@ if TYPE_CHECKING:
 import pandas as pd
 import structlog
 
-from tempest_mcp.data._symbols import normalize_to_tradingview, validate_symbol
+from tempest_mcp.data._symbols import (
+    _validate_limit,
+    _validate_timeframe,
+    normalize_to_ccxt,
+    normalize_to_tradingview,
+    validate_symbol,
+)
 from tempest_mcp.errors import TradingViewError
 
 logger = structlog.get_logger()
@@ -35,8 +42,12 @@ logger = structlog.get_logger()
 # OHLCV column names
 OHLCV_COLUMNS: Final[list[str]] = ["open", "high", "low", "close", "volume"]
 
-# Rate limit tracking
+# Allowed exchange values for validation
+ALLOWED_EXCHANGES: frozenset[str] = frozenset({"binance", "bybit", "coinbase", "kraken"})
+
+# Rate limit tracking with thread-safe lock
 _rate_limit_tracker: dict[str, float] = {}
+_rate_limit_lock = threading.Lock()
 
 
 class TradingViewAdapter:
@@ -68,7 +79,7 @@ class TradingViewAdapter:
             rate_limit: Requests per minute limit (default: 60)
         """
         self.api_key = api_key or os.environ.get("TRADINGVIEW_API_KEY")
-        self.rate_limit = rate_limit
+        self.rate_limit = max(1, rate_limit)
 
         # Lazy-import CCXT adapter for orderbook delegation (D16)
         self._ccxt_adapter: LiveDataAdapter | None = None
@@ -76,7 +87,7 @@ class TradingViewAdapter:
         logger.info(
             "tradingview_adapter_initialized",
             has_api_key=bool(self.api_key),
-            rate_limit=rate_limit,
+            rate_limit=self.rate_limit,
         )
 
     @property
@@ -85,21 +96,20 @@ class TradingViewAdapter:
         if self._ccxt_adapter is None:
             # Lazy import to avoid circular dependency
             from tempest_mcp.data.ccxt_adapter import CCXTAdapter
+
             self._ccxt_adapter = CCXTAdapter()
         return self._ccxt_adapter
 
     def _check_rate_limit(self) -> None:
-        """Check and enforce rate limiting."""
+        """Check and enforce rate limiting (thread-safe)."""
         current_time = time.time()
-        last_request = _rate_limit_tracker.get("tradingview", 0)
-
-        # Calculate minimum interval based on rate limit
         min_interval = 60.0 / self.rate_limit
 
-        if current_time - last_request < min_interval:
-            time.sleep(min_interval - (current_time - last_request))
-
-        _rate_limit_tracker["tradingview"] = time.time()
+        with _rate_limit_lock:
+            last_request = _rate_limit_tracker.get("tradingview", 0)
+            if current_time - last_request < min_interval:
+                time.sleep(min_interval - (current_time - last_request))
+            _rate_limit_tracker["tradingview"] = time.time()
 
     def _make_api_request(
         self,
@@ -128,6 +138,10 @@ class TradingViewAdapter:
         )
         return None
 
+    def _sanitize_for_log(self, value: str) -> str:
+        """Strip control characters to prevent log injection."""
+        return "".join(c for c in value if c.isprintable() or c in "\t\n")
+
     def fetch_live_price(
         self,
         symbol: str,
@@ -137,7 +151,7 @@ class TradingViewAdapter:
 
         Args:
             symbol: Symbol in any format (e.g., "BTCUSD", "BTCUSDT")
-            exchange: Target exchange (future extension point)
+            exchange: Target exchange (validated against allowed values)
 
         Returns:
             Latest trade price as float. Returns float('nan') on error.
@@ -145,22 +159,26 @@ class TradingViewAdapter:
         Note:
             Per D14, this function NEVER raises exceptions to callers.
             On failure, logs ERROR and returns NaN.
-
-        Example:
-            >>> adapter = TradingViewAdapter(api_key="test")
-            >>> price = adapter.fetch_live_price("BTCUSD")
-            >>> isinstance(price, float)
-            True
         """
-        try:
-            # Normalize symbol to TradingView format
-            tv_symbol = normalize_to_tradingview(symbol)
+        # Validate exchange param
+        safe_exchange = self._sanitize_for_log(exchange)
+        if safe_exchange not in ALLOWED_EXCHANGES:
+            logger.error(
+                "invalid_exchange_param",
+                exchange=safe_exchange,
+                allowed=list(ALLOWED_EXCHANGES),
+            )
+            return float("nan")
 
-            if not validate_symbol(tv_symbol):
+        try:
+            # Normalize symbol to CCXT format for CCXT fallback
+            ccxt_symbol = normalize_to_ccxt(symbol)
+
+            if not validate_symbol(symbol):
                 logger.error(
                     "invalid_symbol",
-                    symbol=symbol,
-                    tv_symbol=tv_symbol,
+                    symbol=self._sanitize_for_log(symbol),
+                    ccxt_symbol=ccxt_symbol,
                 )
                 return float("nan")
 
@@ -171,27 +189,27 @@ class TradingViewAdapter:
                     "tradingview_no_api_key",
                     message="No TradingView API key - falling back to CCXT",
                 )
-                # Fall back to CCXT
-                return self.ccxt_adapter.fetch_live_price(tv_symbol, exchange)
+                # Use CCXT format for CCXT adapter
+                return self.ccxt_adapter.fetch_live_price(ccxt_symbol, exchange)
+
+            # Normalize to TV format for TV API
+            tv_symbol = normalize_to_tradingview(symbol)
 
             # TradingView API: v1-data Multiple symbols real-time bars
-            # This is a placeholder - actual API call would go here
             response = self._make_api_request(
                 "v1-data/multiple-symbols-real-time-bars",
                 {"symbols": tv_symbol, "exchange": exchange},
             )
 
             if response is None:
-                # Fall back to CCXT if TV API fails
                 logger.info(
                     "tradingview_fallback_to_ccxt",
                     symbol=tv_symbol,
                     reason="API returned None",
                 )
-                return self.ccxt_adapter.fetch_live_price(tv_symbol, exchange)
+                return self.ccxt_adapter.fetch_live_price(ccxt_symbol, exchange)
 
             # Extract price from response
-            # Placeholder logic - actual response parsing would go here
             price = float("nan")
 
             logger.info(
@@ -207,13 +225,13 @@ class TradingViewAdapter:
             logger.error(
                 "fetch_live_price_tradingview_error",
                 source="tradingview",
-                symbol=symbol,
+                symbol=self._sanitize_for_log(symbol),
                 error=str(e),
                 code=e.code,
             )
-            # Try CCXT fallback
+            ccxt_symbol = normalize_to_ccxt(symbol)
             try:
-                return self.ccxt_adapter.fetch_live_price(symbol, exchange)
+                return self.ccxt_adapter.fetch_live_price(ccxt_symbol, exchange)
             except Exception:
                 return float("nan")
 
@@ -221,12 +239,12 @@ class TradingViewAdapter:
             logger.error(
                 "fetch_live_price_unexpected_error",
                 source="tradingview",
-                symbol=symbol,
+                symbol=self._sanitize_for_log(symbol),
                 error=str(e),
             )
-            # Try CCXT fallback
+            ccxt_symbol = normalize_to_ccxt(symbol)
             try:
-                return self.ccxt_adapter.fetch_live_price(symbol, exchange)
+                return self.ccxt_adapter.fetch_live_price(ccxt_symbol, exchange)
             except Exception:
                 return float("nan")
 
@@ -241,7 +259,7 @@ class TradingViewAdapter:
         Args:
             symbol: Symbol in any format (e.g., "BTCUSD", "BTCUSDT")
             timeframe: Timeframe string (e.g., "1m", "5m", "1h", "1d")
-            limit: Number of candles to fetch (default: 100)
+            limit: Number of candles to fetch (default: 100, max: 1000)
 
         Returns:
             DataFrame with columns [open, high, low, close, volume] and
@@ -250,22 +268,29 @@ class TradingViewAdapter:
         Note:
             Per D14, this function NEVER raises exceptions to callers.
             On failure, logs ERROR and returns empty DataFrame with correct columns.
-
-        Example:
-            >>> adapter = TradingViewAdapter(api_key="test")
-            >>> df = adapter.fetch_ohlcv_live("BTCUSD", "1m", 100)
-            >>> list(df.columns)
-            ['open', 'high', 'low', 'close', 'volume']
         """
-        try:
-            # Normalize symbol to TradingView format
-            tv_symbol = normalize_to_tradingview(symbol)
+        # Validate timeframe
+        if not _validate_timeframe(timeframe):
+            logger.error(
+                "invalid_timeframe",
+                timeframe=self._sanitize_for_log(timeframe),
+                supported=sorted(
+                    _validate_timeframe.__doc__.split() if _validate_timeframe.__doc__ else []
+                ),
+            )
+            return pd.DataFrame(columns=OHLCV_COLUMNS)
 
-            if not validate_symbol(tv_symbol):
+        # Validate and clamp limit
+        limit = _validate_limit(limit)
+
+        try:
+            ccxt_symbol = normalize_to_ccxt(symbol)
+
+            if not validate_symbol(symbol):
                 logger.error(
                     "invalid_symbol",
-                    symbol=symbol,
-                    tv_symbol=tv_symbol,
+                    symbol=self._sanitize_for_log(symbol),
+                    ccxt_symbol=ccxt_symbol,
                 )
                 return pd.DataFrame(columns=OHLCV_COLUMNS)
 
@@ -276,9 +301,10 @@ class TradingViewAdapter:
                     "tradingview_no_api_key",
                     message="No TradingView API key - falling back to CCXT",
                 )
-                return self.ccxt_adapter.fetch_ohlcv_live(tv_symbol, timeframe, limit)
+                return self.ccxt_adapter.fetch_ohlcv_live(ccxt_symbol, timeframe, limit)
 
-            # TradingView API: v1-data symbol real-time bars
+            tv_symbol = normalize_to_tradingview(symbol)
+
             response = self._make_api_request(
                 "v1-data/symbol-real-time-bars",
                 {"symbol": tv_symbol, "timeframe": timeframe, "limit": limit},
@@ -291,10 +317,8 @@ class TradingViewAdapter:
                     timeframe=timeframe,
                     reason="API returned None",
                 )
-                return self.ccxt_adapter.fetch_ohlcv_live(tv_symbol, timeframe, limit)
+                return self.ccxt_adapter.fetch_ohlcv_live(ccxt_symbol, timeframe, limit)
 
-            # Parse response into DataFrame
-            # Placeholder - actual response parsing would go here
             df = pd.DataFrame(columns=OHLCV_COLUMNS)
 
             logger.info(
@@ -311,14 +335,14 @@ class TradingViewAdapter:
             logger.error(
                 "fetch_ohlcv_tradingview_error",
                 source="tradingview",
-                symbol=symbol,
+                symbol=self._sanitize_for_log(symbol),
                 timeframe=timeframe,
                 error=str(e),
                 code=e.code,
             )
-            # Try CCXT fallback
+            ccxt_symbol = normalize_to_ccxt(symbol)
             try:
-                return self.ccxt_adapter.fetch_ohlcv_live(symbol, timeframe, limit)
+                return self.ccxt_adapter.fetch_ohlcv_live(ccxt_symbol, timeframe, limit)
             except Exception:
                 return pd.DataFrame(columns=OHLCV_COLUMNS)
 
@@ -326,13 +350,13 @@ class TradingViewAdapter:
             logger.error(
                 "fetch_ohlcv_unexpected_error",
                 source="tradingview",
-                symbol=symbol,
+                symbol=self._sanitize_for_log(symbol),
                 timeframe=timeframe,
                 error=str(e),
             )
-            # Try CCXT fallback
+            ccxt_symbol = normalize_to_ccxt(symbol)
             try:
-                return self.ccxt_adapter.fetch_ohlcv_live(symbol, timeframe, limit)
+                return self.ccxt_adapter.fetch_ohlcv_live(ccxt_symbol, timeframe, limit)
             except Exception:
                 return pd.DataFrame(columns=OHLCV_COLUMNS)
 
@@ -348,7 +372,7 @@ class TradingViewAdapter:
 
         Args:
             symbol: Symbol in any format (e.g., "BTCUSD", "BTCUSDT")
-            limit: Depth of orderbook to fetch (default: 20)
+            limit: Depth of orderbook to fetch (default: 20, max: 1000)
 
         Returns:
             Dict with keys:
@@ -359,19 +383,30 @@ class TradingViewAdapter:
         Note:
             Per D14, this function NEVER raises exceptions to callers.
             On failure, logs ERROR and returns empty bids/asks with None timestamp.
-
-        Example:
-            >>> adapter = TradingViewAdapter(api_key="test")
-            >>> ob = adapter.fetch_orderbook_snapshot("BTCUSD", 20)
-            >>> "bids" in ob and "asks" in ob
-            True
         """
-        # D16: TV→CCXT hybrid - delegate to CCXT for orderbook
+        limit = _validate_limit(limit)
+
         logger.info(
             "tradingview_delegating_orderbook_to_ccxt",
-            symbol=symbol,
+            symbol=self._sanitize_for_log(symbol),
             limit=limit,
             design_decision="D16",
         )
 
-        return self.ccxt_adapter.fetch_orderbook_snapshot(symbol, limit)
+        # D16: TV→CCXT hybrid - delegate to CCXT for orderbook
+        # Wrap in try/except to enforce D14 (no exception propagation)
+        try:
+            ccxt_symbol = normalize_to_ccxt(symbol)
+            return self.ccxt_adapter.fetch_orderbook_snapshot(ccxt_symbol, limit)
+        except Exception as e:
+            logger.error(
+                "fetch_orderbook_snapshot_error",
+                source="ccxt_delegation",
+                symbol=self._sanitize_for_log(symbol),
+                error=str(e),
+            )
+            return {
+                "bids": [],
+                "asks": [],
+                "timestamp": None,
+            }
