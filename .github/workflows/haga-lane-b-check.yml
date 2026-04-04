@@ -55,32 +55,22 @@ jobs:
             --agent haga \
             --model minimax/MiniMax-M2.7-highspeed \
             --api-key "$MINIMAX_API_KEY" \
-            <<'PROMPT'
-You are running Lane B (Logic/Edge/Adversarial) review for this PR:
+            "You are running Lane B (Logic/Edge/Adversarial) review for this PR:
 
-Repository: %REPO%
-PR #: %PR_NUMBER%
-Title: %PR_TITLE%
-URL: %PR_URL%
+            Repository: $REPO
+            PR #: $PR_NUMBER
+            Title: $PR_TITLE
+            URL: $PR_URL
 
-Diff (code changes):
-%DIFF%
+            Diff (code changes):
+            $DIFF
 
-Focus: Error states, data transformation, multi-file interactions, edge cases, logic correctness, adversarial/breaker mindset. Be harsh. Look for ways this code can fail, crash, or be exploited.
-Format your response as a structured finding list. For each issue found: severity (Critical/High/Medium/Low), file, line, description, recommendation.
-If no issues found: respond with exactly 'Lane B: PASS — no critical logic concerns identified.'
+            Focus: Error states, data transformation, multi-file interactions, edge cases, logic correctness, adversarial/breaker mindset. Be harsh. Look for ways this code can fail, crash, or be exploited.
+            Format your response as a structured finding list. For each issue found: severity (Critical/High/Medium/Low), file, line, description, recommendation.
+            If no issues found: respond with exactly 'Lane B: PASS — no critical logic concerns identified.'
 
-IMPORTANT: If you find ANY High or Critical severity issues, your final line must be exactly 'Lane B: FAIL'
-If only Medium/Low or no issues, your final line must be exactly 'Lane B: PASS'
-PROMPT
-          )
-
-          # Replace placeholders with actual values
-          LANE_B_RESULT="${LANE_B_RESULT//\%REPO\%/$REPO}"
-          LANE_B_RESULT="${LANE_B_RESULT//\%PR_NUMBER\%/$PR_NUMBER}"
-          LANE_B_RESULT="${LANE_B_RESULT//\%PR_TITLE\%/$PR_TITLE}"
-          LANE_B_RESULT="${LANE_B_RESULT//\%PR_URL\%/$PR_URL}"
-          LANE_B_RESULT="${LANE_B_RESULT//\%DIFF\%/$DIFF}"
+            IMPORTANT: If you find ANY High or Critical severity issues, your final line must be exactly 'Lane B: FAIL'
+            If only Medium/Low or no issues, your final line must be exactly 'Lane B: PASS'")
 
           echo "$LANE_B_RESULT" > /tmp/lane_b_result.txt
           if echo "$LANE_B_RESULT" | grep -q "Lane B: FAIL"; then
