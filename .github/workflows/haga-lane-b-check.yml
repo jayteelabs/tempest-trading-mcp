@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   lane-b-check:
-    runs-on: [self-hosted, Linux, X64, tempesti-01]
+    runs-on: self-hosted
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
