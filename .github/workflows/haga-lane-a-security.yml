@@ -31,7 +31,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          DIFF=$(gh pr diff ${{ github.event.pull_request.number }})
+          DIFF=$(curl -s -L -H "Authorization: token $GH_TOKEN" \
+            "https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}.diff")
           # Truncate if too large for display
           if [ ${#DIFF} -gt 60000 ]; then
             DIFF="${DIFF:0:60000}"$'n\n[Diff truncated — too large for display]'
