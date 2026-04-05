@@ -8,7 +8,6 @@ Tests cover:
 - Error handling per D14 (no exception propagation)
 """
 
-
 import pandas as pd
 import pytest
 
@@ -216,6 +215,7 @@ class TestAdapterSelection:
         import importlib
 
         import tempest_mcp.data
+
         importlib.reload(tempest_mcp.data)
 
         from tempest_mcp.data import get_live_adapter
@@ -223,3 +223,165 @@ class TestAdapterSelection:
 
         adapter = get_live_adapter()
         assert isinstance(adapter, TradingViewAdapter)
+
+
+class TestHistoricalAdapter:
+    """Tests for historical data adapter and factory."""
+
+    def test_get_historical_adapter_returns_historical_data_source(self):
+        """get_historical_adapter should return HistoricalDataSource instance."""
+        from tempest_mcp.data._factory import get_historical_adapter
+        from tempest_mcp.data._hist import HistoricalDataSource
+
+        adapter = get_historical_adapter()
+        assert isinstance(adapter, HistoricalDataSource)
+
+    def test_get_historical_adapter_caching(self):
+        """get_historical_adapter should return same instance (singleton)."""
+        from tempest_mcp.data._factory import get_historical_adapter
+
+        # Clear the cache first
+        get_historical_adapter.cache_clear()
+
+        adapter1 = get_historical_adapter()
+        adapter2 = get_historical_adapter()
+        assert adapter1 is adapter2
+
+    def test_historical_data_source_fetch_ohlcv(self):
+        """HistoricalDataSource.fetch_ohlcv should return DataFrame."""
+        from tempest_mcp.data._hist import HistoricalDataSource
+
+        source = HistoricalDataSource()
+        # Use a known valid yfinance symbol with a date range
+        from datetime import datetime, timedelta, timezone
+
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=10)
+        df = source.fetch_ohlcv("BTC-USD", "1d", start=start, end=end)
+        assert isinstance(df, pd.DataFrame)
+        expected_columns = ["open", "high", "low", "close", "volume"]
+        assert list(df.columns) == expected_columns
+
+
+class TestDataSourceRouter:
+    """Tests for DataSourceRouter."""
+
+    def test_route_historical_returns_historical_data_source(self):
+        """route_historical should return HistoricalDataSource."""
+        from tempest_mcp.data._hist import HistoricalDataSource
+        from tempest_mcp.data._router import DataSourceRouter
+
+        router = DataSourceRouter()
+        adapter = router.route_historical()
+        assert isinstance(adapter, HistoricalDataSource)
+
+    def test_route_live_returns_live_data_adapter(self, monkeypatch):
+        """route_live should return LiveDataAdapter."""
+        from tempest_mcp.data import LiveDataAdapter
+        from tempest_mcp.data._router import DataSourceRouter
+
+        # Ensure no TV API key
+        monkeypatch.delenv("TRADINGVIEW_API_KEY", raising=False)
+
+        # Clear any cached imports
+        import importlib
+
+        import tempest_mcp.data
+
+        importlib.reload(tempest_mcp.data)
+
+        router = DataSourceRouter()
+        adapter = router.route_live()
+        assert isinstance(adapter, LiveDataAdapter)
+
+    def test_route_live_with_tv_key(self, monkeypatch):
+        """route_live should return TV adapter when key is set."""
+        from tempest_mcp.data._router import DataSourceRouter
+        from tempest_mcp.data.tv_adapter import TradingViewAdapter
+
+        monkeypatch.setenv("TRADINGVIEW_API_KEY", "test-key")
+
+        # Need to clear the cache in get_live_adapter
+        import importlib
+
+        import tempest_mcp.data
+
+        importlib.reload(tempest_mcp.data)
+
+        router = DataSourceRouter()
+        adapter = router.route_live()
+        assert isinstance(adapter, TradingViewAdapter)
+
+
+class TestNormalizeToYF:
+    """Tests for normalize_to_yf function (D19)."""
+
+    def test_normalize_btcusdt_to_yf(self):
+        """BTCUSDT should convert to BTC-USD."""
+        from tempest_mcp.data._symbols import normalize_to_yf
+
+        assert normalize_to_yf("BTCUSDT") == "BTC-USD"
+
+    def test_normalize_ethusdt_to_yf(self):
+        """ETHUSDT should convert to ETH-USD."""
+        from tempest_mcp.data._symbols import normalize_to_yf
+
+        assert normalize_to_yf("ETHUSDT") == "ETH-USD"
+
+    def test_normalize_lowercase(self):
+        """Lowercase symbols should be handled."""
+        from tempest_mcp.data._symbols import normalize_to_yf
+
+        assert normalize_to_yf("btcusdt") == "BTC-USD"
+
+    def test_normalize_already_yf_format(self):
+        """Already yfinance format should pass through."""
+        from tempest_mcp.data._symbols import normalize_to_yf
+
+        assert normalize_to_yf("BTC-USD") == "BTC-USD"
+
+    def test_normalize_empty_raises(self):
+        """Empty symbol should raise ValueError."""
+        from tempest_mcp.data._symbols import normalize_to_yf
+
+        with pytest.raises(ValueError):
+            normalize_to_yf("")
+
+    def test_normalize_unknown_pair_fallback(self):
+        """Unknown pairs ending in USDT should return fallback with warning."""
+        from tempest_mcp.data._symbols import normalize_to_yf
+
+        # Should not raise, should return fallback format
+        result = normalize_to_yf("UNKNOWNUSDT")
+        assert result == "UNKNOWN-USD"
+
+    @pytest.mark.parametrize(
+        "symbol",
+        [
+            "BTC-USDT",  # hyphenated base
+            "BTC/USDT",  # slash-separated
+            "BTC\\USDT",  # backslash-separated
+            "BTC:USDT",  # colon-separated
+        ],
+    )
+    def test_normalize_malformed_usdt_raises(self, symbol):
+        """Malformed USDT symbols with separators in base should raise ValueError."""
+        from tempest_mcp.data._symbols import normalize_to_yf
+
+        with pytest.raises(ValueError, match="non-alphanumeric base"):
+            normalize_to_yf(symbol)
+
+    @pytest.mark.parametrize(
+        "symbol",
+        [
+            "BTC--USD",  # double hyphen
+            "BTC---USD",  # triple hyphen
+            "ETH--USD",  # double hyphen eth
+        ],
+    )
+    def test_normalize_malformed_yf_format_raises(self, symbol):
+        """Malformed yfinance format with multiple hyphens should raise ValueError."""
+        from tempest_mcp.data._symbols import normalize_to_yf
+
+        with pytest.raises(ValueError, match="Invalid yfinance format"):
+            normalize_to_yf(symbol)

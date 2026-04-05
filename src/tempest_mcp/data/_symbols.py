@@ -100,8 +100,12 @@ SYMBOL_MAPPINGS: dict[str, SymbolMapping] = {
 
 
 def _sanitize_symbol(symbol: str) -> str:
-    """Strip whitespace and control characters from symbol for safe logging."""
-    return "".join(c for c in symbol if c.isprintable())
+    """Strip non-alphanumeric characters from symbol for safe logging.
+
+    Uses strict allowlist (alphanumeric only) to prevent log injection
+    and ensure well-formed symbol output.
+    """
+    return "".join(c for c in symbol if c.isalnum())
 
 
 def _validate_timeframe(timeframe: str) -> bool:
@@ -226,6 +230,94 @@ def normalize_to_tradingview(symbol: str) -> str:
         f"Unrecognized symbol format: '{safe_symbol}'. "
         f"Expected TradingView (BTCUSD) or CCXT (BTCUSDT) format."
     )
+
+
+def normalize_to_yf(symbol: str) -> str:
+    """Convert a CCXT/Binance symbol to yfinance format.
+
+    yfinance uses format BTC-USD (with hyphen), while CCXT uses BTCUSDT.
+    This function converts from CCXT format to yfinance format.
+
+    Args:
+        symbol: Symbol in CCXT format (e.g., "BTCUSDT", "ETHUSDT")
+
+    Returns:
+        Symbol in yfinance format (e.g., "BTC-USD", "ETH-USD")
+
+    Raises:
+        ValueError: If symbol is not recognized or is invalid
+
+    Example:
+        >>> normalize_to_yf("BTCUSDT")
+        'BTC-USD'
+        >>> normalize_to_yf("ETHUSDT")
+        'ETH-USD'
+    """
+    # Normalize first, then check once
+    symbol_normalized = symbol.strip().upper()
+    if not symbol_normalized:
+        raise ValueError("Symbol cannot be empty or whitespace")
+
+    # Direct lookup in mappings for known pairs
+    if symbol_normalized in SYMBOL_MAPPINGS:
+        mapping = SYMBOL_MAPPINGS[symbol_normalized]
+        # Use tradingview format as intermediate, then convert hyphen
+        tv_symbol = mapping["tradingview"]
+        # tradingview is BTCUSD, yfinance is BTC-USD
+        # Insert hyphen before USD
+        if tv_symbol.endswith("USD"):
+            base = tv_symbol[:-3]
+            if not base:
+                raise ValueError(f"Invalid symbol: cannot determine base currency for '{symbol}'")
+            return f"{base}-USD"
+        return tv_symbol
+
+    # If ends with USDT, convert: BTCUSDT → BTC-USD
+    if symbol_normalized.endswith("USDT"):
+        base = symbol_normalized[:-4]  # Remove USDT
+        if not base:
+            raise ValueError(f"Invalid symbol: empty base currency in '{symbol}'")
+        # Validate base is alphanumeric-only (no hyphens, slashes, etc.)
+        if not base.isalnum():
+            raise ValueError(
+                f"Invalid symbol format: '{symbol}' contains non-alphanumeric base '{base}'. "
+                f"Expected clean base currency (e.g., BTC from BTCUSDT)."
+            )
+        return f"{base}-USD"
+
+    # If ends with USD but not USDT, assume already in some yfinance-like format
+    if symbol_normalized.endswith("USD"):
+        # Could be BTCUSD (TV) or BTC-USD (yfinance)
+        # If no hyphen, insert one
+        if "-" not in symbol_normalized:
+            base = symbol_normalized[:-3]
+            if not base:
+                raise ValueError(f"Invalid symbol: empty base currency in '{symbol}'")
+            if not base.isalnum():
+                raise ValueError(
+                    f"Invalid symbol format: '{symbol}' contains non-alphanumeric base '{base}'."
+                )
+            return f"{base}-USD"
+        # Already hyphenated - validate it's well-formed (e.g., BTC-USD, not BTC--USD)
+        # Accept if base is alphanumeric and quote is USD
+        base, _, quote = symbol_normalized.partition("-")
+        if not base.isalnum() or quote != "USD":
+            raise ValueError(f"Invalid yfinance format: '{symbol}'. Expected BTC-USD or ETH-USD.")
+        return symbol_normalized
+
+    # SECURITY NOTE (for Haga): The fallback below accepts arbitrary strings
+    # but requires base currency to be non-empty after sanitization.
+    safe_symbol = _sanitize_symbol(symbol_normalized)
+    if not safe_symbol:
+        raise ValueError(
+            f"Unrecognized symbol format: '{symbol}'. Expected TradingView (BTCUSD) or CCXT (BTCUSDT) format."
+        )
+    logger.warning(
+        "normalize_to_yf_unrecognized_symbol",
+        symbol=safe_symbol,
+        fallback=f"{safe_symbol}-USD",
+    )
+    return f"{safe_symbol}-USD"
 
 
 def get_base_currency(symbol: str) -> str:

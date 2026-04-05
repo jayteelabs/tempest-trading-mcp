@@ -14,6 +14,7 @@ Design Decisions:
 - D3: Yahoo Finance + TradingView + CCXT data adapters
 - D11: Symbol conversion via _symbols.py
 - D16: TradingViewAdapter delegates orderbook to CCXT
+- D19: Historical data abstraction layer (HistoricalDataSource)
 """
 
 from __future__ import annotations
@@ -40,9 +41,15 @@ __all__ = [
     # Live data protocol and factory
     "LiveDataAdapter",
     "get_live_adapter",
+    # Historical data protocol and factory (D19)
+    "HistoricalDataSource",
+    "HistoricalDataAdapter",
+    "get_historical_adapter",
+    "DataSourceRouter",
     # Symbol utilities
     "normalize_to_ccxt",
     "normalize_to_tradingview",
+    "normalize_to_yf",
     "get_base_currency",
     "validate_symbol",
 ]
@@ -153,9 +160,23 @@ def __getattr__(name: str):
         "get_base_currency",
         "normalize_to_ccxt",
         "normalize_to_tradingview",
+        "normalize_to_yf",
         "validate_symbol",
+        # Historical data exports (D19)
+        "HistoricalDataSource",
+        "HistoricalDataAdapter",
+        "get_historical_adapter",
+        "DataSourceRouter",
     ):
+        if name in ("HistoricalDataSource", "HistoricalDataAdapter"):
+            import tempest_mcp.data._hist as _hist
+            return getattr(_hist, name)
+        if name == "get_historical_adapter":
+            import tempest_mcp.data._factory as _factory
+            return getattr(_factory, name)
+        if name == "DataSourceRouter":
+            import tempest_mcp.data._router as _router
+            return getattr(_router, name)
         import tempest_mcp.data._symbols as _symbols
-
         return getattr(_symbols, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
