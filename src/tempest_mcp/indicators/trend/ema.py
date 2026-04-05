@@ -225,7 +225,8 @@ def golden_cross(ema_stack: dict[str, pd.Series]) -> bool:
     if None in (ema7, ema25, ema50, ema200):
         return False
 
-    return (ema7 > ema25) and (ema25 > ema50) and (ema50 > ema200)
+    # Explicitly convert to Python bool to avoid np.True_/np.False_ issues
+    return bool(ema7 > ema25) and bool(ema25 > ema50) and bool(ema50 > ema200)
 
 
 def death_cross(ema_stack: dict[str, pd.Series]) -> bool:
@@ -268,4 +269,5 @@ def death_cross(ema_stack: dict[str, pd.Series]) -> bool:
     if None in (ema7, ema25, ema50, ema200):
         return False
 
-    return (ema7 < ema25) and (ema25 < ema50) and (ema50 < ema200)
+    # Explicitly convert to Python bool to avoid np.True_/np.False_ issues
+    return bool(ema7 < ema25) and bool(ema25 < ema50) and bool(ema50 < ema200)
