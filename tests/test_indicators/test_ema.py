@@ -111,7 +111,7 @@ class TestCalculateEmaStack:
 
         stack = calculate_ema_stack(prices)
 
-        for key, ema in stack.items():
+        for _key, ema in stack.items():
             assert len(ema) == len(prices)
             assert ema.index.equals(prices.index)
 
@@ -130,6 +130,12 @@ class TestCalculateEmaStack:
         assert not stack["ema50"].empty
         # EMA200 should be empty
         assert stack["ema200"].empty
+
+    def test_empty_series_returns_empty_stack(self):
+        """calculate_ema_stack should handle empty price Series without error."""
+        prices = pd.Series(dtype=float)
+        stack = calculate_ema_stack(prices)
+        assert len(stack) == 0
 
 
 class TestDetectEmaCross:
@@ -247,6 +253,15 @@ class TestDetectEmaCross:
             # Each cross event should be distinct (not same timestamp)
             assert cross_ups.iloc[i]["date"] != cross_ups.iloc[i-1]["date"]
 
+    def test_length_mismatch_truncates_to_overlap(self):
+        """Series of different lengths are safely truncated to overlapping index."""
+        base_index = pd.date_range("2024-01-01", periods=5, freq="h")
+        ema_fast = pd.Series([1, 2, 3, 4, 5], index=base_index)
+        ema_slow = pd.Series([1, 1.5, 2], index=base_index[:3])
+        result = detect_ema_cross(ema_fast=ema_fast, ema_slow=ema_slow)
+        assert len(result) == len(ema_slow)
+        assert list(result.index) == list(ema_slow.index)
+
 
 class TestGoldenCross:
     """Tests for golden_cross function."""
@@ -309,6 +324,16 @@ class TestGoldenCross:
         # Should return False because last values are NaN
         assert golden_cross(stack) is False
 
+    def test_nan_latest_values_return_false(self):
+        """NaN latest EMA values cause golden_cross to return False."""
+        stack = {
+            "ema7": pd.Series([110.0, float("nan")]),
+            "ema25": pd.Series([120.0]),
+            "ema50": pd.Series([130.0]),
+            "ema200": pd.Series([140.0]),
+        }
+        assert golden_cross(stack) is False
+
 
 class TestDeathCross:
     """Tests for death_cross function."""
@@ -359,6 +384,26 @@ class TestDeathCross:
 
         # Should return False because last values are NaN
         assert death_cross(stack) is False
+
+    def test_nan_latest_values_return_false(self):
+        """NaN latest EMA values cause death_cross to return False."""
+        stack = {
+            "ema7": pd.Series([110.0, float("nan")]),
+            "ema25": pd.Series([120.0]),
+            "ema50": pd.Series([130.0]),
+            "ema200": pd.Series([140.0]),
+        }
+        assert death_cross(stack) is False
+
+    def test_missing_key_returns_false(self):
+        """Missing EMA key returns False for death_cross."""
+        stack_missing_key = {
+            "ema7": pd.Series([90.0]),
+            "ema25": pd.Series([100.0]),
+            # "ema50" intentionally missing
+            "ema200": pd.Series([120.0]),
+        }
+        assert death_cross(stack_missing_key) is False
 
 
 class TestIntegration:
@@ -411,7 +456,8 @@ class TestIntegration:
         # With adjust=False:
         # EMA[0] = 100
         # EMA[1] = 101 * 0.333 + 100 * 0.667 = 100.333
-        # etc.
+        # EMA[2] = 102 * 0.333 + 100.333 * 0.667 = 100.889
+        # EMA[3] = 103 * 0.333 + 100.889 * 0.667 = 101.592
         prices = pd.Series([100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0])
 
         ema = calculate_ema(prices, period=5)
@@ -421,3 +467,10 @@ class TestIntegration:
 
         # EMA should be trending up with prices
         assert ema.iloc[-1] > ema.iloc[0]
+
+        # Compute expected values and verify
+        alpha = 2 / (5 + 1)
+        ema1 = 101.0 * alpha + 100.0 * (1 - alpha)
+        ema3 = 103.0 * alpha + ema1 * (1 - alpha)
+        assert ema.iloc[1] == pytest.approx(ema1, rel=1e-6)
+        assert ema.iloc[3] == pytest.approx(ema3, rel=1e-6)

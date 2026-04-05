@@ -67,6 +67,9 @@ def calculate_ema_stack(prices: pd.Series) -> dict[str, pd.Series]:
         >>> print(stack.keys())
         dict_keys(['ema7', 'ema25', 'ema50', 'ema200'])
     """
+    if prices.empty:
+        return {}
+
     result = {}
 
     for period in EMA_PERIODS:
@@ -74,6 +77,31 @@ def calculate_ema_stack(prices: pd.Series) -> dict[str, pd.Series]:
         result[f"ema{period}"] = ema
 
     return result
+
+
+def _get_last_valid_ema(ema_stack: dict[str, pd.Series], name: str) -> float | None:
+    """Extract last non-NaN value from EMA series, logging missing keys.
+
+    Args:
+        ema_stack: Dictionary containing EMA Series
+        name: Key name to extract (e.g., 'ema7')
+
+    Returns:
+        Last non-NaN value as float, or None if not found or if the
+        latest value is NaN.
+    """
+    if name not in ema_stack:
+        logger.warning("EMA key missing from stack", ema_key=name)
+        return None
+    ema_series = ema_stack[name]
+    if ema_series.empty:
+        logger.debug("EMA series is empty", ema_key=name)
+        return None
+    # Check if the latest value is NaN
+    if ema_series.iloc[-1] != ema_series.iloc[-1]:  # NaN != NaN is True
+        logger.debug("Latest EMA value is NaN", ema_key=name)
+        return None
+    return float(ema_series.iloc[-1])
 
 
 def detect_ema_cross(
@@ -106,12 +134,8 @@ def detect_ema_cross(
     if ema_fast.empty or ema_slow.empty:
         return pd.DataFrame(columns=["date", "fast_above", "direction"])
 
-    # Ensure same length and alignment
-    if len(ema_fast) != len(ema_slow):
-        logger.warning("EMA series length mismatch in cross detection")
-        min_len = min(len(ema_fast), len(ema_slow))
-        ema_fast = ema_fast.iloc[:min_len]
-        ema_slow = ema_slow.iloc[:min_len]
+    # Align series by index to ensure proper timestamp matching
+    ema_fast, ema_slow = ema_fast.align(ema_slow, join='inner')
 
     # Filter out NaN values before computing crossovers
     valid_mask = ema_fast.notna() & ema_slow.notna()
@@ -140,11 +164,17 @@ def detect_ema_cross(
         fast_above_at_cross = fast_above.loc[idx]
         direction = "cross_up" if fast_above_at_cross else "cross_down"
 
-        # Convert index to timestamp if it's datetime-like
-        if isinstance(idx, pd.Timestamp):
+        # Convert index to timestamp if it's datetime-like, otherwise preserve original
+        # Integer/float indices are positions, not timestamps - preserve them
+        if isinstance(idx, (pd.Timestamp,)):
             date_val = idx
+        elif isinstance(idx, (int, float)):
+            date_val = idx  # preserve positional index
         else:
-            date_val = pd.Timestamp(idx)
+            # For strings or other types, try to convert
+            date_val = pd.to_datetime(idx, errors="coerce")
+            if pd.isna(date_val):
+                date_val = idx  # preserve original if not convertible
 
         records.append({
             "date": date_val,
@@ -180,30 +210,22 @@ def golden_cross(ema_stack: dict[str, pd.Series]) -> bool:
     # Validate stack has all required EMAs
     for key in required_keys:
         if key not in ema_stack:
-            logger.warning(f"Missing {key} in EMA stack")
+            logger.warning("Missing EMA key in stack", ema_key=key)
             return False
         if ema_stack[key].empty:
             return False
 
-    # Get latest non-NaN values
-    try:
-        ema7_series = ema_stack["ema7"].dropna()
-        ema25_series = ema_stack["ema25"].dropna()
-        ema50_series = ema_stack["ema50"].dropna()
-        ema200_series = ema_stack["ema200"].dropna()
+    # Get latest non-NaN values using shared helper
+    ema7 = _get_last_valid_ema(ema_stack, "ema7")
+    ema25 = _get_last_valid_ema(ema_stack, "ema25")
+    ema50 = _get_last_valid_ema(ema_stack, "ema50")
+    ema200 = _get_last_valid_ema(ema_stack, "ema200")
 
-        if ema7_series.empty or ema25_series.empty or ema50_series.empty or ema200_series.empty:
-            return False
-
-        ema7 = ema7_series.iloc[-1]
-        ema25 = ema25_series.iloc[-1]
-        ema50 = ema50_series.iloc[-1]
-        ema200 = ema200_series.iloc[-1]
-
-        return (ema7 > ema25) and (ema25 > ema50) and (ema50 > ema200)
-    except (IndexError, KeyError) as e:
-        logger.debug("Error accessing EMA values: %s", e)
+    # Return False if any value is missing/NaN
+    if None in (ema7, ema25, ema50, ema200):
         return False
+
+    return (ema7 > ema25) and (ema25 > ema50) and (ema50 > ema200)
 
 
 def death_cross(ema_stack: dict[str, pd.Series]) -> bool:
@@ -231,27 +253,19 @@ def death_cross(ema_stack: dict[str, pd.Series]) -> bool:
     # Validate stack has all required EMAs
     for key in required_keys:
         if key not in ema_stack:
-            logger.warning(f"Missing {key} in EMA stack")
+            logger.warning("Missing EMA key in stack", ema_key=key)
             return False
         if ema_stack[key].empty:
             return False
 
-    # Get latest non-NaN values
-    try:
-        ema7_series = ema_stack["ema7"].dropna()
-        ema25_series = ema_stack["ema25"].dropna()
-        ema50_series = ema_stack["ema50"].dropna()
-        ema200_series = ema_stack["ema200"].dropna()
+    # Get latest non-NaN values using shared helper
+    ema7 = _get_last_valid_ema(ema_stack, "ema7")
+    ema25 = _get_last_valid_ema(ema_stack, "ema25")
+    ema50 = _get_last_valid_ema(ema_stack, "ema50")
+    ema200 = _get_last_valid_ema(ema_stack, "ema200")
 
-        if ema7_series.empty or ema25_series.empty or ema50_series.empty or ema200_series.empty:
-            return False
-
-        ema7 = ema7_series.iloc[-1]
-        ema25 = ema25_series.iloc[-1]
-        ema50 = ema50_series.iloc[-1]
-        ema200 = ema200_series.iloc[-1]
-
-        return (ema7 < ema25) and (ema25 < ema50) and (ema50 < ema200)
-    except (IndexError, KeyError) as e:
-        logger.debug("Error accessing EMA values: %s", e)
+    # Return False if any value is missing/NaN
+    if None in (ema7, ema25, ema50, ema200):
         return False
+
+    return (ema7 < ema25) and (ema25 < ema50) and (ema50 < ema200)
