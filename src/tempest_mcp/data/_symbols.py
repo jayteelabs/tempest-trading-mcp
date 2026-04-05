@@ -228,6 +228,72 @@ def normalize_to_tradingview(symbol: str) -> str:
     )
 
 
+
+
+def normalize_to_yf(symbol: str) -> str:
+    """Convert a CCXT/Binance symbol to yfinance format.
+
+    yfinance uses format BTC-USD (with hyphen), while CCXT uses BTCUSDT.
+    This function converts from CCXT format to yfinance format.
+
+    Args:
+        symbol: Symbol in CCXT format (e.g., "BTCUSDT", "ETHUSDT")
+
+    Returns:
+        Symbol in yfinance format (e.g., "BTC-USD", "ETH-USD")
+
+    Raises:
+        ValueError: If symbol is not recognized or is invalid
+
+    Example:
+        >>> normalize_to_yf("BTCUSDT")
+        'BTC-USD'
+        >>> normalize_to_yf("ETHUSDT")
+        'ETH-USD'
+    """
+    if not symbol or not symbol.strip():
+        raise ValueError("Symbol cannot be empty or whitespace")
+
+    symbol_upper = symbol.strip().upper()
+
+    # Direct lookup in mappings for known pairs
+    if symbol_upper in SYMBOL_MAPPINGS:
+        mapping = SYMBOL_MAPPINGS[symbol_upper]
+        # Use tradingview format as intermediate, then convert hyphen
+        tv_symbol = mapping["tradingview"]
+        # tradingview is BTCUSD, yfinance is BTC-USD
+        # Insert hyphen before USD
+        if tv_symbol.endswith("USD"):
+            base = tv_symbol[:-3]
+            return f"{base}-USD"
+        return tv_symbol
+
+    # If ends with USDT, convert: BTCUSDT → BTC-USD
+    if symbol_upper.endswith("USDT"):
+        base = symbol_upper[:-4]  # Remove USDT
+        return f"{base}-USD"
+
+    # If ends with USD but not USDT, assume already in some yfinance-like format
+    if symbol_upper.endswith("USD"):
+        # Could be BTCUSD (TV) or BTC-USD (yfinance)
+        # If no hyphen, insert one
+        if "-" not in symbol_upper:
+            base = symbol_upper[:-3]
+            return f"{base}-USD"
+        return symbol_upper
+
+    # SECURITY NOTE (for Haga): The fallback below accepts arbitrary strings
+    # ending in USDT without error. Input validation belongs at the MCP tool
+    # boundary in market_tools.py. This is intentional to allow unknown pairs
+    # to pass through with a warning rather than hard-fail.
+    safe_symbol = _sanitize_symbol(symbol)
+    logger.warning(
+        "normalize_to_yf_unrecognized_symbol",
+        symbol=safe_symbol,
+        fallback=f"{safe_symbol}-USD",
+    )
+    return f"{safe_symbol}-USD"
+
 def get_base_currency(symbol: str) -> str:
     """Extract the base currency from a symbol.
 
