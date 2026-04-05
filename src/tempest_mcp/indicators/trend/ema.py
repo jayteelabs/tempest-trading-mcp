@@ -152,8 +152,9 @@ def detect_ema_cross(
     # A cross occurs when the relationship changes from previous bar
     cross_changes = fast_above.astype(int).diff()
 
-    # Get indices where cross occurred (diff is non-zero)
-    cross_indices = cross_changes[cross_changes != 0].index
+    # Get indices where cross occurred (diff is non-zero and not NaN)
+    # Note: NaN != 0 is True in Python/NumPy, so we must exclude NaN explicitly
+    cross_indices = cross_changes[cross_changes.notna() & (cross_changes != 0)].index
 
     if len(cross_indices) == 0:
         return pd.DataFrame(columns=["date", "fast_above", "direction"])

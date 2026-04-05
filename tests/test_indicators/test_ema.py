@@ -168,11 +168,13 @@ class TestDetectEmaCross:
     def test_detects_cross_down(self):
         """Test detection of bearish crossover."""
         # Create prices where EMA7 crosses below EMA25
-        # Start high, then downtrend
-        base = list(range(150, 100, -1)) + [100] * 50
+        # Start flat, uptrend (EMA7 rises faster and crosses above), then downtrend (cross DOWN)
+        flat = [100] * 20
+        up = list(range(100, 121))  # 21 values: 100 to 120
+        down = list(range(120, 99, -1))  # 21 values: 120 to 100
         prices = pd.Series(
-            base,
-            index=pd.date_range("2024-01-01", periods=len(base), freq="h")
+            flat + up + down,
+            index=pd.date_range("2024-01-01", periods=62, freq="h")
         )
 
         ema7 = calculate_ema(prices, 7)
@@ -259,8 +261,11 @@ class TestDetectEmaCross:
         ema_fast = pd.Series([1, 2, 3, 4, 5], index=base_index)
         ema_slow = pd.Series([1, 1.5, 2], index=base_index[:3])
         result = detect_ema_cross(ema_fast=ema_fast, ema_slow=ema_slow)
-        assert len(result) == len(ema_slow)
-        assert list(result.index) == list(ema_slow.index)
+        # detect_ema_cross returns cross EVENTS, not all aligned rows
+        # fast_above = [False, True, True], so one cross_up is detected
+        assert len(result) == 1
+        assert result.iloc[0]["direction"] == "cross_up"
+        assert result.iloc[0]["date"] == base_index[1]  # cross at second index
 
 
 class TestGoldenCross:
@@ -314,11 +319,12 @@ class TestGoldenCross:
 
     def test_nan_values_return_false(self):
         """Test that NaN values in stack return False."""
+        # NaN at last position (not first) to properly test "last values are NaN"
         stack = {
-            "ema7": pd.Series([float('nan'), 150.0]),
-            "ema25": pd.Series([float('nan'), 140.0]),
-            "ema50": pd.Series([float('nan'), 130.0]),
-            "ema200": pd.Series([float('nan'), 120.0]),
+            "ema7": pd.Series([150.0, float('nan')]),
+            "ema25": pd.Series([140.0, float('nan')]),
+            "ema50": pd.Series([130.0, float('nan')]),
+            "ema200": pd.Series([120.0, float('nan')]),
         }
 
         # Should return False because last values are NaN
@@ -375,11 +381,12 @@ class TestDeathCross:
 
     def test_nan_values_return_false(self):
         """Test that NaN values in stack return False."""
+        # NaN at last position (not first) to properly test "last values are NaN"
         stack = {
-            "ema7": pd.Series([float('nan'), 120.0]),
-            "ema25": pd.Series([float('nan'), 130.0]),
-            "ema50": pd.Series([float('nan'), 140.0]),
-            "ema200": pd.Series([float('nan'), 150.0]),
+            "ema7": pd.Series([120.0, float('nan')]),
+            "ema25": pd.Series([130.0, float('nan')]),
+            "ema50": pd.Series([140.0, float('nan')]),
+            "ema200": pd.Series([150.0, float('nan')]),
         }
 
         # Should return False because last values are NaN
@@ -470,7 +477,9 @@ class TestIntegration:
 
         # Compute expected values and verify
         alpha = 2 / (5 + 1)
-        ema1 = 101.0 * alpha + 100.0 * (1 - alpha)
-        ema3 = 103.0 * alpha + ema1 * (1 - alpha)
+        ema0 = 100.0  # First price
+        ema1 = 101.0 * alpha + ema0 * (1 - alpha)  # EMA at index 1
+        ema2 = 102.0 * alpha + ema1 * (1 - alpha)  # EMA at index 2
+        ema3 = 103.0 * alpha + ema2 * (1 - alpha)  # EMA at index 3
         assert ema.iloc[1] == pytest.approx(ema1, rel=1e-6)
         assert ema.iloc[3] == pytest.approx(ema3, rel=1e-6)
