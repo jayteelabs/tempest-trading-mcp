@@ -233,7 +233,17 @@ class CCXTAdapter:
 
         try:
             # Normalize symbol to CCXT format
-            ccxt_symbol = normalize_to_ccxt(symbol)
+            # Note: normalize_to_ccxt raises ValueError on unknown format
+            # (not a ccxt exception) — catch it here per D14 (no exception propagation)
+            try:
+                ccxt_symbol = normalize_to_ccxt(symbol)
+            except ValueError as e:
+                logger.error(
+                    "invalid_symbol_format",
+                    symbol=symbol,
+                    error=str(e),
+                )
+                return pd.DataFrame(columns=OHLCV_COLUMNS)
 
             if not validate_symbol(ccxt_symbol):
                 logger.error(
@@ -306,9 +316,139 @@ class CCXTAdapter:
             )
             return pd.DataFrame(columns=OHLCV_COLUMNS)
 
+    def fetch_ohlcv_historical(
+        self,
+        symbol: str,
+        timeframe: str = "1d",
+        since: int | None = None,
+        limit: int = 1000,
+        params: dict | None = None,
+    ) -> pd.DataFrame:
+        """Fetch historical OHLCV candlestick data for a symbol.
+
+        Uses CCXT's fetch_ohlcv with the `since` parameter to retrieve
+        historical data from Binance/Bybit public REST API. Supports `until`
+        (end timestamp in ms) and automatic pagination via `params`.
+
+        Args:
+            symbol: Symbol in CCXT format (e.g. "BTC/USDT")
+            timeframe: Timeframe string (e.g. "1m", "5m", "1h", "1d")
+            since: Unix timestamp in milliseconds for start time.
+                   If None, fetches the most recent `limit` candles.
+            limit: Maximum number of candles to fetch (default: 1000, CCXT max)
+            params: Extra params dict passed to CCXT fetch_ohlcv.
+                   Supported keys:
+                   - "until": Unix timestamp in ms for end time
+                   - "paginate": True to auto-paginate (handles >1000 candles)
+
+        Returns:
+            DataFrame with columns [open, high, low, close, volume] and
+            UTC-aware DatetimeIndex. Returns empty DataFrame on error.
+
+        Note:
+            Per D14, this function NEVER raises exceptions to callers.
+            On failure, logs ERROR and returns empty DataFrame with correct columns.
+
+        Example:
+            >>> adapter = CCXTAdapter()
+            >>> df = adapter.fetch_ohlcv_historical("BTC/USDT", "1d", since=1704067200000)
+            >>> list(df.columns)
+            ['open', 'high', 'low', 'close', 'volume']
+        """
+        # Validate timeframe
+        if not _validate_timeframe(timeframe):
+            logger.error(
+                "invalid_timeframe",
+                timeframe=timeframe,
+                supported=sorted({"1m", "5m", "15m", "30m", "1h", "4h", "1d", "1wk", "1mo"}),
+            )
+            return pd.DataFrame(columns=OHLCV_COLUMNS)
+
+        # Validate and clamp limit
+        limit = _validate_limit(limit)
+
+        try:
+            # Symbol is expected in CCXT format
+            ccxt_symbol = symbol.upper()
+
+            if not validate_symbol(ccxt_symbol):
+                logger.error(
+                    "invalid_symbol",
+                    symbol=symbol,
+                    ccxt_symbol=ccxt_symbol,
+                )
+                return pd.DataFrame(columns=OHLCV_COLUMNS)
+
+            self._check_rate_limit()
+
+            # Fetch OHLCV from exchange with since/until parameters
+            # CCXT returns: [[timestamp, open, high, low, close, volume], ...]
+            # Supports params["until"] (ms timestamp) and params["paginate"] (bool)
+            ohlcv_data = self.exchange.fetch_ohlcv(
+                ccxt_symbol,
+                timeframe=timeframe,
+                since=since,
+                limit=limit,
+                params=params if params else {},
+            )
+
+            if not ohlcv_data:
+                logger.error(
+                    "fetch_ohlcv_historical_empty_response",
+                    source="ccxt",
+                    symbol=ccxt_symbol,
+                    timeframe=timeframe,
+                    since=since,
+                )
+                return pd.DataFrame(columns=OHLCV_COLUMNS)
+
+            # Convert to DataFrame
+            df = pd.DataFrame(
+                ohlcv_data,
+                columns=["timestamp", "open", "high", "low", "close", "volume"],
+            )
+
+            # Set UTC-aware index
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+            df.set_index("timestamp", inplace=True)
+
+            # Select only OHLCV columns
+            df = df[OHLCV_COLUMNS]
+
+            logger.info(
+                "fetch_ohlcv_historical_success",
+                source="ccxt",
+                exchange=self.exchange_name,
+                symbol=ccxt_symbol,
+                timeframe=timeframe,
+                rows=len(df),
+            )
+
+            return df
+
+        except ccxt.NetworkError as e:
+            logger.error(
+                "fetch_ohlcv_historical_network_error",
+                source="ccxt",
+                symbol=symbol,
+                timeframe=timeframe,
+                error=str(e),
+            )
+            return pd.DataFrame(columns=OHLCV_COLUMNS)
+
+        except ccxt.ExchangeError as e:
+            logger.error(
+                "fetch_ohlcv_historical_exchange_error",
+                source="ccxt",
+                symbol=symbol,
+                timeframe=timeframe,
+                error=str(e),
+            )
+            return pd.DataFrame(columns=OHLCV_COLUMNS)
+
         except Exception as e:
             logger.error(
-                "fetch_ohlcv_unexpected_error",
+                "fetch_ohlcv_historical_unexpected_error",
                 source="ccxt",
                 symbol=symbol,
                 timeframe=timeframe,

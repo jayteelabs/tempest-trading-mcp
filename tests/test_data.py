@@ -207,8 +207,11 @@ class TestAdapterSelection:
         adapter = get_live_adapter()
         assert isinstance(adapter, CCXTAdapter)
 
-    def test_get_live_adapter_with_key_returns_tv(self, monkeypatch):
-        """get_live_adapter should return TradingViewAdapter when API key is set."""
+    def test_get_live_adapter_with_key_returns_ccxt(self, monkeypatch):
+        """get_live_adapter should return CCXTAdapter even when API key is set.
+
+        TradingView has no OHLCV data API - CCXT is always used for live data.
+        """
         monkeypatch.setenv("TRADINGVIEW_API_KEY", "test-key")
 
         # Need to reimport to pick up env change
@@ -219,10 +222,10 @@ class TestAdapterSelection:
         importlib.reload(tempest_mcp.data)
 
         from tempest_mcp.data import get_live_adapter
-        from tempest_mcp.data.tv_adapter import TradingViewAdapter
+        from tempest_mcp.data.ccxt_adapter import CCXTAdapter
 
         adapter = get_live_adapter()
-        assert isinstance(adapter, TradingViewAdapter)
+        assert isinstance(adapter, CCXTAdapter)
 
 
 class TestHistoricalAdapter:
@@ -294,10 +297,13 @@ class TestDataSourceRouter:
         adapter = router.route_live()
         assert isinstance(adapter, LiveDataAdapter)
 
-    def test_route_live_with_tv_key(self, monkeypatch):
-        """route_live should return TV adapter when key is set."""
+    def test_route_live_with_tv_key_returns_ccxt(self, monkeypatch):
+        """route_live should return CCXTAdapter even when key is set.
+
+        TradingView has no OHLCV data API - CCXT is always used for live data.
+        """
+        from tempest_mcp.data import LiveDataAdapter
         from tempest_mcp.data._router import DataSourceRouter
-        from tempest_mcp.data.tv_adapter import TradingViewAdapter
 
         monkeypatch.setenv("TRADINGVIEW_API_KEY", "test-key")
 
@@ -310,7 +316,7 @@ class TestDataSourceRouter:
 
         router = DataSourceRouter()
         adapter = router.route_live()
-        assert isinstance(adapter, TradingViewAdapter)
+        assert isinstance(adapter, LiveDataAdapter)
 
 
 class TestNormalizeToYF:

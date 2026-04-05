@@ -1,18 +1,23 @@
 """
-TradingView Data Adapter for real-time market data.
+[DEPRECATED] TradingView Data Adapter — DO NOT USE IN NEW CODE.
 
-This adapter provides real-time market data via TradingView's v1-data API.
-When TRADINGVIEW_API_KEY is set, this adapter is preferred over CCXT.
+IMPORTANT (2026-04-05): There is NO official TradingView data API that accepts
+a key and returns OHLCV. The TRADINGVIEW_API_KEY environment variable is not used.
+This adapter is a stub that always falls back to CCXT.
 
-Design Decisions:
+This file is retained for backward compatibility and will be removed in v2.0.
+All new code should use CCXTAdapter (real-time) and YFAdapter (historical).
+
+Current data source priority (D3):
+- All data (crypto + stocks): CCXT via Binance/Bybit public REST (primary)
+- Historical fallback: yfinance (for stocks and data gaps CCXT doesn't cover)
+- Orderbook: CCXT (TradingView has no orderbook endpoint)
+
+Design Decisions preserved for reference:
 - D12: TV uses BTCUSD, CCXT uses BTCUSDT - adapter normalizes
 - D14: Empty DataFrame on error - NO exception propagation
 - D15: TradingViewError in 3001-3005 range
 - D16: fetch_orderbook_snapshot() delegates to CCXT internally (TV→CCXT hybrid)
-
-Rate Limiting:
-- TradingView: Per-minute limits based on subscription tier
-- Adapter respects configured rate limits with thread-safe locking
 """
 
 from __future__ import annotations
