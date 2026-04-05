@@ -33,6 +33,11 @@ class DataSourceRouter:
         Returns:
             LiveDataAdapter (TradingViewAdapter if API key set, else CCXTAdapter)
         """
-        from tempest_mcp.data import get_live_adapter
+        from tempest_mcp.data import LiveDataAdapter, get_live_adapter
 
-        return get_live_adapter()
+        adapter = get_live_adapter()
+        if not isinstance(adapter, LiveDataAdapter):
+            raise TypeError(
+                f"get_live_adapter() returned {type(adapter).__name__}, expected LiveDataAdapter"
+            )
+        return adapter

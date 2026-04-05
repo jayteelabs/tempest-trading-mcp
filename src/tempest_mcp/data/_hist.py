@@ -49,10 +49,8 @@ class HistoricalDataSource:
     """
 
     def __init__(self) -> None:
-        from tempest_mcp.data.yf_adapter import YFAdapter
         from tempest_mcp.data.yf_adapter import fetch_ohlcv as _fetch_ohlcv
 
-        self._yf_adapter = YFAdapter()
         self._fetch_ohlcv = _fetch_ohlcv
 
     def fetch_ohlcv(
