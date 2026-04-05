@@ -8,7 +8,6 @@ Tests cover:
 - Error handling per D14 (no exception propagation)
 """
 
-
 import pandas as pd
 import pytest
 
@@ -216,6 +215,7 @@ class TestAdapterSelection:
         import importlib
 
         import tempest_mcp.data
+
         importlib.reload(tempest_mcp.data)
 
         from tempest_mcp.data import get_live_adapter
@@ -223,6 +223,7 @@ class TestAdapterSelection:
 
         adapter = get_live_adapter()
         assert isinstance(adapter, TradingViewAdapter)
+
 
 class TestHistoricalAdapter:
     """Tests for historical data adapter and factory."""
@@ -253,6 +254,7 @@ class TestHistoricalAdapter:
         source = HistoricalDataSource()
         # Use a known valid yfinance symbol with a date range
         from datetime import datetime, timedelta, timezone
+
         end = datetime.now(timezone.utc)
         start = end - timedelta(days=10)
         df = source.fetch_ohlcv("BTC-USD", "1d", start=start, end=end)
@@ -285,6 +287,7 @@ class TestDataSourceRouter:
         import importlib
 
         import tempest_mcp.data
+
         importlib.reload(tempest_mcp.data)
 
         router = DataSourceRouter()
@@ -302,6 +305,7 @@ class TestDataSourceRouter:
         import importlib
 
         import tempest_mcp.data
+
         importlib.reload(tempest_mcp.data)
 
         router = DataSourceRouter()
@@ -315,32 +319,69 @@ class TestNormalizeToYF:
     def test_normalize_btcusdt_to_yf(self):
         """BTCUSDT should convert to BTC-USD."""
         from tempest_mcp.data._symbols import normalize_to_yf
+
         assert normalize_to_yf("BTCUSDT") == "BTC-USD"
 
     def test_normalize_ethusdt_to_yf(self):
         """ETHUSDT should convert to ETH-USD."""
         from tempest_mcp.data._symbols import normalize_to_yf
+
         assert normalize_to_yf("ETHUSDT") == "ETH-USD"
 
     def test_normalize_lowercase(self):
         """Lowercase symbols should be handled."""
         from tempest_mcp.data._symbols import normalize_to_yf
+
         assert normalize_to_yf("btcusdt") == "BTC-USD"
 
     def test_normalize_already_yf_format(self):
         """Already yfinance format should pass through."""
         from tempest_mcp.data._symbols import normalize_to_yf
+
         assert normalize_to_yf("BTC-USD") == "BTC-USD"
 
     def test_normalize_empty_raises(self):
         """Empty symbol should raise ValueError."""
         from tempest_mcp.data._symbols import normalize_to_yf
+
         with pytest.raises(ValueError):
             normalize_to_yf("")
 
     def test_normalize_unknown_pair_fallback(self):
         """Unknown pairs ending in USDT should return fallback with warning."""
         from tempest_mcp.data._symbols import normalize_to_yf
+
         # Should not raise, should return fallback format
         result = normalize_to_yf("UNKNOWNUSDT")
         assert result == "UNKNOWN-USD"
+
+    @pytest.mark.parametrize(
+        "symbol",
+        [
+            "BTC-USDT",  # hyphenated base
+            "BTC/USDT",  # slash-separated
+            "BTC\\USDT",  # backslash-separated
+            "BTC:USDT",  # colon-separated
+        ],
+    )
+    def test_normalize_malformed_usdt_raises(self, symbol):
+        """Malformed USDT symbols with separators in base should raise ValueError."""
+        from tempest_mcp.data._symbols import normalize_to_yf
+
+        with pytest.raises(ValueError, match="non-alphanumeric base"):
+            normalize_to_yf(symbol)
+
+    @pytest.mark.parametrize(
+        "symbol",
+        [
+            "BTC--USD",  # double hyphen
+            "BTC---USD",  # triple hyphen
+            "ETH--USD",  # double hyphen eth
+        ],
+    )
+    def test_normalize_malformed_yf_format_raises(self, symbol):
+        """Malformed yfinance format with multiple hyphens should raise ValueError."""
+        from tempest_mcp.data._symbols import normalize_to_yf
+
+        with pytest.raises(ValueError, match="Invalid yfinance format"):
+            normalize_to_yf(symbol)

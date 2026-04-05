@@ -277,6 +277,12 @@ def normalize_to_yf(symbol: str) -> str:
         base = symbol_normalized[:-4]  # Remove USDT
         if not base:
             raise ValueError(f"Invalid symbol: empty base currency in '{symbol}'")
+        # Validate base is alphanumeric-only (no hyphens, slashes, etc.)
+        if not base.isalnum():
+            raise ValueError(
+                f"Invalid symbol format: '{symbol}' contains non-alphanumeric base '{base}'. "
+                f"Expected clean base currency (e.g., BTC from BTCUSDT)."
+            )
         return f"{base}-USD"
 
     # If ends with USD but not USDT, assume already in some yfinance-like format
@@ -287,7 +293,16 @@ def normalize_to_yf(symbol: str) -> str:
             base = symbol_normalized[:-3]
             if not base:
                 raise ValueError(f"Invalid symbol: empty base currency in '{symbol}'")
+            if not base.isalnum():
+                raise ValueError(
+                    f"Invalid symbol format: '{symbol}' contains non-alphanumeric base '{base}'."
+                )
             return f"{base}-USD"
+        # Already hyphenated - validate it's well-formed (e.g., BTC-USD, not BTC--USD)
+        # Accept if base is alphanumeric and quote is USD
+        base, _, quote = symbol_normalized.partition("-")
+        if not base.isalnum() or quote != "USD":
+            raise ValueError(f"Invalid yfinance format: '{symbol}'. Expected BTC-USD or ETH-USD.")
         return symbol_normalized
 
     # SECURITY NOTE (for Haga): The fallback below accepts arbitrary strings
