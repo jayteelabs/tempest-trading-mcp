@@ -1,4 +1,5 @@
 """Technical indicator engine."""
+
 from .momentum import (
     calculate_macd_result,
     calculate_rsi_result,
@@ -12,7 +13,9 @@ from .ta_wrapper import (
     calculate_rsi,
 )
 from .trend import (
+    calculate_adx_result,
     calculate_ema,
+    calculate_ema_result,
     calculate_ema_stack,
     calculate_supertrend,
     calculate_vwap,
@@ -29,11 +32,13 @@ from .volume import calculate_mfi_result, calculate_obv_result
 
 __all__ = [
     "calculate_ema",
+    "calculate_ema_result",
     "calculate_ema_stack",
     "calculate_rsi",
     "calculate_macd",
     "calculate_atr",
     "calculate_adx",
+    "calculate_adx_result",
     "calculate_vwap",
     "calculate_supertrend",
     "calculate_rsi_result",
