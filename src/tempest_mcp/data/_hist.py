@@ -82,11 +82,11 @@ class HistoricalDataSource:
 
         self._ccxt = CCXTAdapter()
 
-    def _ccxt_timeframe(self, interval: str) -> tuple[str, bool]:
+    def _ccxt_timeframe(self, interval: str) -> str:
         """Map generic interval to CCXT timeframe string.
 
         Returns:
-            Tuple of (ccxt_timeframe, is_supported). is_supported=False for invalid intervals.
+            CCXT timeframe string. Invalid intervals default to "1d" with a warning.
         """
         mapping = {
             "1m": "1m",
@@ -104,10 +104,11 @@ class HistoricalDataSource:
             logger.warning(
                 "unsupported_interval_defaulting",
                 interval=interval,
+                supported=sorted(self._CCXT_INTERVALS),
                 default="1d",
             )
-            return "1d", False
-        return mapped, True
+            return "1d"
+        return mapped
 
     def _symbol_to_ccxt(self, symbol: str) -> str:
         """Normalize symbol to CCXT format (e.g. BTC-USD -> BTC/USDT)."""
@@ -121,28 +122,26 @@ class HistoricalDataSource:
             return f"{parts[0].upper()}/{parts[1].upper()}"
         return symbol.upper()
 
-    def _symbol_to_yf(self, symbol: str) -> tuple[str, bool]:
+    def _symbol_to_yf(self, symbol: str) -> str:
         """Convert CCXT symbol format to yfinance format for fallback.
 
-        Returns:
-            Tuple of (yfinance_symbol, is_valid). is_valid=False for exotic
-            quote currencies that yfinance definitely doesn't support.
+        Logs a warning for exotic/non-USD quote currencies that yfinance
+        may not support.
         """
         if "/" in symbol:
             base, quote = symbol.split("/")
             quote_upper = quote.upper()
-            # yfinance supports USD, USDT, USDC for crypto pairs
             if quote_upper in ("USDT", "USD", "USDC", "US"):
-                return f"{base.upper()}-USD", True
-            # Non-USD quote: yfinance might not have it — flag as potentially invalid
+                return f"{base.upper()}-USD"
+            # Non-USD quote: yfinance likely doesn't support it
             logger.warning(
                 "yfinance_exotic_quote_symbol",
                 symbol=symbol,
                 yf_symbol=f"{base.upper()}-{quote_upper}",
                 note="yfinance may not support this symbol",
             )
-            return f"{base.upper()}-{quote_upper}", True  # Let yfinance decide
-        return symbol, True
+            return f"{base.upper()}-{quote_upper}"
+        return symbol
 
     def _ensure_utc(self, dt: datetime | None, name: str) -> datetime | None:
         """Normalize datetime to UTC-aware. Naive datetimes are interpreted as UTC."""
@@ -150,7 +149,8 @@ class HistoricalDataSource:
             return None
         if dt.tzinfo is None:
             logger.warning(
-                f"{name}_naive_datetime_interpreted_as_utc",
+                "naive_datetime_interpreted_as_utc",
+                param=name,
                 dt=str(dt),
             )
             return dt.replace(tzinfo=timezone.utc)
@@ -217,7 +217,7 @@ class HistoricalDataSource:
 
         # Normalize to CCXT symbol format
         ccxt_symbol = self._symbol_to_ccxt(symbol)
-        timeframe, interval_supported = self._ccxt_timeframe(interval)
+        timeframe = self._ccxt_timeframe(interval)
 
         # Compute since/until timestamps for CCXT
         since_ms: int | None = None
@@ -226,14 +226,24 @@ class HistoricalDataSource:
             since_ms = int(start_utc.timestamp() * 1000)
         if end_utc is not None:
             until_ms = int(end_utc.timestamp() * 1000)
+            # Warn if until is unreasonably far in the future
+            now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            if until_ms > now_ms + 60000:  # > 1 minute in future
+                logger.warning(
+                    "until_timestamp_in_future",
+                    until_ms=until_ms,
+                    now_ms=now_ms,
+                )
 
         # Calculate limit needed for the date range (if both start and end are provided)
         limit = 1000
         if since_ms is not None and until_ms is not None:
             range_ms = until_ms - since_ms
             interval_sec = self._interval_seconds(interval)
-            needed = range_ms // (interval_sec * 1000)
-            limit = min(needed + 1, 1000)
+            interval_ms = interval_sec * 1000
+            # Ceiling division: ensure we always get enough candles
+            needed = (range_ms + interval_ms - 1) // interval_ms
+            limit = min(needed, 1000)
 
         # Build CCXT params with until for date range filtering
         ccxt_params: dict = {}
@@ -266,8 +276,8 @@ class HistoricalDataSource:
             )
             return ccxt_result
 
-        # CCXT failed or empty — fallback to yfinance
-        yf_symbol, _ = self._symbol_to_yf(ccxt_symbol)
+        # CCXT failed or empty — fallback to yfinance (pass UTC-normalized datetimes)
+        yf_symbol = self._symbol_to_yf(ccxt_symbol)
         logger.info(
             "historical_fetch_fallback_yfinance",
             symbol=yf_symbol,
@@ -276,7 +286,7 @@ class HistoricalDataSource:
         return _yf_fetch_ohlcv(
             symbol=yf_symbol,
             interval=interval,
-            start=start,
-            end=end,
+            start=start_utc,
+            end=end_utc,
             auto_adjust=auto_adjust,
         )

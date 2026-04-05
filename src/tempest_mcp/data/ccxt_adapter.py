@@ -314,6 +314,7 @@ class CCXTAdapter:
                 timeframe=timeframe,
                 error=str(e),
             )
+            return pd.DataFrame(columns=OHLCV_COLUMNS)
 
     def fetch_ohlcv_historical(
         self,
