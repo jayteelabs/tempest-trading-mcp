@@ -321,11 +321,13 @@ class CCXTAdapter:
         timeframe: str = "1d",
         since: int | None = None,
         limit: int = 1000,
+        params: dict | None = None,
     ) -> pd.DataFrame:
         """Fetch historical OHLCV candlestick data for a symbol.
 
         Uses CCXT's fetch_ohlcv with the `since` parameter to retrieve
-        historical data from Binance/Bybit public REST API.
+        historical data from Binance/Bybit public REST API. Supports `until`
+        (end timestamp in ms) and automatic pagination via `params`.
 
         Args:
             symbol: Symbol in CCXT format (e.g. "BTC/USDT")
@@ -333,6 +335,10 @@ class CCXTAdapter:
             since: Unix timestamp in milliseconds for start time.
                    If None, fetches the most recent `limit` candles.
             limit: Maximum number of candles to fetch (default: 1000, CCXT max)
+            params: Extra params dict passed to CCXT fetch_ohlcv.
+                   Supported keys:
+                   - "until": Unix timestamp in ms for end time
+                   - "paginate": True to auto-paginate (handles >1000 candles)
 
         Returns:
             DataFrame with columns [open, high, low, close, volume] and
@@ -374,13 +380,15 @@ class CCXTAdapter:
 
             self._check_rate_limit()
 
-            # Fetch OHLCV from exchange with since parameter
+            # Fetch OHLCV from exchange with since/until parameters
             # CCXT returns: [[timestamp, open, high, low, close, volume], ...]
+            # Supports params["until"] (ms timestamp) and params["paginate"] (bool)
             ohlcv_data = self.exchange.fetch_ohlcv(
                 ccxt_symbol,
                 timeframe=timeframe,
                 since=since,
                 limit=limit,
+                params=params if params else {},
             )
 
             if not ohlcv_data:
