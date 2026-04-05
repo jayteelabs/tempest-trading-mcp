@@ -1,4 +1,5 @@
 """Unit tests for EMA indicator engine."""
+
 import os
 import sys
 
@@ -23,8 +24,7 @@ class TestCalculateEma:
         """Test EMA calculation with sufficient data."""
         # Generate ascending price series
         prices = pd.Series(
-            range(100, 200),
-            index=pd.date_range("2024-01-01", periods=100, freq="h")
+            range(100, 200), index=pd.date_range("2024-01-01", periods=100, freq="h")
         )
 
         ema = calculate_ema(prices, period=20)
@@ -36,10 +36,7 @@ class TestCalculateEma:
 
     def test_insufficient_data(self):
         """Test EMA returns empty Series when data is insufficient."""
-        prices = pd.Series(
-            [100, 101, 102],
-            index=pd.date_range("2024-01-01", periods=3, freq="h")
-        )
+        prices = pd.Series([100, 101, 102], index=pd.date_range("2024-01-01", periods=3, freq="h"))
 
         ema = calculate_ema(prices, period=10)
 
@@ -50,7 +47,7 @@ class TestCalculateEma:
         """Test EMA calculation when data length equals period."""
         prices = pd.Series(
             range(100, 110),  # 10 values
-            index=pd.date_range("2024-01-01", periods=10, freq="h")
+            index=pd.date_range("2024-01-01", periods=10, freq="h"),
         )
 
         ema = calculate_ema(prices, period=10)
@@ -63,7 +60,7 @@ class TestCalculateEma:
         # Simple test: first EMA value should equal first price (adjust=False)
         prices = pd.Series(
             [100.0, 101.0, 102.0, 103.0, 104.0, 105.0],
-            index=pd.date_range("2024-01-01", periods=6, freq="h")
+            index=pd.date_range("2024-01-01", periods=6, freq="h"),
         )
 
         ema = calculate_ema(prices, period=5)
@@ -74,8 +71,7 @@ class TestCalculateEma:
     def test_invalid_period_raises_error(self):
         """Test that period <= 0 raises ValueError."""
         prices = pd.Series(
-            [100.0, 101.0, 102.0],
-            index=pd.date_range("2024-01-01", periods=3, freq="h")
+            [100.0, 101.0, 102.0], index=pd.date_range("2024-01-01", periods=3, freq="h")
         )
 
         with pytest.raises(ValueError, match="Period must be a positive integer"):
@@ -92,7 +88,7 @@ class TestCalculateEmaStack:
         """Test that stack contains all four EMA periods."""
         prices = pd.Series(
             range(100, 400),  # 300 values for EMA200
-            index=pd.date_range("2024-01-01", periods=300, freq="h")
+            index=pd.date_range("2024-01-01", periods=300, freq="h"),
         )
 
         stack = calculate_ema_stack(prices)
@@ -105,8 +101,7 @@ class TestCalculateEmaStack:
     def test_alignment_with_input(self):
         """Test that all EMAs are aligned with input index."""
         prices = pd.Series(
-            range(100, 400),
-            index=pd.date_range("2024-01-01", periods=300, freq="h")
+            range(100, 400), index=pd.date_range("2024-01-01", periods=300, freq="h")
         )
 
         stack = calculate_ema_stack(prices)
@@ -119,7 +114,7 @@ class TestCalculateEmaStack:
         """Test that ema200 is empty when data is insufficient."""
         prices = pd.Series(
             range(100, 200),  # 100 values, not enough for EMA200
-            index=pd.date_range("2024-01-01", periods=100, freq="h")
+            index=pd.date_range("2024-01-01", periods=100, freq="h"),
         )
 
         stack = calculate_ema_stack(prices)
@@ -146,10 +141,7 @@ class TestDetectEmaCross:
         # Create prices where EMA7 crosses above EMA25
         # Start flat, then uptrend
         base = [100] * 50 + list(range(100, 150))
-        prices = pd.Series(
-            base,
-            index=pd.date_range("2024-01-01", periods=len(base), freq="h")
-        )
+        prices = pd.Series(base, index=pd.date_range("2024-01-01", periods=len(base), freq="h"))
 
         ema7 = calculate_ema(prices, 7)
         ema25 = calculate_ema(prices, 25)
@@ -173,8 +165,7 @@ class TestDetectEmaCross:
         up = list(range(100, 121))  # 21 values: 100 to 120
         down = list(range(120, 99, -1))  # 21 values: 120 to 100
         prices = pd.Series(
-            flat + up + down,
-            index=pd.date_range("2024-01-01", periods=62, freq="h")
+            flat + up + down, index=pd.date_range("2024-01-01", periods=62, freq="h")
         )
 
         ema7 = calculate_ema(prices, 7)
@@ -189,10 +180,7 @@ class TestDetectEmaCross:
     def test_no_crossover_flat_price(self):
         """Test that flat/sideways price produces no false crossovers."""
         # Constant price should have no crossovers
-        prices = pd.Series(
-            [100.0] * 200,
-            index=pd.date_range("2024-01-01", periods=200, freq="h")
-        )
+        prices = pd.Series([100.0] * 200, index=pd.date_range("2024-01-01", periods=200, freq="h"))
 
         ema7 = calculate_ema(prices, 7)
         ema25 = calculate_ema(prices, 25)
@@ -205,8 +193,7 @@ class TestDetectEmaCross:
         """Test that empty EMA series returns empty DataFrame."""
         ema_empty = pd.Series(dtype=float)
         ema_valid = pd.Series(
-            range(100, 200),
-            index=pd.date_range("2024-01-01", periods=100, freq="h")
+            range(100, 200), index=pd.date_range("2024-01-01", periods=100, freq="h")
         )
 
         crosses = detect_ema_cross(ema_empty, ema_valid)
@@ -217,7 +204,7 @@ class TestDetectEmaCross:
     def test_nan_values_handled_correctly(self):
         """Test that NaN values in EMA series are filtered out properly."""
         # Create EMA series with NaN values
-        ema_fast = pd.Series([100.0, 101.0, float('nan'), 103.0, 104.0])
+        ema_fast = pd.Series([100.0, 101.0, float("nan"), 103.0, 104.0])
         ema_slow = pd.Series([101.0, 100.0, 102.0, 101.0, 100.0])
 
         # Should not raise, should handle NaN gracefully
@@ -228,7 +215,7 @@ class TestDetectEmaCross:
 
     def test_nan_only_series_returns_empty(self):
         """Test that series with all NaN returns empty DataFrame."""
-        ema_fast = pd.Series([float('nan'), float('nan'), float('nan')])
+        ema_fast = pd.Series([float("nan"), float("nan"), float("nan")])
         ema_slow = pd.Series([100.0, 101.0, 102.0])
 
         crosses = detect_ema_cross(ema_fast, ema_slow)
@@ -241,7 +228,7 @@ class TestDetectEmaCross:
         # Sharp uptrend should produce one cross_up event
         prices = pd.Series(
             [100] * 30 + list(range(100, 150)),
-            index=pd.date_range("2024-01-01", periods=80, freq="h")
+            index=pd.date_range("2024-01-01", periods=80, freq="h"),
         )
 
         ema7 = calculate_ema(prices, 7)
@@ -253,19 +240,21 @@ class TestDetectEmaCross:
         cross_ups = crosses[crosses["direction"] == "cross_up"]
         for i in range(1, len(cross_ups)):
             # Each cross event should be distinct (not same timestamp)
-            assert cross_ups.iloc[i]["date"] != cross_ups.iloc[i-1]["date"]
+            assert cross_ups.iloc[i]["date"] != cross_ups.iloc[i - 1]["date"]
 
     def test_length_mismatch_truncates_to_overlap(self):
         """Series of different lengths are safely truncated to overlapping index."""
         base_index = pd.date_range("2024-01-01", periods=5, freq="h")
-        ema_fast = pd.Series([1, 2, 3, 4, 5], index=base_index)
-        ema_slow = pd.Series([1, 1.5, 2], index=base_index[:3])
+        # fast goes from above slow to below slow — produces one cross_down
+        ema_fast = pd.Series([3.0, 2.5, 2.0, 1.5, 1.0], index=base_index)
+        # slow is shorter — overlap is first 3 points
+        ema_slow = pd.Series([1.5, 2.0, 2.5], index=base_index[:3])
         result = detect_ema_cross(ema_fast=ema_fast, ema_slow=ema_slow)
-        # detect_ema_cross returns cross EVENTS, not all aligned rows
-        # fast_above = [False, True, True], so one cross_up is detected
+        # After alignment: fast[0,1,2]=[3.0,2.5,2.0], slow[0,1,2]=[1.5,2.0,2.5]
+        # diff = [1.5, 0.5, -0.5], sign = [1, 1, -1] → one cross_down at index 2
         assert len(result) == 1
-        assert result.iloc[0]["direction"] == "cross_up"
-        assert result.iloc[0]["date"] == base_index[1]  # cross at second index
+        assert result.iloc[0]["direction"] == "cross_down"
+        assert result.iloc[0]["date"] == base_index[2]
 
 
 class TestGoldenCross:
@@ -321,10 +310,10 @@ class TestGoldenCross:
         """Test that NaN values in stack return False."""
         # NaN at last position (not first) to properly test "last values are NaN"
         stack = {
-            "ema7": pd.Series([150.0, float('nan')]),
-            "ema25": pd.Series([140.0, float('nan')]),
-            "ema50": pd.Series([130.0, float('nan')]),
-            "ema200": pd.Series([120.0, float('nan')]),
+            "ema7": pd.Series([150.0, float("nan")]),
+            "ema25": pd.Series([140.0, float("nan")]),
+            "ema50": pd.Series([130.0, float("nan")]),
+            "ema200": pd.Series([120.0, float("nan")]),
         }
 
         # Should return False because last values are NaN
@@ -383,10 +372,10 @@ class TestDeathCross:
         """Test that NaN values in stack return False."""
         # NaN at last position (not first) to properly test "last values are NaN"
         stack = {
-            "ema7": pd.Series([120.0, float('nan')]),
-            "ema25": pd.Series([130.0, float('nan')]),
-            "ema50": pd.Series([140.0, float('nan')]),
-            "ema200": pd.Series([150.0, float('nan')]),
+            "ema7": pd.Series([120.0, float("nan")]),
+            "ema25": pd.Series([130.0, float("nan")]),
+            "ema50": pd.Series([140.0, float("nan")]),
+            "ema200": pd.Series([150.0, float("nan")]),
         }
 
         # Should return False because last values are NaN
@@ -420,8 +409,7 @@ class TestIntegration:
         """Test complete EMA analysis workflow."""
         # Generate realistic price data
         prices = pd.Series(
-            range(100, 400),
-            index=pd.date_range("2024-01-01", periods=300, freq="h")
+            range(100, 400), index=pd.date_range("2024-01-01", periods=300, freq="h")
         )
 
         # Calculate full stack

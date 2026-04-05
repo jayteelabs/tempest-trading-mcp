@@ -3,6 +3,7 @@
 Implements EMA calculations for periods 7, 25, 50, and 200 with crossover detection
 and stack confirmation for trend analysis.
 """
+
 import pandas as pd
 
 from tempest_mcp.logging_config import get_logger
@@ -33,7 +34,7 @@ def calculate_ema(prices: pd.Series, period: int) -> pd.Series:
         >>> prices = pd.Series([100, 101, 102, 103, 104], index=pd.date_range('2024-01-01', periods=5))
         >>> ema = calculate_ema(prices, period=3)
     """
-    if period <= 0:
+    if not isinstance(period, int) or period <= 0:
         raise ValueError("Period must be a positive integer")
 
     if len(prices) < period:
@@ -104,9 +105,7 @@ def _get_last_valid_ema(ema_stack: dict[str, pd.Series], name: str) -> float | N
     return float(ema_series.iloc[-1])
 
 
-def detect_ema_cross(
-    ema_fast: pd.Series, ema_slow: pd.Series
-) -> pd.DataFrame:
+def detect_ema_cross(ema_fast: pd.Series, ema_slow: pd.Series) -> pd.DataFrame:
     """Detect crossover points between two EMA series.
 
     Identifies points where the faster EMA crosses above (bullish) or
@@ -135,7 +134,7 @@ def detect_ema_cross(
         return pd.DataFrame(columns=["date", "fast_above", "direction"])
 
     # Align series by index to ensure proper timestamp matching
-    ema_fast, ema_slow = ema_fast.align(ema_slow, join='inner')
+    ema_fast, ema_slow = ema_fast.align(ema_slow, join="inner")
 
     # Filter out NaN values before computing crossovers
     valid_mask = ema_fast.notna() & ema_slow.notna()
@@ -153,7 +152,6 @@ def detect_ema_cross(
     cross_changes = fast_above.astype(int).diff()
 
     # Get indices where cross occurred (diff is non-zero and not NaN)
-    # Note: NaN != 0 is True in Python/NumPy, so we must exclude NaN explicitly
     cross_indices = cross_changes[cross_changes.notna() & (cross_changes != 0)].index
 
     if len(cross_indices) == 0:
@@ -162,26 +160,41 @@ def detect_ema_cross(
     # Build result DataFrame
     records = []
     for idx in cross_indices:
-        fast_above_at_cross = fast_above.loc[idx]
-        direction = "cross_up" if fast_above_at_cross else "cross_down"
+        idx_pos = fast_above.index.get_loc(idx)
+        curr_fast_above = bool(fast_above.loc[idx])
+
+        # If fast_above is False (equality at this point), verify it's a true cross.
+        # A true cross_up must have fast below before (diff < 0).
+        # A true cross_down must have fast above before (diff > 0).
+        # Equality touching (fast going from below to equal, or above to equal) is not a cross.
+        if not curr_fast_above:
+            if idx_pos > 0:
+                prev_diff = float(fast_valid.iloc[idx_pos - 1] - slow_valid.iloc[idx_pos - 1])
+                if prev_diff <= 0:
+                    # Was below or equal before; now equal — not a cross_down
+                    continue
+            else:
+                continue
+
+        direction = "cross_up" if curr_fast_above else "cross_down"
 
         # Convert index to timestamp if it's datetime-like, otherwise preserve original
-        # Integer/float indices are positions, not timestamps - preserve them
-        if isinstance(idx, (pd.Timestamp,)):
+        if isinstance(idx, pd.Timestamp):
             date_val = idx
         elif isinstance(idx, (int, float)):
-            date_val = idx  # preserve positional index
+            date_val = idx
         else:
-            # For strings or other types, try to convert
             date_val = pd.to_datetime(idx, errors="coerce")
             if pd.isna(date_val):
-                date_val = idx  # preserve original if not convertible
+                date_val = idx
 
-        records.append({
-            "date": date_val,
-            "fast_above": fast_above_at_cross,
-            "direction": direction,
-        })
+        records.append(
+            {
+                "date": date_val,
+                "fast_above": curr_fast_above,
+                "direction": direction,
+            }
+        )
 
     return pd.DataFrame(records)
 

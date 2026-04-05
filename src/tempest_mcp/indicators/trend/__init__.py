@@ -19,9 +19,24 @@ def calculate_vwap(high, low, close, volume) -> VWAPResult:
     low_arr = np.array(low, dtype=np.float64)
     close_arr = np.array(close, dtype=np.float64)
     volume_arr = np.array(volume, dtype=np.float64)
+
+    # Validate input array lengths
+    if not (len(high_arr) == len(low_arr) == len(close_arr) == len(volume_arr)):
+        raise ValueError("All input arrays must have the same length")
+
     typical_price = (high_arr + low_arr + close_arr) / 3
     cumulative_tp_volume = np.cumsum(typical_price * volume_arr)
     cumulative_volume = np.cumsum(volume_arr)
+
+    # Handle division by zero: if all volume is zero, return last typical price
+    if np.all(cumulative_volume == 0):
+        return VWAPResult(
+            symbol="",
+            timeframe="",
+            timestamp=0.0,
+            values={"vwap": float(typical_price[-1]) if len(typical_price) > 0 else 0.0},
+        )
+
     with np.errstate(divide="ignore", invalid="ignore"):
         vwap = np.where(
             cumulative_volume > 0, cumulative_tp_volume / cumulative_volume, typical_price
