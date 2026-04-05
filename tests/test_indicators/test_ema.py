@@ -71,6 +71,19 @@ class TestCalculateEma:
         # With adjust=False, first EMA value equals first price
         assert ema.iloc[0] == pytest.approx(100.0)
 
+    def test_invalid_period_raises_error(self):
+        """Test that period <= 0 raises ValueError."""
+        prices = pd.Series(
+            [100.0, 101.0, 102.0],
+            index=pd.date_range("2024-01-01", periods=3, freq="h")
+        )
+
+        with pytest.raises(ValueError, match="Period must be a positive integer"):
+            calculate_ema(prices, period=0)
+
+        with pytest.raises(ValueError, match="Period must be a positive integer"):
+            calculate_ema(prices, period=-1)
+
 
 class TestCalculateEmaStack:
     """Tests for calculate_ema_stack function."""
@@ -193,6 +206,28 @@ class TestDetectEmaCross:
         assert len(crosses) == 0
         assert isinstance(crosses, pd.DataFrame)
 
+    def test_nan_values_handled_correctly(self):
+        """Test that NaN values in EMA series are filtered out properly."""
+        # Create EMA series with NaN values
+        ema_fast = pd.Series([100.0, 101.0, float('nan'), 103.0, 104.0])
+        ema_slow = pd.Series([101.0, 100.0, 102.0, 101.0, 100.0])
+
+        # Should not raise, should handle NaN gracefully
+        crosses = detect_ema_cross(ema_fast, ema_slow)
+
+        assert isinstance(crosses, pd.DataFrame)
+        # NaN values should be filtered, so we look for actual valid crossovers
+
+    def test_nan_only_series_returns_empty(self):
+        """Test that series with all NaN returns empty DataFrame."""
+        ema_fast = pd.Series([float('nan'), float('nan'), float('nan')])
+        ema_slow = pd.Series([100.0, 101.0, 102.0])
+
+        crosses = detect_ema_cross(ema_fast, ema_slow)
+
+        assert len(crosses) == 0
+        assert isinstance(crosses, pd.DataFrame)
+
     def test_single_cross_event_no_repeats(self):
         """Test that each crossover produces only one signal."""
         # Sharp uptrend should produce one cross_up event
@@ -262,6 +297,18 @@ class TestGoldenCross:
 
         assert golden_cross(stack) is False
 
+    def test_nan_values_return_false(self):
+        """Test that NaN values in stack return False."""
+        stack = {
+            "ema7": pd.Series([float('nan'), 150.0]),
+            "ema25": pd.Series([float('nan'), 140.0]),
+            "ema50": pd.Series([float('nan'), 130.0]),
+            "ema200": pd.Series([float('nan'), 120.0]),
+        }
+
+        # Should return False because last values are NaN
+        assert golden_cross(stack) is False
+
 
 class TestDeathCross:
     """Tests for death_cross function."""
@@ -299,6 +346,18 @@ class TestDeathCross:
             "ema200": pd.Series([150.0]),
         }
 
+        assert death_cross(stack) is False
+
+    def test_nan_values_return_false(self):
+        """Test that NaN values in stack return False."""
+        stack = {
+            "ema7": pd.Series([float('nan'), 120.0]),
+            "ema25": pd.Series([float('nan'), 130.0]),
+            "ema50": pd.Series([float('nan'), 140.0]),
+            "ema200": pd.Series([float('nan'), 150.0]),
+        }
+
+        # Should return False because last values are NaN
         assert death_cross(stack) is False
 
 

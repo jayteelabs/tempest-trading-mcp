@@ -20,18 +20,24 @@ def calculate_ema(prices: pd.Series, period: int) -> pd.Series:
 
     Args:
         prices: Series of price values (typically close prices) with datetime index
-        period: Number of periods for EMA calculation
+        period: Number of periods for EMA calculation (must be positive)
 
     Returns:
         Series containing EMA values, aligned with input prices index.
         Returns empty Series if insufficient data (len < period).
 
+    Raises:
+        ValueError: If period is not a positive integer.
+
     Example:
         >>> prices = pd.Series([100, 101, 102, 103, 104], index=pd.date_range('2024-01-01', periods=5))
         >>> ema = calculate_ema(prices, period=3)
     """
+    if period <= 0:
+        raise ValueError("Period must be a positive integer")
+
     if len(prices) < period:
-        logger.debug(f"Insufficient data for EMA({period}): {len(prices)} < {period}")
+        logger.debug("Insufficient data for EMA(%d): %d < %d", period, len(prices), period)
         return pd.Series(dtype=float)
 
     # Use pandas native ewm for efficiency
@@ -107,8 +113,16 @@ def detect_ema_cross(
         ema_fast = ema_fast.iloc[:min_len]
         ema_slow = ema_slow.iloc[:min_len]
 
+    # Filter out NaN values before computing crossovers
+    valid_mask = ema_fast.notna() & ema_slow.notna()
+    fast_valid = ema_fast[valid_mask]
+    slow_valid = ema_slow[valid_mask]
+
+    if len(fast_valid) == 0:
+        return pd.DataFrame(columns=["date", "fast_above", "direction"])
+
     # Calculate cross state at each point
-    fast_above = ema_fast > ema_slow
+    fast_above = fast_valid > slow_valid
 
     # Detect state changes (actual crossover points)
     # A cross occurs when the relationship changes from previous bar
@@ -171,20 +185,24 @@ def golden_cross(ema_stack: dict[str, pd.Series]) -> bool:
         if ema_stack[key].empty:
             return False
 
-    # Get latest values
+    # Get latest non-NaN values
     try:
-        ema7 = ema_stack["ema7"].iloc[-1]
-        ema25 = ema_stack["ema25"].iloc[-1]
-        ema50 = ema_stack["ema50"].iloc[-1]
-        ema200 = ema_stack["ema200"].iloc[-1]
+        ema7_series = ema_stack["ema7"].dropna()
+        ema25_series = ema_stack["ema25"].dropna()
+        ema50_series = ema_stack["ema50"].dropna()
+        ema200_series = ema_stack["ema200"].dropna()
 
-        # Check for NaN values
-        if pd.isna(ema7) or pd.isna(ema25) or pd.isna(ema50) or pd.isna(ema200):
+        if ema7_series.empty or ema25_series.empty or ema50_series.empty or ema200_series.empty:
             return False
 
-        return ema7 > ema25 > ema50 > ema200
+        ema7 = ema7_series.iloc[-1]
+        ema25 = ema25_series.iloc[-1]
+        ema50 = ema50_series.iloc[-1]
+        ema200 = ema200_series.iloc[-1]
+
+        return (ema7 > ema25) and (ema25 > ema50) and (ema50 > ema200)
     except (IndexError, KeyError) as e:
-        logger.debug(f"Error accessing EMA values: {e}")
+        logger.debug("Error accessing EMA values: %s", e)
         return False
 
 
@@ -218,18 +236,22 @@ def death_cross(ema_stack: dict[str, pd.Series]) -> bool:
         if ema_stack[key].empty:
             return False
 
-    # Get latest values
+    # Get latest non-NaN values
     try:
-        ema7 = ema_stack["ema7"].iloc[-1]
-        ema25 = ema_stack["ema25"].iloc[-1]
-        ema50 = ema_stack["ema50"].iloc[-1]
-        ema200 = ema_stack["ema200"].iloc[-1]
+        ema7_series = ema_stack["ema7"].dropna()
+        ema25_series = ema_stack["ema25"].dropna()
+        ema50_series = ema_stack["ema50"].dropna()
+        ema200_series = ema_stack["ema200"].dropna()
 
-        # Check for NaN values
-        if pd.isna(ema7) or pd.isna(ema25) or pd.isna(ema50) or pd.isna(ema200):
+        if ema7_series.empty or ema25_series.empty or ema50_series.empty or ema200_series.empty:
             return False
 
-        return ema7 < ema25 < ema50 < ema200
+        ema7 = ema7_series.iloc[-1]
+        ema25 = ema25_series.iloc[-1]
+        ema50 = ema50_series.iloc[-1]
+        ema200 = ema200_series.iloc[-1]
+
+        return (ema7 < ema25) and (ema25 < ema50) and (ema50 < ema200)
     except (IndexError, KeyError) as e:
-        logger.debug(f"Error accessing EMA values: {e}")
+        logger.debug("Error accessing EMA values: %s", e)
         return False
