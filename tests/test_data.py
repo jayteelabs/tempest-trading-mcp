@@ -241,7 +241,7 @@ class TestHistoricalAdapter:
 
         # Clear the cache first
         get_historical_adapter.cache_clear()
-        
+
         adapter1 = get_historical_adapter()
         adapter2 = get_historical_adapter()
         assert adapter1 is adapter2
@@ -266,8 +266,8 @@ class TestDataSourceRouter:
 
     def test_route_historical_returns_historical_data_source(self):
         """route_historical should return HistoricalDataSource."""
-        from tempest_mcp.data._router import DataSourceRouter
         from tempest_mcp.data._hist import HistoricalDataSource
+        from tempest_mcp.data._router import DataSourceRouter
 
         router = DataSourceRouter()
         adapter = router.route_historical()
@@ -275,18 +275,18 @@ class TestDataSourceRouter:
 
     def test_route_live_returns_live_data_adapter(self, monkeypatch):
         """route_live should return LiveDataAdapter."""
-        from tempest_mcp.data._router import DataSourceRouter
         from tempest_mcp.data import LiveDataAdapter
+        from tempest_mcp.data._router import DataSourceRouter
 
         # Ensure no TV API key
         monkeypatch.delenv("TRADINGVIEW_API_KEY", raising=False)
 
         # Clear any cached imports
         import importlib
+
         import tempest_mcp.data
         importlib.reload(tempest_mcp.data)
 
-        from tempest_mcp.data._router import DataSourceRouter
         router = DataSourceRouter()
         adapter = router.route_live()
         assert isinstance(adapter, LiveDataAdapter)
@@ -300,10 +300,10 @@ class TestDataSourceRouter:
 
         # Need to clear the cache in get_live_adapter
         import importlib
+
         import tempest_mcp.data
         importlib.reload(tempest_mcp.data)
 
-        from tempest_mcp.data._router import DataSourceRouter
         router = DataSourceRouter()
         adapter = router.route_live()
         assert isinstance(adapter, TradingViewAdapter)
