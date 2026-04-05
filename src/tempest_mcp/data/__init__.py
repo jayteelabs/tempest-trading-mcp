@@ -2,24 +2,25 @@
 Data layer for Tempest MCP.
 
 This module provides adapters for fetching market data from various sources:
-- Yahoo Finance: Historical data for backtesting (YFAdapter)
-- TradingView: Real-time data (primary when API key is set)
-- CCXT: Real-time data fallback / orderbook data
+- CCXT: Real-time + historical data for crypto via Binance/Bybit public REST APIs (primary)
+- Yahoo Finance: Historical data for stocks and data gaps CCXT doesn't cover (fallback)
 
-Adapter Selection (live data):
-- If TRADINGVIEW_API_KEY is set → TradingViewAdapter (primary)
-- Otherwise → CCXTAdapter (fallback)
+Data Source Priority (D3):
+- Primary: CCXT via Binance/Bybit public REST (all crypto + stocks, no API keys)
+- Fallback: yfinance (for stocks and data gaps CCXT doesn't cover)
+
+IMPORTANT (2026-04-05): TradingView is NOT used for data. There is no official
+TradingView data API that accepts a key and returns OHLCV. tv_adapter.py is a
+deprecated stub. TRADINGVIEW_API_KEY is not used.
 
 Design Decisions:
-- D3: Yahoo Finance + TradingView + CCXT data adapters
+- D3: CCXT primary + yfinance fallback (TradingView deprecated)
 - D11: Symbol conversion via _symbols.py
-- D16: TradingViewAdapter delegates orderbook to CCXT
 - D19: Historical data abstraction layer (HistoricalDataSource)
 """
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import structlog
@@ -119,39 +120,26 @@ class LiveDataAdapter(Protocol):
 
 
 def get_live_adapter() -> LiveDataAdapter:
-    """Get the appropriate live data adapter based on environment.
+    """Get the live data adapter.
 
-    Selection logic:
-    1. If TRADINGVIEW_API_KEY is set → TradingViewAdapter (primary)
-    2. Otherwise → CCXTAdapter (fallback)
+    Always returns CCXTAdapter — TradingView has no OHLCV data API.
+    tv_adapter.py is a deprecated stub, retained for backward compatibility.
 
     Returns:
-        LiveDataAdapter instance (TradingViewAdapter or CCXTAdapter)
+        CCXTAdapter instance (real-time crypto data via Binance/Bybit public REST)
 
     Example:
         >>> adapter = get_live_adapter()
         >>> price = adapter.fetch_live_price("BTCUSDT")
     """
-    api_key = os.environ.get("TRADINGVIEW_API_KEY")
+    from tempest_mcp.data.ccxt_adapter import CCXTAdapter
 
-    if api_key:
-        from tempest_mcp.data.tv_adapter import TradingViewAdapter
-
-        logger.info(
-            "adapter_selected",
-            adapter="TradingViewAdapter",
-            reason="TRADINGVIEW_API_KEY is set",
-        )
-        return TradingViewAdapter(api_key=api_key)
-    else:
-        from tempest_mcp.data.ccxt_adapter import CCXTAdapter
-
-        logger.warning(
-            "adapter_selected",
-            adapter="CCXTAdapter",
-            reason="TRADINGVIEW_API_KEY not set - using CCXT fallback",
-        )
-        return CCXTAdapter()
+    logger.info(
+        "adapter_selected",
+        adapter="CCXTAdapter",
+        reason="TradingView has no OHLCV data API - CCXT is primary",
+    )
+    return CCXTAdapter()
 
 
 # Lazy re-exports via __getattr__ to avoid E402 for _symbols imports

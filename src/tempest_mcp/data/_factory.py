@@ -11,14 +11,18 @@ from tempest_mcp.data._hist import HistoricalDataSource
 def get_historical_adapter() -> HistoricalDataSource:
     """Get the historical data adapter (singleton).
 
-    Returns a HistoricalDataSource wrapping YFAdapter.
+    Returns a HistoricalDataSource with CCXT as primary and yfinance as fallback.
     Uses lru_cache(maxsize=1) for singleton semantics.
+
+    Data Source Priority (D3):
+    - Primary: CCXT via Binance/Bybit public REST (no API keys required)
+    - Fallback: yfinance (for stocks and data gaps CCXT doesn't cover)
 
     Returns:
         HistoricalDataSource instance
 
     Example:
         >>> adapter = get_historical_adapter()
-        >>> df = adapter.fetch_ohlcv("BTC-USD", interval="1d", start=None, end=None)
+        >>> df = adapter.fetch_ohlcv("BTC/USDT", interval="1d", start=None, end=None)
     """
     return HistoricalDataSource()

@@ -15,15 +15,15 @@ class DataSourceRouter:
 
     Usage:
         router = DataSourceRouter()
-        hist_adapter = router.route_historical()   # HistoricalDataSource
-        live_adapter = router.route_live()          # LiveDataAdapter
+        hist_adapter = router.route_historical()   # HistoricalDataSource (CCXT primary, yfinance fallback)
+        live_adapter = router.route_live()          # LiveDataAdapter (CCXT only)
     """
 
     def route_historical(self) -> HistoricalDataSource:
         """Route to historical data adapter.
 
         Returns:
-            HistoricalDataSource wrapping YFAdapter
+            HistoricalDataSource wrapping CCXTAdapter (primary) with yfinance fallback.
         """
         return get_historical_adapter()
 
@@ -31,7 +31,7 @@ class DataSourceRouter:
         """Route to live data adapter.
 
         Returns:
-            LiveDataAdapter (TradingViewAdapter if API key set, else CCXTAdapter)
+            LiveDataAdapter (CCXTAdapter — TradingView has no OHLCV data API)
         """
         from tempest_mcp.data import LiveDataAdapter, get_live_adapter
 
