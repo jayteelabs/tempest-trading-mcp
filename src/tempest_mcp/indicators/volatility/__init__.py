@@ -47,8 +47,6 @@ def calculate_bollinger_width(
         >>> prices = pd.Series([100, 102, 101, 103, 105], index=pd.date_range('2024-01-01', periods=5, tz='UTC'))
         >>> bw = calculate_bollinger_width(prices, period=20)
     """
-    import numpy as np
-    
     if period <= 0:
         raise ValueError("Period must be a positive integer")
 
@@ -131,7 +129,7 @@ def calculate_historical_volatility(
         >>> hv = calculate_historical_volatility(prices, period=20)
     """
     import numpy as np
-    
+
     if period < 2:
         raise ValueError("Period must be at least 2")
 

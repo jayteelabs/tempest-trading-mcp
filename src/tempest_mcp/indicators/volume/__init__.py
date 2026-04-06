@@ -3,21 +3,20 @@
 import numpy as np
 import pandas as pd
 
-from tempest_mcp.logging_config import get_logger
-
-logger = get_logger(__name__)
-
-# Import VWAP engine functions
 from tempest_mcp.indicators.volume.vwap import (
     SESSION_ANCHORS,
     calculate_vwap,
     calculate_vwap_bands,
     detect_vwap_cross,
 )
+from tempest_mcp.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 # Import ta-lib based result wrappers
 try:
     import talib
+
     from tempest_mcp.models.indicator import MFIResult, OBVResult
     _HAS_TALIB = True
 except ImportError:
@@ -65,7 +64,7 @@ def calculate_obv(
     if isinstance(close.index, pd.DatetimeIndex) and close.index.tz is None:
         close = close.copy()
         close.index = close.index.tz_localize("UTC")
-    
+
     if isinstance(volume.index, pd.DatetimeIndex) and volume.index.tz is None:
         volume = volume.copy()
         volume.index = volume.index.tz_localize("UTC")
@@ -203,12 +202,12 @@ def calculate_mfi(
         # Sum flows for the period [i - period + 1, i]
         period_flows = raw_money_flow.iloc[i - period + 1:i + 1]
         period_tp = typical_price.iloc[i - period + 1:i + 1]
-        
+
         # Compare each TP to the previous one WITHIN the period
         # tp_change[j] = tp[j] - tp[j-1] where j is within the period
         positive_flow = 0.0
         negative_flow = 0.0
-        
+
         for j in range(1, len(period_flows)):
             # j=1 compares period_tp[1] to period_tp[0] (both within period)
             if period_tp.iloc[j] > period_tp.iloc[j - 1]:
@@ -243,7 +242,7 @@ def calculate_obv_result(close, volume, ema_period: int = 20) -> "OBVResult":
     """
     if not _HAS_TALIB:
         raise ImportError("ta-lib not available - install with: pip install ta-lib")
-    
+
     close_arr = np.array(close, dtype=np.float64)
     volume_arr = np.array(volume, dtype=np.float64)
     obv = talib.OBV(close_arr, volume_arr)
@@ -263,7 +262,7 @@ def calculate_mfi_result(high, low, close, volume, period: int = 14) -> "MFIResu
     """
     if not _HAS_TALIB:
         raise ImportError("ta-lib not available - install with: pip install ta-lib")
-    
+
     high_arr = np.array(high, dtype=np.float64)
     low_arr = np.array(low, dtype=np.float64)
     close_arr = np.array(close, dtype=np.float64)
