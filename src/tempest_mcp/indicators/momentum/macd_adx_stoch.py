@@ -139,7 +139,9 @@ def calculate_adx(
             - "plus_di": +DI values
             - "minus_di": -DI values
 
-        All values are pd.Series aligned with input index.
+        All values are pd.Series aligned with the post-dropna index of the
+        aligned input series. If NaN values are present in the input, they are
+        dropped during alignment and outputs reflect only clean (non-NaN) bars.
         Returns empty Series for all keys if input length < period * 2.
 
     Raises:
@@ -278,7 +280,10 @@ def calculate_stochastic(
             - "percent_k": %K values (smoothed if smooth_k > 1)
             - "percent_d": %D values (SMA of %K)
 
-        All values are pd.Series aligned with input index, clamped to [0, 100].
+        All values are pd.Series aligned with the post-dropna index of the
+        aligned input series, clamped to [0, 100]. If NaN values are present
+        in the input, they are dropped during alignment and outputs reflect
+        only clean (non-NaN) bars.
         Returns empty Series for all keys if input length < k_period.
 
     Raises:

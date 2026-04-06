@@ -14,18 +14,16 @@ from tempest_mcp.indicators.volatility.atr import (
 def calculate_historical_volatility_pure(
     close, period: int = 20, trading_periods: int = 252
 ) -> dict[str, float]:
-    """Calculate Historical Volatility using pure numpy/pandas."""
+    """Calculate Historical Volatility using pure pandas/numpy."""
     import numpy as np
+    import pandas as pd
 
     close_arr = np.array(close, dtype=np.float64)
     log_returns = np.log(close_arr[1:] / close_arr[:-1])
-    hv_series = np.zeros(len(log_returns))
-    hv_series[:] = np.nan
-    for i in range(period - 1, len(log_returns)):
-        window = log_returns[i - period + 1 : i + 1]
-        hv_series[i] = np.std(window) * np.sqrt(trading_periods)
-    valid_hv = hv_series[~np.isnan(hv_series)]
-    latest_hv = float(valid_hv[-1]) if len(valid_hv) > 0 else 0.0
+    log_series = pd.Series(log_returns)
+    hv = log_series.rolling(period).std() * np.sqrt(trading_periods)
+    valid_hv = hv.dropna()
+    latest_hv = float(valid_hv.iloc[-1]) if len(valid_hv) > 0 else 0.0
     return {
         "hv": latest_hv,
         "hv_percent": latest_hv * 100,

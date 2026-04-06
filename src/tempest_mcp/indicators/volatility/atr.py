@@ -38,8 +38,10 @@ def calculate_atr(
                 Must be a positive integer.
 
     Returns:
-        pd.Series containing ATR values, aligned with input index.
-        Returns empty Series if:
+        pd.Series containing ATR values, aligned with the post-dropna index
+        of the aligned input series. If NaN values are present in the input,
+        they are dropped during alignment and the output reflects only the
+        clean (non-NaN) bars. Returns empty Series if:
             - input length is 0
             - input length < period
 
