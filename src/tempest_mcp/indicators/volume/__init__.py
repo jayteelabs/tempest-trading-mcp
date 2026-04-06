@@ -3,8 +3,6 @@
 import numpy as np
 import talib
 
-from tempest_mcp.models.indicator import MFIResult, OBVResult
-
 # Import VWAP engine functions
 from tempest_mcp.indicators.volume.vwap import (
     SESSION_ANCHORS,
@@ -12,6 +10,7 @@ from tempest_mcp.indicators.volume.vwap import (
     calculate_vwap_bands,
     detect_vwap_cross,
 )
+from tempest_mcp.models.indicator import MFIResult, OBVResult
 
 
 def calculate_obv_result(close, volume, ema_period: int = 20) -> OBVResult:

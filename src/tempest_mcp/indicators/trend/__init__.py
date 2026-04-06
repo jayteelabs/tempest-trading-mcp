@@ -13,6 +13,7 @@ from tempest_mcp.indicators.trend.ema import (
 )
 from tempest_mcp.models.indicator import ADXResult, EMAResult, SupertrendResult
 
+
 def calculate_supertrend(
     high, low, close, period: int = 10, multiplier: float = 3.0
 ) -> SupertrendResult:
@@ -143,7 +144,7 @@ def calculate_adx_result(high, low, close, period: int = 14) -> ADXResult:
     )
 
 __all__ = [
-    
+
     "calculate_supertrend",
     "calculate_ema_result",
     "calculate_adx_result",
