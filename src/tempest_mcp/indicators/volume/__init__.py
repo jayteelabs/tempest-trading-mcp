@@ -112,9 +112,9 @@ def calculate_mfi(
     Formula:
         Typical Price = (High + Low + Close) / 3
         Raw Money Flow = Typical Price × Volume
-        Group into period-length buckets:
-            - Sum positive flows where TP > prior TP
-            - Sum negative flows where TP < prior TP
+        For each period:
+            - Sum positive flows where TP > prior TP within the period
+            - Sum negative flows where TP < prior TP within the period
         Money Ratio = Sum of Positive Raw Money Flow / Sum of Negative Raw Money Flow
         MFI = 100 - (100 / (1 + Money Ratio))
 
@@ -194,54 +194,40 @@ def calculate_mfi(
     # Calculate Raw Money Flow
     raw_money_flow = typical_price * df["volume"]
 
-    # Calculate money flow direction (positive or negative)
-    # Positive flow: TP > prior TP
-    # Negative flow: TP < prior TP
-    tp_change = typical_price.diff()
-
     # Create result series
     mfi = pd.Series(index=df.index, dtype=float)
 
     # Calculate MFI for each complete period
+    # MFI value at index i represents the MFI for period ending at i
     for i in range(period, len(typical_price)):
-        # Get the period window
-        start_idx = i - period + 1
-        end_idx = i + 1
-
-        window_tp = typical_price.iloc[start_idx:end_idx]
-        window_flow = raw_money_flow.iloc[start_idx:end_idx]
-        window_tp_change = tp_change.iloc[start_idx:end_idx]
-
-        # Separate positive and negative money flows
-        positive_flow = window_flow.copy()
-        negative_flow = window_flow.copy()
-
-        # If TP <= prior TP, it's not positive flow
-        positive_flow[window_tp_change <= 0] = 0
-        # If TP >= prior TP, it's not negative flow
-        negative_flow[window_tp_change >= 0] = 0
-
-        sum_positive = positive_flow.sum()
-        sum_negative = negative_flow.sum()
+        # Sum flows for the period [i - period + 1, i]
+        period_flows = raw_money_flow.iloc[i - period + 1:i + 1]
+        period_tp = typical_price.iloc[i - period + 1:i + 1]
+        
+        # Compare each TP to the previous one WITHIN the period
+        # tp_change[j] = tp[j] - tp[j-1] where j is within the period
+        positive_flow = 0.0
+        negative_flow = 0.0
+        
+        for j in range(1, len(period_flows)):
+            # j=1 compares period_tp[1] to period_tp[0] (both within period)
+            if period_tp.iloc[j] > period_tp.iloc[j - 1]:
+                positive_flow += period_flows.iloc[j]
+            elif period_tp.iloc[j] < period_tp.iloc[j - 1]:
+                negative_flow += period_flows.iloc[j]
+            # If equal, no flow added
 
         # Calculate Money Ratio
-        if sum_negative == 0:
+        if negative_flow == 0:
             # No selling pressure - MFI = 100
-            money_ratio = float("inf")
-        elif sum_positive == 0:
-            # No buying pressure - MFI = 0
-            money_ratio = 0.0
-        else:
-            money_ratio = sum_positive / sum_negative
-
-        # Calculate MFI: 100 - (100 / (1 + money_ratio))
-        if money_ratio == float("inf"):
             mfi.iloc[i] = 100.0
-        elif money_ratio == 0.0:
+        elif positive_flow == 0:
+            # No buying pressure - MFI = 0
             mfi.iloc[i] = 0.0
         else:
+            money_ratio = positive_flow / negative_flow
             mfi_val = 100.0 - (100.0 / (1.0 + money_ratio))
-            # Clamp to [0, 100]
+            # Clamp to [0, 100] due to floating point
             mfi.iloc[i] = max(0.0, min(100.0, mfi_val))
 
     # Drop NaN values (first period values will be NaN since we start at index = period)

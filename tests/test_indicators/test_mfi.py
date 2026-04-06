@@ -25,7 +25,6 @@ class TestCalculateMFI:
         assert len(mfi) > 0
         assert mfi.index.tz is not None
         assert str(mfi.index.tz) == "UTC"
-        # MFI should be in [0, 100]
         assert (mfi >= 0).all()
         assert (mfi <= 100).all()
 
@@ -55,15 +54,13 @@ class TestCalculateMFI:
 
         mfi = calculate_mfi(high, low, close, volume, period=period)
 
-        # Should have exactly 1 value
         assert len(mfi) == 1
 
     def test_flat_sideways_price(self):
-        """Test MFI with flat/sideways price (typical price stays constant)."""
+        """Test MFI with flat/sideways price."""
         period = 14
         n = 50
         idx = pd.date_range("2024-01-01", periods=n, freq="h", tz="UTC")
-        # Flat typical price
         typical = 100.0
         high = pd.Series([typical + 1] * n, index=idx)
         low = pd.Series([typical - 1] * n, index=idx)
@@ -72,11 +69,6 @@ class TestCalculateMFI:
 
         mfi = calculate_mfi(high, low, close, volume, period=period)
 
-        # With flat typical price, no positive or negative flow
-        # If both sums are 0, the formula should handle it
-        # In practice, if all prices are flat, tp_change will be 0
-        # so positive_flow and negative_flow will both be 0
-        # MFI should be somewhere reasonable (50 if no flow detected)
         assert len(mfi) > 0
 
     def test_extreme_volume_spike(self):
@@ -88,7 +80,7 @@ class TestCalculateMFI:
         low = pd.Series(np.random.uniform(90, 100, n), index=idx)
         close = pd.Series(np.random.uniform(95, 105, n), index=idx)
         volume = pd.Series(np.random.uniform(1000, 5000, n), index=idx)
-        volume.iloc[15] = 1000000  # Extreme spike
+        volume.iloc[15] = 1000000
 
         mfi = calculate_mfi(high, low, close, volume, period=period)
 
@@ -129,7 +121,7 @@ class TestCalculateMFI:
         idx = pd.date_range("2024-01-01", periods=n, freq="h", tz="UTC")
         high = pd.Series(np.random.uniform(100, 110, n), index=idx)
         low = pd.Series(np.random.uniform(90, 100, n), index=idx)
-        close = pd.Series(np.random.uniform(95, 105, n - 5), index=idx[:n-5])  # Different length
+        close = pd.Series(np.random.uniform(95, 105, n - 5), index=idx[:n-5])
         volume = pd.Series(np.random.uniform(1000, 5000, n), index=idx)
 
         with pytest.raises(ValueError, match="same length"):
@@ -151,8 +143,6 @@ class TestCalculateMFI:
 
     def test_output_range_clamped(self):
         """Test that MFI output is clamped to [0, 100]."""
-        # Create a scenario that might produce values outside [0, 100]
-        # Due to floating point issues
         period = 14
         n = 50
         idx = pd.date_range("2024-01-01", periods=n, freq="h", tz="UTC")
@@ -163,9 +153,40 @@ class TestCalculateMFI:
 
         mfi = calculate_mfi(high, low, close, volume, period=period)
 
-        # All values should be clamped to [0, 100]
         assert (mfi >= 0).all()
         assert (mfi <= 100).all()
+
+    def test_edge_case_sum_negative_zero_mfi_100(self):
+        """Test that MFI = 100 when sum_negative == 0 (no selling pressure)."""
+        period = 14
+        n = period + 1
+        idx = pd.date_range("2024-01-01", periods=n, freq="h", tz="UTC")
+        base = 100.0
+        high = pd.Series([base + i + 2 for i in range(n)], index=idx)
+        low = pd.Series([base + i for i in range(n)], index=idx)
+        close = pd.Series([base + i + 1 for i in range(n)], index=idx)
+        volume = pd.Series([1000] * n, index=idx)
+
+        mfi = calculate_mfi(high, low, close, volume, period=period)
+
+        assert len(mfi) == 1
+        assert mfi.iloc[0] == 100.0
+
+    def test_edge_case_sum_positive_zero_mfi_0(self):
+        """Test that MFI = 0 when sum_positive == 0 (no buying pressure)."""
+        period = 14
+        n = period + 1
+        idx = pd.date_range("2024-01-01", periods=n, freq="h", tz="UTC")
+        base = 100.0
+        high = pd.Series([base - i + 2 for i in range(n)], index=idx)
+        low = pd.Series([base - i for i in range(n)], index=idx)
+        close = pd.Series([base - i + 1 for i in range(n)], index=idx)
+        volume = pd.Series([1000] * n, index=idx)
+
+        mfi = calculate_mfi(high, low, close, volume, period=period)
+
+        assert len(mfi) == 1
+        assert mfi.iloc[0] == 0.0
 
 
 class TestIntegration:
