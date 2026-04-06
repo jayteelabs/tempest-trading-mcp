@@ -71,18 +71,8 @@ def calculate_cci(
         )
         return pd.Series(dtype=float, index=close.index)
 
-    # Align all series to same index
+    # Align all series - NaN values propagate naturally through rolling calculations
     aligned = pd.DataFrame({"high": high, "low": low, "close": close})
-    aligned = aligned.dropna()
-
-    if len(aligned) < period:
-        logger.debug(
-            "Insufficient aligned data for CCI(%d): %d < %d",
-            period,
-            len(aligned),
-            period,
-        )
-        return pd.Series(dtype=float, index=aligned.index)
 
     high_vals = aligned["high"]
     low_vals = aligned["low"]
@@ -105,7 +95,8 @@ def calculate_cci(
     # 0.015 scales CCI so ~70-80% of values fall within ±100 in a ranging market
     cci = (tp - tp_sma) / (0.015 * mad)
 
-    return cci
+    # Return aligned with original close index
+    return pd.Series(cci.values, index=close.index)
 
 
 def calculate_williams_r(
@@ -160,18 +151,8 @@ def calculate_williams_r(
         )
         return pd.Series(dtype=float, index=close.index)
 
-    # Align all series to same index
+    # Align all series - NaN values propagate naturally through rolling calculations
     aligned = pd.DataFrame({"high": high, "low": low, "close": close})
-    aligned = aligned.dropna()
-
-    if len(aligned) < period:
-        logger.debug(
-            "Insufficient aligned data for Williams %R(%d): %d < %d",
-            period,
-            len(aligned),
-            period,
-        )
-        return pd.Series(dtype=float, index=aligned.index)
 
     high_vals = aligned["high"]
     low_vals = aligned["low"]
@@ -197,7 +178,8 @@ def calculate_williams_r(
         williams_r,
     )
 
-    return pd.Series(williams_r, index=aligned.index)
+    # Return aligned with original close index
+    return pd.Series(williams_r, index=close.index)
 
 
 def calculate_roc(
@@ -244,22 +226,10 @@ def calculate_roc(
         )
         return pd.Series(dtype=float, index=prices.index)
 
-    # Drop NaN values for clean calculation
-    clean_prices = prices.dropna()
-
-    if len(clean_prices) < period + 1:
-        logger.debug(
-            "Insufficient clean data for ROC(%d): %d < %d",
-            period,
-            len(clean_prices),
-            period + 1,
-        )
-        return pd.Series(dtype=float, index=clean_prices.index)
-
-    # Calculate ROC: 100 × (current - price[period]) / price[period]
-    # Equivalent: 100 × (current / price[period] - 1)
-    price_shift = clean_prices.shift(period)
-    roc = 100.0 * (clean_prices - price_shift) / price_shift
+    # Calculate ROC directly on prices - NaN values propagate through shift operation
+    # ROC = 100 × (current - price[period]) / price[period]
+    price_shift = prices.shift(period)
+    roc = 100.0 * (prices - price_shift) / price_shift
 
     return roc
 

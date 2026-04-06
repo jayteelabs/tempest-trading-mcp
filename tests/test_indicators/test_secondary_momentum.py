@@ -25,18 +25,78 @@ class TestCalculateCci:
     def test_normal_case(self):
         """Test CCI calculation with sufficient data."""
         high = pd.Series(
-            [105, 110, 108, 112, 115, 113, 118, 120, 119, 122,
-             125, 123, 128, 130, 127, 132, 135, 133, 138, 140],
+            [
+                105,
+                110,
+                108,
+                112,
+                115,
+                113,
+                118,
+                120,
+                119,
+                122,
+                125,
+                123,
+                128,
+                130,
+                127,
+                132,
+                135,
+                133,
+                138,
+                140,
+            ],
             index=pd.date_range("2024-01-01", periods=20, freq="h", tz="UTC"),
         )
         low = pd.Series(
-            [95, 98, 96, 100, 103, 101, 106, 108, 107, 110,
-             113, 111, 116, 118, 115, 120, 123, 121, 126, 128],
+            [
+                95,
+                98,
+                96,
+                100,
+                103,
+                101,
+                106,
+                108,
+                107,
+                110,
+                113,
+                111,
+                116,
+                118,
+                115,
+                120,
+                123,
+                121,
+                126,
+                128,
+            ],
             index=pd.date_range("2024-01-01", periods=20, freq="h", tz="UTC"),
         )
         close = pd.Series(
-            [100, 105, 102, 107, 110, 108, 113, 115, 114, 117,
-             120, 118, 123, 125, 122, 127, 130, 128, 133, 135],
+            [
+                100,
+                105,
+                102,
+                107,
+                110,
+                108,
+                113,
+                115,
+                114,
+                117,
+                120,
+                118,
+                123,
+                125,
+                122,
+                127,
+                130,
+                128,
+                133,
+                135,
+            ],
             index=pd.date_range("2024-01-01", periods=20, freq="h", tz="UTC"),
         )
 
@@ -180,27 +240,121 @@ class TestCalculateCci:
         assert not pd.isna(cci.iloc[-1])
 
     def test_with_nan_values(self):
-        """Test CCI handles NaN values in input by dropping them."""
+        """Test CCI handles NaN values in input and preserves index alignment."""
+        index = pd.date_range("2024-01-01", periods=25, freq="h", tz="UTC")
+        # Place NaNs only in the warm-up period (first period-1 positions)
+        # so that valid CCI values exist after the warm-up window
         high = pd.Series(
-            [105, np.nan, 108, 112, 115, 113, 118, 120, 119, 122,
-             125, 123, 128, 130, 127, 132, 135, 133, 138, 140],
-            index=pd.date_range("2024-01-01", periods=20, freq="h", tz="UTC"),
+            [
+                np.nan,
+                np.nan,
+                np.nan,
+                105,
+                108,
+                112,
+                115,
+                113,
+                118,
+                120,
+                119,
+                122,
+                125,
+                123,
+                128,
+                130,
+                127,
+                132,
+                135,
+                133,
+                138,
+                140,
+                142,
+                145,
+                147,
+            ],
+            index=index,
         )
         low = pd.Series(
-            [95, 98, np.nan, 100, 103, 101, 106, 108, 107, 110,
-             113, 111, 116, 118, 115, 120, 123, 121, 126, 128],
-            index=pd.date_range("2024-01-01", periods=20, freq="h", tz="UTC"),
+            [
+                np.nan,
+                np.nan,
+                np.nan,
+                95,
+                98,
+                100,
+                103,
+                101,
+                106,
+                108,
+                107,
+                110,
+                113,
+                111,
+                116,
+                118,
+                115,
+                120,
+                123,
+                121,
+                126,
+                128,
+                130,
+                133,
+                135,
+            ],
+            index=index,
         )
         close = pd.Series(
-            [100, 105, 102, np.nan, 110, 108, 113, 115, 114, 117,
-             120, 118, 123, 125, 122, 127, 130, 128, 133, 135],
-            index=pd.date_range("2024-01-01", periods=20, freq="h", tz="UTC"),
+            [
+                np.nan,
+                np.nan,
+                np.nan,
+                100,
+                102,
+                105,
+                108,
+                106,
+                111,
+                113,
+                112,
+                115,
+                118,
+                116,
+                121,
+                123,
+                120,
+                125,
+                128,
+                126,
+                131,
+                133,
+                135,
+                138,
+                140,
+            ],
+            index=index,
         )
 
-        cci = calculate_cci(high, low, close, period=14)
+        period = 20
+        cci = calculate_cci(high, low, close, period=period)
 
-        # Should return valid series (NaN rows dropped during alignment)
+        # Must return a Series
         assert isinstance(cci, pd.Series)
+
+        # Index and length must be preserved even when inputs contain NaNs
+        pd.testing.assert_index_equal(cci.index, index)
+        assert len(cci) == len(index)
+
+        # NaNs must be present where any of the inputs had NaNs
+        nan_positions = high.isna() | low.isna() | close.isna()
+        assert cci[nan_positions].isna().all()
+
+        # For a full-period CCI, the first period-1 values should be NaN
+        # (insufficient data for a complete rolling window).
+        assert cci.iloc[: period - 1].isna().all()
+
+        # At least one valid (non-NaN) CCI value should exist after the warm-up period
+        assert cci.iloc[period - 1 :].notna().any()
 
 
 class TestCalculateWilliamsR:
@@ -209,18 +363,78 @@ class TestCalculateWilliamsR:
     def test_normal_case(self):
         """Test Williams %R calculation with sufficient data."""
         high = pd.Series(
-            [105, 110, 108, 112, 115, 113, 118, 120, 119, 122,
-             125, 123, 128, 130, 127, 132, 135, 133, 138, 140],
+            [
+                105,
+                110,
+                108,
+                112,
+                115,
+                113,
+                118,
+                120,
+                119,
+                122,
+                125,
+                123,
+                128,
+                130,
+                127,
+                132,
+                135,
+                133,
+                138,
+                140,
+            ],
             index=pd.date_range("2024-01-01", periods=20, freq="h", tz="UTC"),
         )
         low = pd.Series(
-            [95, 98, 96, 100, 103, 101, 106, 108, 107, 110,
-             113, 111, 116, 118, 115, 120, 123, 121, 126, 128],
+            [
+                95,
+                98,
+                96,
+                100,
+                103,
+                101,
+                106,
+                108,
+                107,
+                110,
+                113,
+                111,
+                116,
+                118,
+                115,
+                120,
+                123,
+                121,
+                126,
+                128,
+            ],
             index=pd.date_range("2024-01-01", periods=20, freq="h", tz="UTC"),
         )
         close = pd.Series(
-            [100, 105, 102, 107, 110, 108, 113, 115, 114, 117,
-             120, 118, 123, 125, 122, 127, 130, 128, 133, 135],
+            [
+                100,
+                105,
+                102,
+                107,
+                110,
+                108,
+                113,
+                115,
+                114,
+                117,
+                120,
+                118,
+                123,
+                125,
+                122,
+                127,
+                130,
+                128,
+                133,
+                135,
+            ],
             index=pd.date_range("2024-01-01", periods=20, freq="h", tz="UTC"),
         )
 
@@ -429,6 +643,106 @@ class TestCalculateWilliamsR:
         # Last bar: HH=120, LL=90, C=90 => %R = -100 * (120-90)/(120-90) = -100
         assert abs(williams_r.iloc[-1] - (-100)) < 0.001
 
+    def test_with_nan_values(self):
+        """Test Williams %R handles NaN values in input and preserves index alignment."""
+        index = pd.date_range("2024-01-01", periods=20, freq="h", tz="UTC")
+        high = pd.Series(
+            [
+                105,
+                np.nan,
+                108,
+                112,
+                115,
+                113,
+                118,
+                120,
+                119,
+                122,
+                125,
+                123,
+                128,
+                130,
+                127,
+                132,
+                135,
+                133,
+                138,
+                140,
+            ],
+            index=index,
+        )
+        low = pd.Series(
+            [
+                95,
+                98,
+                np.nan,
+                100,
+                103,
+                101,
+                106,
+                108,
+                107,
+                110,
+                113,
+                111,
+                116,
+                118,
+                115,
+                120,
+                123,
+                121,
+                126,
+                128,
+            ],
+            index=index,
+        )
+        close = pd.Series(
+            [
+                100,
+                101,
+                102,
+                np.nan,
+                107,
+                106,
+                111,
+                113,
+                112,
+                115,
+                118,
+                116,
+                121,
+                123,
+                120,
+                125,
+                128,
+                126,
+                131,
+                133,
+            ],
+            index=index,
+        )
+
+        period = 14
+        williams_r = calculate_williams_r(high, low, close, period=period)
+
+        # Must return a Series
+        assert isinstance(williams_r, pd.Series)
+
+        # Index and length must be preserved even when inputs contain NaNs
+        pd.testing.assert_index_equal(williams_r.index, index)
+        assert len(williams_r) == len(index)
+
+        # NaNs must be present where any of the inputs had NaNs
+        nan_positions = high.isna() | low.isna() | close.isna()
+        assert williams_r[nan_positions].isna().all()
+
+        # For a full-period Williams %R, the first period-1 values should be NaN
+        # (insufficient data for a complete rolling window).
+        assert williams_r.iloc[: period - 1].isna().all()
+
+        # At least one valid (non-NaN) Williams %R value should exist after the warm-up period
+        assert williams_r.iloc[period - 1 :].notna().any()
+
 
 class TestCalculateRoc:
     """Tests for calculate_roc function."""
@@ -436,8 +750,28 @@ class TestCalculateRoc:
     def test_normal_case(self):
         """Test ROC calculation with sufficient data."""
         prices = pd.Series(
-            [100, 102, 101, 105, 103, 107, 110, 108, 112, 115,
-             113, 117, 120, 118, 122, 125, 123, 127, 130, 128],
+            [
+                100,
+                102,
+                101,
+                105,
+                103,
+                107,
+                110,
+                108,
+                112,
+                115,
+                113,
+                117,
+                120,
+                118,
+                122,
+                125,
+                123,
+                127,
+                130,
+                128,
+            ],
             index=pd.date_range("2024-01-01", periods=20, freq="h", tz="UTC"),
         )
 
@@ -580,17 +914,53 @@ class TestCalculateRoc:
         assert not roc.iloc[1:].isna().all()
 
     def test_with_nan_values(self):
-        """Test ROC handles NaN values in input by dropping them."""
+        """Test ROC handles NaN values in input and preserves index alignment."""
+        index = pd.date_range("2024-01-01", periods=20, freq="h", tz="UTC")
         prices = pd.Series(
-            [100, np.nan, 105, 110, np.nan, 115, 120, 125, 130, 135,
-             140, 145, 150, 155, 160, 165, 170, 175, 180, 185],
-            index=pd.date_range("2024-01-01", periods=20, freq="h", tz="UTC"),
+            [
+                100,
+                np.nan,
+                105,
+                110,
+                np.nan,
+                115,
+                120,
+                125,
+                130,
+                135,
+                140,
+                145,
+                150,
+                155,
+                160,
+                165,
+                170,
+                175,
+                180,
+                185,
+            ],
+            index=index,
         )
 
-        roc = calculate_roc(prices, period=12)
+        period = 12
+        roc = calculate_roc(prices, period=period)
 
-        # Should return valid series (NaN rows dropped)
+        # Must return a Series
         assert isinstance(roc, pd.Series)
+
+        # Index and length must be preserved even when inputs contain NaNs
+        pd.testing.assert_index_equal(roc.index, index)
+        assert len(roc) == len(index)
+
+        # NaN positions in input should produce NaN in output at same positions
+        nan_positions = prices.isna()
+        assert roc[nan_positions].isna().all()
+
+        # First 'period' values should be NaN (no lookback available)
+        assert roc.iloc[:period].isna().all()
+
+        # At least one valid ROC value should exist after the warm-up period
+        assert roc.iloc[period:].notna().any()
 
 
 class TestIntegration:
