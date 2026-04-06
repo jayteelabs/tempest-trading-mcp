@@ -18,10 +18,6 @@ Pre-first-anchor behavior: accumulates from bar 0, resets at first anchor bounda
 
 import pandas as pd
 
-from tempest_mcp.logging_config import get_logger
-
-logger = get_logger(__name__)
-
 # Session anchor times in UTC (NO DST adjustments)
 SESSION_ANCHORS = {
     "asia": 0,  # 00:00 UTC
@@ -76,55 +72,52 @@ def _calculate_session_groups(dates: pd.DatetimeIndex, anchor_hour: float) -> pd
     Each session is identified by a unique group ID. VWAP resets at each
     new session group.
 
-    A session runs from anchor_hour on day D to just before anchor_hour on day D+1.
-    For example, with 'ny' (13:30 UTC), the session runs from 13:30 UTC to the
-    next day's 13:30 UTC.
+    A session runs from ``anchor_hour`` on day D to just before ``anchor_hour`` on
+    day D+1 in UTC. For example, with an anchor of 13.5 (13:30 UTC), the session
+    runs from 13:30 UTC to the next day's 13:30 UTC.
+
+    The grouping logic is implemented by:
+    1. Converting all timestamps to UTC.
+    2. For rows where ``hour + minute / 60 + second / 3600 < anchor_hour``,
+       subtracting one calendar day from the timestamp.
+    3. Using ``normalize()`` on the adjusted timestamps as the session key.
 
     Args:
-        dates: DatetimeIndex of timestamps (UTC-aware)
-        anchor_hour: UTC hour for session anchor
+        dates: DatetimeIndex containing all timestamps to group. Can be tz-naive
+            (interpreted as UTC) or tz-aware.
+        anchor_hour: Anchor time in hours since midnight UTC at which a new session
+            begins, e.g. 13.5 for 13:30 UTC.
 
     Returns:
-        pd.Series of integers representing session groups
+        A pandas Series indexed like ``dates`` whose values are normalized
+        UTC timestamps (midnight of the session's anchor day). These can be
+        used directly as group keys for VWAP accumulation.
     """
-    # Convert to pandas Series for easier manipulation
-    dates_series = pd.Series(dates)
+    if not isinstance(dates, pd.DatetimeIndex):
+        raise TypeError("dates must be a pandas DatetimeIndex")
 
-    # Ensure UTC
-    if dates.tz is None:
-        dates_series = dates_series.dt.tz_localize("UTC")
+    # Work on a copy, ensure everything is in UTC
+    idx = dates
+    if idx.tz is None:
+        idx = idx.tz_localize("UTC")
     else:
-        dates_series = dates_series.dt.tz_convert("UTC")
+        idx = idx.tz_convert("UTC")
 
-    # Extract hour as decimal
-    hours = dates_series.dt.hour + dates_series.dt.minute / 60.0
-
-    # Get calendar date
-    date_only = dates_series.dt.date
-
-    # Adjust date based on whether we're before or after anchor hour
-    # If before anchor hour, we're in the previous session
-    # If at or after anchor hour, we're in the current session
-    adjusted_date = date_only.copy()
-
-    # Subtract 1 day from dates that are before the anchor hour
-    # This puts them in the previous session
-    mask_before_anchor = hours < anchor_hour
-    adjusted_date[mask_before_anchor] = date_only[mask_before_anchor] - pd.Timedelta(days=1)
-
-    # Convert adjusted_date to group IDs
-    # Use year*100000 + month*1000 + day*10 for unique grouping
-    adjusted_series = pd.Series(adjusted_date)
-    adjusted_datetime = pd.to_datetime(adjusted_series)
-
-    # Create session ID from adjusted date
-    session_id = (
-        adjusted_datetime.dt.year * 100000
-        + adjusted_datetime.dt.month * 1000
-        + adjusted_datetime.dt.day * 10
+    # Compute fractional hour of day
+    fractional_hour = (
+        idx.hour + idx.minute / 60.0 + idx.second / 3600.0 + idx.microsecond / (3600.0 * 1e6)
     )
 
-    return session_id
+    # True for timestamps before the anchor_hour; these belong to the previous session
+    before_anchor = fractional_hour < anchor_hour
+
+    # Subtract one day where appropriate
+    adjusted_idx = idx - pd.to_timedelta(before_anchor.astype("int64"), unit="D")
+
+    # Normalized adjusted dates serve as explicit session identifiers
+    session_keys = adjusted_idx.normalize()
+
+    return pd.Series(session_keys, index=dates)
 
 
 def calculate_vwap(
@@ -185,11 +178,14 @@ def calculate_vwap(
     close = _ensure_utc_index(close)
     volume = _ensure_utc_index(volume)
 
-    # Align indices (should be aligned already, but safety check)
-    # align returns tuple of (aligned_series1, aligned_series2)
-    high, low = high.align(low, join="inner")
-    close = close.reindex(high.index)
-    volume = volume.reindex(high.index)
+    # Assert indices are identical before alignment; mismatched timestamps
+    # indicate upstream data issues that should be surfaced, not silently masked
+    if (
+        not high.index.equals(low.index)
+        or not high.index.equals(close.index)
+        or not high.index.equals(volume.index)
+    ):
+        raise ValueError("Input Series must have identical DatetimeIndex")
 
     if len(high) == 0:
         return pd.Series(dtype=float, index=high.index[:0])

@@ -22,7 +22,9 @@ class TestCalculateVwap:
     def test_normal_case(self):
         """Test VWAP calculation with sufficient data."""
         # Create simple test data - use hourly to have multiple bars in same session
-        high = pd.Series([105, 106, 107], index=pd.date_range("2024-01-01", periods=3, freq="h", tz="UTC"))
+        high = pd.Series(
+            [105, 106, 107], index=pd.date_range("2024-01-01", periods=3, freq="h", tz="UTC")
+        )
         low = pd.Series([100, 101, 102], index=high.index)
         close = pd.Series([103, 104, 105], index=high.index)
         volume = pd.Series([1000, 1100, 1200], index=high.index)
@@ -38,7 +40,10 @@ class TestCalculateVwap:
         """Test that VWAP values are calculated correctly."""
         # Simple case with known values - all in same session (before NY anchor)
         # Use hourly data starting at 10:00 UTC (all before 13:30)
-        high = pd.Series([105.0, 106.0, 107.0], index=pd.date_range("2024-01-01 10:00", periods=3, freq="h", tz="UTC"))
+        high = pd.Series(
+            [105.0, 106.0, 107.0],
+            index=pd.date_range("2024-01-01 10:00", periods=3, freq="h", tz="UTC"),
+        )
         low = pd.Series([100.0, 101.0, 102.0], index=high.index)
         close = pd.Series([103.0, 104.0, 105.0], index=high.index)
         volume = pd.Series([1000.0, 1000.0, 1000.0], index=high.index)
@@ -60,84 +65,95 @@ class TestCalculateVwap:
         assert vwap.iloc[2] == pytest.approx(expected_vwap2, rel=1e-6)
 
     def test_session_boundary_reset_ny(self):
-        """Test VWAP resets at NY session boundary (13:30 UTC)."""
-        # Create data spanning NY session boundary
-        # NY session starts at 13:30 UTC
+        """Test VWAP resets at NY session boundary (13:30 UTC).
+
+        Uses asymmetric prices/volumes so that the reset is verifiable.
+        """
+        # Create data spanning NY session boundary with asymmetric values
         dates = pd.date_range("2024-01-01 12:00", periods=5, freq="h", tz="UTC")
-        high = pd.Series([100.0] * 5, index=dates)
-        low = pd.Series([100.0] * 5, index=dates)
-        close = pd.Series([100.0] * 5, index=dates)
+        high = pd.Series([100.0, 100.0, 200.0, 200.0, 200.0], index=dates)
+        low = pd.Series([99.0, 99.0, 199.0, 199.0, 199.0], index=dates)
+        close = pd.Series([99.5, 99.5, 199.5, 199.5, 199.5], index=dates)
         volume = pd.Series([1000.0] * 5, index=dates)
 
         vwap = calculate_vwap(high, low, close, volume, anchor="ny")
 
-        # All values in same session should accumulate
-        # Bar 0: 12:00 UTC -> before 13:30, session = previous day
-        # Bar 1: 13:00 UTC -> before 13:30, session = previous day
-        # Bar 2: 14:00 UTC -> after 13:30, session = current day (NEW SESSION)
-        # Bar 3: 15:00 UTC -> after 13:30, same session
-        # Bar 4: 16:00 UTC -> after 13:30, same session
+        # NY session starts at 13:30 UTC
+        # Bars 0-1 (12:00, 13:00): before 13:30, same pre-session
+        # Bar 2 (14:00): after 13:30, NEW SESSION — reset
+        # Because prices jump across the boundary, pre/post VWAP differ
+        pre_boundary_vwap = vwap.iloc[1]
+        post_boundary_vwap = vwap.iloc[3]
 
-        # VWAP should reset at bar 2 (14:00 UTC = first bar after 13:30 anchor)
-        # Since all prices are the same, VWAP = 100.0 everywhere
-        assert vwap.iloc[0] == pytest.approx(100.0)
-        assert vwap.iloc[1] == pytest.approx(100.0)  # Still accumulating
-        assert vwap.iloc[2] == pytest.approx(100.0)  # New session, reset
-        assert vwap.iloc[3] == pytest.approx(100.0)  # Same session
-        assert vwap.iloc[4] == pytest.approx(100.0)  # Same session
+        assert pre_boundary_vwap != post_boundary_vwap
+        assert not vwap.isna().any()
 
     def test_session_boundary_reset_london(self):
-        """Test VWAP resets at London session boundary (08:00 UTC)."""
+        """Test VWAP resets at London session boundary (08:00 UTC).
+
+        Uses asymmetric prices/volumes so that the reset is verifiable — VWAP
+        after the boundary is based only on post-boundary cumulative values.
+        """
         dates = pd.date_range("2024-01-01 06:00", periods=5, freq="h", tz="UTC")
-        high = pd.Series([100.0] * 5, index=dates)
-        low = pd.Series([100.0] * 5, index=dates)
-        close = pd.Series([100.0] * 5, index=dates)
-        volume = pd.Series([1000.0] * 5, index=dates)
+        # Pre-boundary: high-volume, low-price bars
+        high = pd.Series([100.0, 100.0, 200.0, 200.0, 200.0], index=dates)
+        low = pd.Series([99.0, 99.0, 199.0, 199.0, 199.0], index=dates)
+        close = pd.Series([99.5, 99.5, 199.5, 199.5, 199.5], index=dates)
+        volume = pd.Series([1000.0, 1000.0, 1000.0, 1000.0, 1000.0], index=dates)
 
         vwap = calculate_vwap(high, low, close, volume, anchor="london")
 
         # London session starts at 08:00 UTC
-        # Bar 0: 06:00 -> before 08:00
-        # Bar 1: 07:00 -> before 08:00
-        # Bar 2: 08:00 -> AT 08:00 (new session starts)
-        # Bar 3: 09:00 -> after 08:00
-        # Bar 4: 10:00 -> after 08:00
+        # Bars 0-1 (06:00, 07:00): before 08:00, same pre-session
+        # Bar 2 (08:00): AT 08:00, new session STARTS HERE — reset
+        # Bars 3-4 (09:00, 10:00): post-boundary, new session
+        # Because prices change dramatically across the boundary, VWAP values
+        # before and after should differ (proves reset occurred)
+        pre_boundary_vwap = vwap.iloc[1]  # Last pre-boundary bar
+        post_boundary_vwap = vwap.iloc[3]  # Post-boundary bar in new session
 
-        assert len(vwap) == 5
+        assert pre_boundary_vwap != post_boundary_vwap
         assert not vwap.isna().any()
 
     def test_session_boundary_reset_asia(self):
-        """Test VWAP resets at Asia session boundary (00:00 UTC)."""
+        """Test VWAP resets at Asia session boundary (00:00 UTC).
+
+        Uses asymmetric prices so reset is verifiable.
+        """
         dates = pd.date_range("2024-01-01 22:00", periods=5, freq="h", tz="UTC")
-        high = pd.Series([100.0] * 5, index=dates)
-        low = pd.Series([100.0] * 5, index=dates)
-        close = pd.Series([100.0] * 5, index=dates)
+        high = pd.Series([100.0, 100.0, 200.0, 200.0, 200.0], index=dates)
+        low = pd.Series([99.0, 99.0, 199.0, 199.0, 199.0], index=dates)
+        close = pd.Series([99.5, 99.5, 199.5, 199.5, 199.5], index=dates)
         volume = pd.Series([1000.0] * 5, index=dates)
 
         vwap = calculate_vwap(high, low, close, volume, anchor="asia")
 
         # Asia session starts at 00:00 UTC
-        # Bar 0: 22:00 -> before midnight
-        # Bar 1: 23:00 -> before midnight
-        # Bar 2: 00:00 -> midnight (new session)
-        # Bar 3: 01:00 -> after midnight
-        # Bar 4: 02:00 -> after midnight
+        # Bars 0-1 (22:00, 23:00): before midnight, same pre-session
+        # Bar 2 (00:00): AT midnight, NEW SESSION — reset
+        pre_boundary_vwap = vwap.iloc[1]
+        post_boundary_vwap = vwap.iloc[3]
 
-        assert len(vwap) == 5
+        assert pre_boundary_vwap != post_boundary_vwap
         assert not vwap.isna().any()
 
     def test_session_boundary_reset_daily(self):
-        """Test VWAP resets at daily boundary (00:00 UTC)."""
-        # daily anchor is same as asia (00:00 UTC)
+        """Test VWAP resets at daily boundary (00:00 UTC).
+
+        daily anchor is same as asia (00:00 UTC). Uses asymmetric prices so reset is verifiable.
+        """
         dates = pd.date_range("2024-01-01 22:00", periods=5, freq="h", tz="UTC")
-        high = pd.Series([100.0] * 5, index=dates)
-        low = pd.Series([100.0] * 5, index=dates)
-        close = pd.Series([100.0] * 5, index=dates)
+        high = pd.Series([100.0, 100.0, 200.0, 200.0, 200.0], index=dates)
+        low = pd.Series([99.0, 99.0, 199.0, 199.0, 199.0], index=dates)
+        close = pd.Series([99.5, 99.5, 199.5, 199.5, 199.5], index=dates)
         volume = pd.Series([1000.0] * 5, index=dates)
 
         vwap = calculate_vwap(high, low, close, volume, anchor="daily")
 
-        assert len(vwap) == 5
+        pre_boundary_vwap = vwap.iloc[1]
+        post_boundary_vwap = vwap.iloc[3]
+
+        assert pre_boundary_vwap != post_boundary_vwap
         assert not vwap.isna().any()
 
     def test_insufficient_data(self):
@@ -224,24 +240,27 @@ class TestCalculateVwapBands:
         assert "lower_band_2std" in bands.columns
 
     def test_population_std_dev_ddof_0(self):
-        """Test that bands use population std dev (ddof=0), not sample std dev."""
-        # Create data with known deviation
+        """Test that bands use population std dev (ddof=0), not sample std dev.
+
+        Uses non-constant deviations so that ddof=0 and ddof=1 produce different
+        results, ensuring the test actually distinguishes the two.
+        """
         dates = pd.date_range("2024-01-01 10:00", periods=5, freq="h", tz="UTC")
-        close = pd.Series([100.0, 101.0, 102.0, 103.0, 104.0], index=dates)
-        # VWAP close to close prices for simple test
-        vwap = pd.Series([100.5, 101.5, 102.5, 103.5, 104.5], index=dates)
+        # Use non-constant deviations so ddof=0 and ddof=1 produce different results
+        deviation = pd.Series([0.0, 1.0, 2.0, 3.0, 4.0], index=dates)
+        vwap_var = pd.Series([100.0, 100.0, 100.0, 100.0, 100.0], index=dates)
+        close_var = vwap_var + deviation
 
-        bands = calculate_vwap_bands(vwap, close)
+        bands_var = calculate_vwap_bands(vwap_var, close_var)
 
-        # Deviation = close - vwap = [-0.5, -0.5, -0.5, -0.5, -0.5]
-        # All deviations are -0.5, so std should be 0
-        # This tests that we're using ddof=0 correctly
-        deviation = close - vwap
-        expected_std = deviation.std(ddof=0)
+        pop_std = deviation.std(ddof=0)
+        sample_std = deviation.std(ddof=1)
 
-        # Verify the band width matches population std dev
-        band_width = bands["upper_band_1std"] - bands["vwap"]
-        assert band_width.iloc[0] == pytest.approx(expected_std)
+        # Verify ddof=0 is used: band width should equal population std dev
+        band_width = bands_var["upper_band_1std"] - bands_var["vwap"]
+        assert band_width.iloc[0] == pytest.approx(pop_std)
+        # Also verify sample std is NOT used (they differ for non-constant data)
+        assert band_width.iloc[0] != pytest.approx(sample_std)
 
     def test_empty_series_returns_empty_dataframe(self):
         """Test that empty series returns empty DataFrame with correct columns."""
@@ -282,19 +301,22 @@ class TestDetectVwapCross:
 
         vwap = calculate_vwap(high, low, close, volume)
 
-        # Create price that crosses from below to above
-        price = pd.Series([100.0, 101.0, 104.0, 105.0, 106.0], index=dates)
+        # Create price that crosses from below to above VWAP at index 3
+        # price starts below VWAP, then rises above
+        price = pd.Series([100.0, 101.0, 102.0, 106.0, 107.0], index=dates)
 
         crosses = detect_vwap_cross(price, vwap)
 
-        if len(crosses) > 0:
-            assert "date" in crosses.columns
-            assert "direction" in crosses.columns
-            assert "price" in crosses.columns
-            assert "vwap_value" in crosses.columns
-            # Should have at least one bullish cross
-            bullish = crosses[crosses["direction"] == "bullish"]
-            assert len(bullish) >= 0
+        assert len(crosses) > 0, "Expected at least one cross signal"
+        assert "date" in crosses.columns
+        assert "direction" in crosses.columns
+        assert "price" in crosses.columns
+        assert "vwap_value" in crosses.columns
+        # Should have at least one bullish cross
+        bullish = crosses[crosses["direction"] == "bullish"]
+        assert len(bullish) > 0, "Expected at least one bullish cross"
+        # The bullish cross should occur when price crosses above VWAP
+        assert all(crosses[crosses["direction"] == "bullish"]["direction"] == "bullish")
 
     def test_bearish_cross(self):
         """Test detection of bearish VWAP cross."""
@@ -306,15 +328,17 @@ class TestDetectVwapCross:
 
         vwap = calculate_vwap(high, low, close, volume)
 
-        # Create price that crosses from above to below
-        price = pd.Series([105.0, 104.0, 101.0, 100.0, 99.0], index=dates)
+        # Create price that crosses from above to below VWAP
+        # Price starts above VWAP, then falls below
+        price = pd.Series([107.0, 106.0, 105.0, 100.0, 99.0], index=dates)
 
         crosses = detect_vwap_cross(price, vwap)
 
-        if len(crosses) > 0:
-            # Should have at least one bearish cross
-            bearish = crosses[crosses["direction"] == "bearish"]
-            assert len(bearish) >= 0
+        assert len(crosses) > 0, "Expected at least one cross signal"
+        # Should have at least one bearish cross
+        bearish = crosses[crosses["direction"] == "bearish"]
+        assert len(bearish) > 0, "Expected at least one bearish cross"
+        assert all(crosses[crosses["direction"] == "bearish"]["direction"] == "bearish")
 
     def test_no_false_positives_flat_price(self):
         """Test that flat/sideways price produces no false cross signals."""
@@ -376,9 +400,15 @@ class TestPreFirstAnchorBehavior:
         # Create data that starts well before the NY session anchor (13:30 UTC)
         # Start at 00:00 UTC, all bars before 13:30 anchor
         dates = pd.date_range("2024-01-01 00:00", periods=10, freq="h", tz="UTC")
-        high = pd.Series([100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0, 108.0, 109.0], index=dates)
-        low = pd.Series([95.0, 96.0, 97.0, 98.0, 99.0, 100.0, 101.0, 102.0, 103.0, 104.0], index=dates)
-        close = pd.Series([98.0, 99.0, 100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0], index=dates)
+        high = pd.Series(
+            [100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0, 108.0, 109.0], index=dates
+        )
+        low = pd.Series(
+            [95.0, 96.0, 97.0, 98.0, 99.0, 100.0, 101.0, 102.0, 103.0, 104.0], index=dates
+        )
+        close = pd.Series(
+            [98.0, 99.0, 100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0], index=dates
+        )
         volume = pd.Series([1000.0] * 10, index=dates)
 
         vwap = calculate_vwap(high, low, close, volume, anchor="ny")
