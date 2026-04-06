@@ -48,6 +48,7 @@ def calculate_obv(
 
     Raises:
         ValueError: If close and volume have different lengths.
+        ValueError: If close and volume have different DatetimeIndex values.
 
     Example:
         >>> close = pd.Series([100, 102, 101, 103], index=pd.date_range('2024-01-01', periods=4, tz='UTC'))
@@ -68,6 +69,10 @@ def calculate_obv(
     if isinstance(volume.index, pd.DatetimeIndex) and volume.index.tz is None:
         volume = volume.copy()
         volume.index = volume.index.tz_localize("UTC")
+
+    # Validate indices are identical before alignment
+    if not close.index.equals(volume.index):
+        raise ValueError("close and volume must have the same DatetimeIndex")
 
     # Align indices
     aligned = pd.DataFrame({"close": close, "volume": volume}, index=close.index)
@@ -217,7 +222,10 @@ def calculate_mfi(
             # If equal, no flow added
 
         # Calculate Money Ratio
-        if negative_flow == 0:
+        if positive_flow == 0 and negative_flow == 0:
+            # Neutral - no flow in either direction
+            mfi.iloc[i] = 50.0
+        elif negative_flow == 0:
             # No selling pressure - MFI = 100
             mfi.iloc[i] = 100.0
         elif positive_flow == 0:
