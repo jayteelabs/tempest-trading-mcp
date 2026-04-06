@@ -1,12 +1,7 @@
 """Unit tests for MACD, ADX, Stochastic indicator engine."""
 
-import os
-import sys
-
 import pandas as pd
 import pytest
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../src"))
 
 from tempest_mcp.indicators.momentum.macd_adx_stoch import (
     ADX_DEFAULT_PERIOD,
@@ -41,6 +36,9 @@ class TestCalculateMacd:
         assert len(macd_data["signal"]) == len(prices)
         assert len(macd_data["histogram"]) == len(prices)
         assert macd_data["macd"].index.equals(prices.index)
+        # Verify UTC-aware index is preserved
+        assert macd_data["macd"].index.tz is not None
+        assert str(macd_data["macd"].index.tz) == "UTC"
 
     def test_insufficient_data(self):
         """Test MACD returns empty Series when data is insufficient."""
@@ -137,6 +135,9 @@ class TestCalculateAdx:
         assert "minus_di" in adx_data
         assert len(adx_data["adx"]) == len(close)
         assert adx_data["adx"].index.equals(close.index)
+        # Verify UTC-aware index is preserved
+        assert adx_data["adx"].index.tz is not None
+        assert str(adx_data["adx"].index.tz) == "UTC"
 
     def test_insufficient_data(self):
         """Test ADX returns empty Series when data is insufficient."""
@@ -231,6 +232,52 @@ class TestCalculateAdx:
         assert (valid_minus_di >= 0).all()
         assert (valid_minus_di <= 100).all()
 
+        # ADX should also be in [0, 100]
+        valid_adx = adx_data["adx"].dropna()
+        assert (valid_adx >= 0).all()
+        assert (valid_adx <= 100).all()
+
+    def test_adx_with_nan_in_input(self):
+        """Test ADX handles NaN in one of high/low/close."""
+        high = pd.Series(
+            [105.0, 110.0, None, 115.0, 120.0] * 10,
+            index=pd.date_range("2024-01-01", periods=50, freq="h", tz="UTC"),
+        )
+        low = pd.Series(
+            [100.0, 105.0, 103.0, 110.0, 115.0] * 10,
+            index=pd.date_range("2024-01-01", periods=50, freq="h", tz="UTC"),
+        )
+        close = pd.Series(
+            [103.0, 108.0, 106.0, 113.0, 118.0] * 10,
+            index=pd.date_range("2024-01-01", periods=50, freq="h", tz="UTC"),
+        )
+
+        adx_data = calculate_adx(high, low, close, period=14)
+
+        # After dropna(), should have fewer bars; should handle gracefully
+        valid_adx = adx_data["adx"].dropna()
+        if len(valid_adx) > 0:
+            assert adx_data["adx"].index.tz is not None
+
+    def test_adx_misaligned_indexes(self):
+        """Test ADX handles slightly misaligned indexes from high/low/close."""
+        base_index = pd.date_range("2024-01-01", periods=50, freq="h", tz="UTC")
+        high = pd.Series(range(105, 155), index=base_index)
+        # low has a slightly different index (shifted timestamps)
+        low_index = pd.date_range("2024-01-01 00:30", periods=50, freq="h", tz="UTC")
+        low = pd.Series(range(100, 150), index=low_index)
+        close = pd.Series(range(103, 153), index=base_index)
+
+        adx_data = calculate_adx(high, low, close, period=14)
+
+        # Should handle misalignment gracefully via dropna() and return aligned output
+        # If dropna leaves insufficient data, returns empty Series (RangeIndex)
+        # Otherwise returns with proper DatetimeIndex with UTC timezone
+        if len(adx_data["adx"]) > 0:
+            assert adx_data["adx"].index.tz is not None
+            assert str(adx_data["adx"].index.tz) == "UTC"
+        # Either way, should not raise an exception
+
 
 class TestCalculateStochastic:
     """Tests for calculate_stochastic function."""
@@ -257,6 +304,9 @@ class TestCalculateStochastic:
         assert len(stoch_data["percent_k"]) == len(close)
         assert len(stoch_data["percent_d"]) == len(close)
         assert stoch_data["percent_k"].index.equals(close.index)
+        # Verify UTC-aware index is preserved
+        assert stoch_data["percent_k"].index.tz is not None
+        assert str(stoch_data["percent_k"].index.tz) == "UTC"
 
     def test_insufficient_data(self):
         """Test Stochastic returns empty Series when data is insufficient."""
@@ -306,21 +356,108 @@ class TestCalculateStochastic:
         """Test that Stochastic output is clamped to [0, 100]."""
         # Create extreme price moves to potentially exceed bounds
         high = pd.Series(
-            [100, 200, 100, 200, 100, 200, 100, 200, 100, 200,
-             100, 200, 100, 200, 100, 200, 100, 200, 100, 200,
-             100, 200, 100, 200, 100, 200, 100, 200, 100, 200],
+            [
+                100,
+                200,
+                100,
+                200,
+                100,
+                200,
+                100,
+                200,
+                100,
+                200,
+                100,
+                200,
+                100,
+                200,
+                100,
+                200,
+                100,
+                200,
+                100,
+                200,
+                100,
+                200,
+                100,
+                200,
+                100,
+                200,
+                100,
+                200,
+                100,
+                200,
+            ],
             index=pd.date_range("2024-01-01", periods=30, freq="h", tz="UTC"),
         )
         low = pd.Series(
-            [90, 95, 90, 95, 90, 95, 90, 95, 90, 95,
-             90, 95, 90, 95, 90, 95, 90, 95, 90, 95,
-             90, 95, 90, 95, 90, 95, 90, 95, 90, 95],
+            [
+                90,
+                95,
+                90,
+                95,
+                90,
+                95,
+                90,
+                95,
+                90,
+                95,
+                90,
+                95,
+                90,
+                95,
+                90,
+                95,
+                90,
+                95,
+                90,
+                95,
+                90,
+                95,
+                90,
+                95,
+                90,
+                95,
+                90,
+                95,
+                90,
+                95,
+            ],
             index=pd.date_range("2024-01-01", periods=30, freq="h", tz="UTC"),
         )
         close = pd.Series(
-            [95, 195, 95, 195, 95, 195, 95, 195, 95, 195,
-             95, 195, 95, 195, 95, 195, 95, 195, 95, 195,
-             95, 195, 95, 195, 95, 195, 95, 195, 95, 195],
+            [
+                95,
+                195,
+                95,
+                195,
+                95,
+                195,
+                95,
+                195,
+                95,
+                195,
+                95,
+                195,
+                95,
+                195,
+                95,
+                195,
+                95,
+                195,
+                95,
+                195,
+                95,
+                195,
+                95,
+                195,
+                95,
+                195,
+                95,
+                195,
+                95,
+                195,
+            ],
             index=pd.date_range("2024-01-01", periods=30, freq="h", tz="UTC"),
         )
 
@@ -352,10 +489,32 @@ class TestCalculateStochastic:
         stoch_data = calculate_stochastic(high, low, close, k_period=14, d_period=3, smooth_k=3)
 
         assert len(stoch_data["percent_k"]) == len(close)
-        # For flat prices, all highs/lows/close are the same, %K should be 50 (neutral)
+        # For flat prices, all highs/lows/close are the same, range is 0
+        # All sufficiently-initialized %K values should be 50 (neutral)
         valid_k = stoch_data["percent_k"].dropna()
-        # When range is 0, we use 50 as neutral value
-        assert (valid_k == 50.0).any() or len(valid_k) == 0
+        assert (valid_k == 50.0).all() or len(valid_k) == 0
+
+    def test_stochastic_with_nan_in_input(self):
+        """Test Stochastic handles NaN in one of high/low/close."""
+        high = pd.Series(
+            [105.0, 110.0, None, 115.0, 120.0] * 10,
+            index=pd.date_range("2024-01-01", periods=50, freq="h", tz="UTC"),
+        )
+        low = pd.Series(
+            [100.0, 105.0, 103.0, 110.0, 115.0] * 10,
+            index=pd.date_range("2024-01-01", periods=50, freq="h", tz="UTC"),
+        )
+        close = pd.Series(
+            [103.0, 108.0, 106.0, 113.0, 118.0] * 10,
+            index=pd.date_range("2024-01-01", periods=50, freq="h", tz="UTC"),
+        )
+
+        stoch_data = calculate_stochastic(high, low, close, k_period=14, d_period=3, smooth_k=3)
+
+        # After dropna(), should have fewer bars; should handle gracefully
+        valid_k = stoch_data["percent_k"].dropna()
+        if len(valid_k) > 0:
+            assert stoch_data["percent_k"].index.tz is not None
 
     def test_default_periods(self):
         """Test that default Stochastic parameters are correct."""

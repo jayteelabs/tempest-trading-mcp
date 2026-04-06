@@ -346,9 +346,11 @@ def calculate_stochastic(
     # Calculate raw %K
     # %K = 100 * (Close - LowestLow) / (HighestHigh - LowestLow)
     range_val = highest_high - lowest_low
-    # Avoid division by zero
+    # Avoid division by zero - only fill 50.0 where range is exactly 0
+    # Do NOT fill warm-up NaNs (from incomplete rolling windows) - keep those as NaN
     percent_k_raw = 100.0 * (close_vals - lowest_low) / range_val.where(range_val != 0, pd.NA)
-    percent_k_raw = percent_k_raw.fillna(50.0)  # Neutral value when range is 0
+    # Only assign neutral 50 for zero-range bars, not for warm-up periods
+    percent_k_raw = percent_k_raw.where(~((percent_k_raw.isna()) & (range_val == 0)), 50.0)
 
     # Apply smoothing to %K if smooth_k > 1
     if smooth_k > 1:

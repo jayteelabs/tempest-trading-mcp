@@ -67,3 +67,4 @@ known-first-party = ["tempest_mcp"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-v --tb=short"
+pythonpath = ["src"]

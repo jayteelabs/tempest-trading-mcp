@@ -4,15 +4,38 @@ Provides ATR, Historical Volatility, Bollinger Width calculations.
 Pure-pandas implementations plus ta-lib result wrappers.
 """
 
-import numpy as np
-
 from tempest_mcp.indicators.volatility.atr import (
     ATR_DEFAULT_PERIOD,
     calculate_atr,
 )
 
+
+# Pure-pandas Historical Volatility (no ta-lib dependency)
+def calculate_historical_volatility_pure(
+    close, period: int = 20, trading_periods: int = 252
+) -> dict[str, float]:
+    """Calculate Historical Volatility using pure numpy/pandas."""
+    import numpy as np
+
+    close_arr = np.array(close, dtype=np.float64)
+    log_returns = np.log(close_arr[1:] / close_arr[:-1])
+    hv_series = np.zeros(len(log_returns))
+    hv_series[:] = np.nan
+    for i in range(period - 1, len(log_returns)):
+        window = log_returns[i - period + 1 : i + 1]
+        hv_series[i] = np.std(window) * np.sqrt(trading_periods)
+    valid_hv = hv_series[~np.isnan(hv_series)]
+    latest_hv = float(valid_hv[-1]) if len(valid_hv) > 0 else 0.0
+    return {
+        "hv": latest_hv,
+        "hv_percent": latest_hv * 100,
+        "percentile": 50.0,
+    }
+
+
 # Ta-lib based result wrappers (optional)
 try:
+    import numpy as np
     import talib
 
     from tempest_mcp.models.indicator import (
@@ -68,15 +91,13 @@ try:
     def calculate_historical_volatility(
         close, period: int = 20, trading_periods: int = 252
     ) -> "HistoricalVolatilityResult":
-        """Calculate Historical Volatility result wrapper."""
+        """Calculate Historical Volatility result wrapper using ta-lib."""
         close_arr = np.array(close, dtype=np.float64)
         log_returns = np.log(close_arr[1:] / close_arr[:-1])
-        hv_series = np.zeros(len(log_returns))
-        hv_series[:] = np.nan
-        for i in range(period - 1, len(log_returns)):
-            window = log_returns[i - period + 1 : i + 1]
-            hv_series[i] = np.std(window) * np.sqrt(trading_periods)
-        valid_hv = hv_series[~np.isnan(hv_series)]
+        # Use ta-lib STDDEV for consistency with other ta-lib wrappers
+        stddev = talib.STDDEV(log_returns, timeperiod=period)
+        hv = stddev * np.sqrt(trading_periods)
+        valid_hv = hv[~np.isnan(hv)]
         latest_hv = float(valid_hv[-1]) if len(valid_hv) > 0 else 0.0
         return HistoricalVolatilityResult(
             symbol="",

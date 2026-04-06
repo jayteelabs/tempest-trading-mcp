@@ -40,7 +40,6 @@ def calculate_atr(
     Returns:
         pd.Series containing ATR values, aligned with input index.
         Returns empty Series if:
-            - period <= 0
             - input length is 0
             - input length < period
 
@@ -104,10 +103,15 @@ def calculate_atr(
     # First TR value will be NaN (no previous close), use H-L for first bar
     tr.iloc[0] = high_vals.iloc[0] - low_vals.iloc[0]
 
-    # Calculate ATR using Wilder's smoothing
-    # Wilder's smoothing: ATR[t] = (ATR[t-1] * (period - 1) + TR[t]) / period
-    # This is equivalent to ewm(alpha=1/period, adjust=False)
-    atr = tr.ewm(alpha=1.0 / period, adjust=False).mean()
+    # Calculate ATR using Wilder's smoothing with SMA seed
+    # First ATR = SMA of first `period` TR values
+    # Subsequent: ATR[t] = (ATR[t-1] * (period - 1) + TR[t]) / period
+    # This is mathematically equivalent to ewm(alpha=1/period, adjust=False)
+    # but seeded with an SMA of the first `period` values (Wilder's original method)
+    atr = pd.Series(index=tr.index, dtype=float)
+    atr.iloc[period - 1] = tr.iloc[:period].mean()  # SMA seed
+    for i in range(period, len(tr)):
+        atr.iloc[i] = (atr.iloc[i - 1] * (period - 1) + tr.iloc[i]) / period
 
     return atr
 
