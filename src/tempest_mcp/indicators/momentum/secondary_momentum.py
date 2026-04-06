@@ -26,7 +26,7 @@ def calculate_cci(
     high: pd.Series,
     low: pd.Series,
     close: pd.Series,
-    period: int = 20,
+    period: int = CCI_DEFAULT_PERIOD,
 ) -> pd.Series:
     """Calculate Commodity Channel Index (CCI).
 
@@ -41,7 +41,7 @@ def calculate_cci(
 
     Returns:
         pd.Series containing CCI values, aligned with input index.
-        Returns empty Series if period <= 0 or input is empty.
+        Returns empty Series if input is empty.
         Returns Series of NaN if input length < period (insufficient data).
 
     Raises:
@@ -103,7 +103,7 @@ def calculate_williams_r(
     high: pd.Series,
     low: pd.Series,
     close: pd.Series,
-    period: int = 14,
+    period: int = WILLIAMS_R_DEFAULT_PERIOD,
 ) -> pd.Series:
     """Calculate Williams %R (Williams Percent Range).
 
@@ -120,7 +120,7 @@ def calculate_williams_r(
 
     Returns:
         pd.Series containing Williams %R values (-100 to 0), aligned with input index.
-        Returns empty Series if period <= 0 or input is empty.
+        Returns empty Series if input is empty.
         Returns Series of NaN if input length < period (insufficient data).
         Returns Series of -50.0 where highest high equals lowest low (flat market).
 
@@ -184,7 +184,7 @@ def calculate_williams_r(
 
 def calculate_roc(
     prices: pd.Series,
-    period: int = 12,
+    period: int = ROC_DEFAULT_PERIOD,
 ) -> pd.Series:
     """Calculate Rate of Change (ROC).
 
@@ -197,7 +197,7 @@ def calculate_roc(
 
     Returns:
         pd.Series containing ROC values (as percentage), aligned with input index.
-        Returns empty Series if period <= 0 or input is empty.
+        Returns empty Series if input is empty.
         Returns Series with first 'period' values as NaN if input length < period + 1
         (insufficient data for lookback).
 
