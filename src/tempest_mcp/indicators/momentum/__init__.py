@@ -25,6 +25,14 @@ from tempest_mcp.indicators.momentum.rsi import (
     detect_rsi_divergence,
     detect_rsi_extremes,
 )
+from tempest_mcp.indicators.momentum.secondary_momentum import (
+    CCI_DEFAULT_PERIOD,
+    ROC_DEFAULT_PERIOD,
+    WILLIAMS_R_DEFAULT_PERIOD,
+    calculate_cci,
+    calculate_roc,
+    calculate_williams_r,
+)
 
 # Optional ta-lib based result wrappers
 try:
@@ -168,6 +176,10 @@ __all__ = [
     "calculate_adx",
     # Stochastic engine functions (pure pandas, always available)
     "calculate_stochastic",
+    # CCI, Williams %R, ROC engine functions (pure pandas, always available)
+    "calculate_cci",
+    "calculate_williams_r",
+    "calculate_roc",
     # Result wrappers (ta-lib based, optional)
     "calculate_rsi_result",
     "calculate_macd_result",
@@ -185,4 +197,7 @@ __all__ = [
     "STOCH_DEFAULT_K_PERIOD",
     "STOCH_DEFAULT_D_PERIOD",
     "STOCH_DEFAULT_SMOOTH_K",
+    "CCI_DEFAULT_PERIOD",
+    "WILLIAMS_R_DEFAULT_PERIOD",
+    "ROC_DEFAULT_PERIOD",
 ]
