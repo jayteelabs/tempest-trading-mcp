@@ -285,6 +285,32 @@ class TestCalculateVwapBands:
         assert "upper_band_1std" in bands.columns
         assert "upper_band_2std" in bands.columns
 
+    def test_std_dev_must_be_2_element_tuple(self):
+        """Test that std_dev must be a 2-element tuple."""
+        dates = pd.date_range("2024-01-01 10:00", periods=5, freq="h", tz="UTC")
+        close = pd.Series([100.0, 101.0, 102.0, 103.0, 104.0], index=dates)
+        vwap = pd.Series([100.0, 101.0, 102.0, 103.0, 104.0], index=dates)
+
+        # 1-element tuple should raise
+        with pytest.raises(ValueError, match="must be a tuple of 2"):
+            calculate_vwap_bands(vwap, close, std_dev=(1.5,))
+
+        # 3-element tuple should raise
+        with pytest.raises(ValueError, match="must be a tuple of 2"):
+            calculate_vwap_bands(vwap, close, std_dev=(1.0, 2.0, 3.0))
+
+    def test_std_dev_multipliers_must_be_positive(self):
+        """Test that std_dev multiplier values must be positive."""
+        dates = pd.date_range("2024-01-01 10:00", periods=5, freq="h", tz="UTC")
+        close = pd.Series([100.0, 101.0, 102.0, 103.0, 104.0], index=dates)
+        vwap = pd.Series([100.0, 101.0, 102.0, 103.0, 104.0], index=dates)
+
+        with pytest.raises(ValueError, match="must be positive"):
+            calculate_vwap_bands(vwap, close, std_dev=(-1.0, 2.0))
+
+        with pytest.raises(ValueError, match="must be positive"):
+            calculate_vwap_bands(vwap, close, std_dev=(0.0, 2.0))
+
 
 class TestDetectVwapCross:
     """Tests for detect_vwap_cross function."""

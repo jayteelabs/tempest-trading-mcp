@@ -56,7 +56,7 @@ def _ensure_utc_index(series: pd.Series) -> pd.Series:
         pd.Series with UTC-aware DatetimeIndex
     """
     if not isinstance(series.index, pd.DatetimeIndex):
-        raise ValueError("Series index must be a DatetimeIndex")
+        raise TypeError("Series index must be a DatetimeIndex")
 
     if series.index.tz is None:
         # Treat as UTC if tz-naive
@@ -75,6 +75,12 @@ def _calculate_session_groups(dates: pd.DatetimeIndex, anchor_hour: float) -> pd
     A session runs from ``anchor_hour`` on day D to just before ``anchor_hour`` on
     day D+1 in UTC. For example, with an anchor of 13.5 (13:30 UTC), the session
     runs from 13:30 UTC to the next day's 13:30 UTC.
+
+    Note: Bars exactly at ``anchor_hour`` (e.g., 13:30:00.000000) are assigned to the
+    NEW session (day D+1), not the previous session. This is because the boundary
+    check uses strict less-than: ``fractional_hour < anchor_hour``. This behavior
+    matches typical trading session conventions where the anchor time marks the
+    start of the next session.
 
     The grouping logic is implemented by:
     1. Converting all timestamps to UTC.
@@ -191,6 +197,8 @@ def calculate_vwap(
         return pd.Series(dtype=float, index=high.index[:0])
 
     # Calculate typical price
+    # Note: Negative prices could produce misleading VWAP values. This implementation
+    # does not validate for negative prices; consumers should ensure data quality.
     typical_price = (high + low + close) / 3.0
 
     # Calculate TP × Volume
@@ -235,10 +243,16 @@ def calculate_vwap_bands(
     Deviation = close - vwap
     Standard deviation uses population std dev (ddof=0) - TradingView/StockCharts convention.
 
+    Note: Std dev is calculated globally across the entire aligned dataset, not per-session.
+    This matches the TradingView/StockCharts convention where bands are computed over the
+    visible price range. Per-session band computation would require a different algorithm
+    and is not part of the standard VWAP bands interpretation.
+
     Args:
         vwap: Series of VWAP values with UTC-aware DatetimeIndex
         close: Series of close prices with UTC-aware DatetimeIndex
-        std_dev: Tuple of standard deviation multipliers. Default (1.0, 2.0) for 1σ and 2σ bands.
+        std_dev: Tuple of two positive standard deviation multipliers.
+            Default (1.0, 2.0) for 1σ and 2σ bands.
 
     Returns:
         pd.DataFrame with UTC-aware pd.Timestamp index and columns:
@@ -247,6 +261,9 @@ def calculate_vwap_bands(
             - upper_band_2std, lower_band_2std: 2σ bands
 
         Empty DataFrame with columns if inputs are empty.
+
+    Raises:
+        ValueError: If std_dev is not a 2-element tuple of positive values.
 
     Example:
         >>> vwap = calculate_vwap(high, low, close, volume, anchor='ny')
@@ -264,6 +281,13 @@ def calculate_vwap_bands(
     # Handle empty input
     if vwap.empty or close.empty:
         return pd.DataFrame(columns=columns)
+
+    # Validate std_dev parameter
+    if not isinstance(std_dev, tuple) or len(std_dev) != 2:
+        raise ValueError("std_dev must be a tuple of 2 float values")
+    std1, std2 = std_dev
+    if std1 <= 0 or std2 <= 0:
+        raise ValueError("std_dev multipliers must be positive")
 
     # Align series
     vwap, close = vwap.align(close, join="inner")
@@ -285,9 +309,6 @@ def calculate_vwap_bands(
     # Calculate population standard deviation (ddof=0)
     # This is the TradingView/StockCharts convention
     std_dev_value = deviation.std(ddof=0)
-
-    # Get std multipliers (default: 1.0 and 2.0)
-    std1, std2 = std_dev
 
     # Build result DataFrame
     result = pd.DataFrame(index=vwap_valid.index)

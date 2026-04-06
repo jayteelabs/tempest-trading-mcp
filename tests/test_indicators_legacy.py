@@ -5,7 +5,6 @@ import pytest
 from tempest_mcp.indicators.momentum import calculate_macd_result, calculate_rsi_result
 from tempest_mcp.indicators.ta_wrapper import IndicatorError, calculate_ema, calculate_rsi
 from tempest_mcp.indicators.trend import calculate_supertrend
-from tempest_mcp.indicators.volume import calculate_vwap
 
 
 class TestTAWrapper:
