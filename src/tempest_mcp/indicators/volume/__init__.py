@@ -1,8 +1,17 @@
-"""Volume indicators: OBV, MFI."""
+"""Volume indicator subpackage - combines OBV/MFI wrappers and VWAP engine."""
+
 import numpy as np
 import talib
 
 from tempest_mcp.models.indicator import MFIResult, OBVResult
+
+# Import VWAP engine functions
+from tempest_mcp.indicators.volume.vwap import (
+    SESSION_ANCHORS,
+    calculate_vwap,
+    calculate_vwap_bands,
+    detect_vwap_cross,
+)
 
 
 def calculate_obv_result(close, volume, ema_period: int = 20) -> OBVResult:
@@ -17,6 +26,7 @@ def calculate_obv_result(close, volume, ema_period: int = 20) -> OBVResult:
     trend = "bullish" if latest_obv > latest_ema else "bearish"
     return OBVResult(symbol="", timeframe="", timestamp=0.0, values={"obv": latest_obv, "obv_ema": latest_ema, "trend": trend})
 
+
 def calculate_mfi_result(high, low, close, volume, period: int = 14) -> MFIResult:
     high_arr = np.array(high, dtype=np.float64)
     low_arr = np.array(low, dtype=np.float64)
@@ -26,3 +36,15 @@ def calculate_mfi_result(high, low, close, volume, period: int = 14) -> MFIResul
     valid_mfi = mfi[~np.isnan(mfi)]
     latest_mfi = float(valid_mfi[-1]) if len(valid_mfi) > 0 else 50.0
     return MFIResult(symbol="", timeframe="", timestamp=0.0, values={"mfi": latest_mfi, "overbought": latest_mfi > 80, "oversold": latest_mfi < 20})
+
+
+__all__ = [
+    # VWAP engine (pure pandas)
+    "calculate_vwap",
+    "calculate_vwap_bands",
+    "detect_vwap_cross",
+    "SESSION_ANCHORS",
+    # Result wrappers (ta-lib)
+    "calculate_obv_result",
+    "calculate_mfi_result",
+]
