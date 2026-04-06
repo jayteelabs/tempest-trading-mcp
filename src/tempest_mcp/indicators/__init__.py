@@ -1,20 +1,18 @@
 """Technical indicator engine."""
 
 from .momentum import (
+    calculate_adx,
+    calculate_macd,
     calculate_macd_result,
     calculate_rsi,
     calculate_rsi_result,
+    calculate_stochastic,
     calculate_stochastic_result,
     detect_rsi_cross,
     detect_rsi_divergence,
     detect_rsi_extremes,
 )
 from .session_levels import calculate_session_levels
-from .ta_wrapper import (
-    calculate_adx,
-    calculate_atr,
-    calculate_macd,
-)
 from .trend import (
     calculate_adx_result,
     calculate_ema,
@@ -26,6 +24,7 @@ from .trend import (
     golden_cross,
 )
 from .volatility import (
+    calculate_atr,
     calculate_atr_result,
     calculate_bollinger_width,
     calculate_historical_volatility,
@@ -53,6 +52,10 @@ __all__ = [
     "detect_rsi_extremes",
     "detect_rsi_divergence",
     "detect_rsi_cross",
+    # Momentum indicators (MACD/ADX/Stochastic engines - pure pandas)
+    "calculate_macd",
+    "calculate_adx",
+    "calculate_stochastic",
     # Momentum indicators (result wrappers - ta-lib)
     "calculate_rsi_result",
     "calculate_macd_result",
@@ -65,13 +68,13 @@ __all__ = [
     # Volume indicators (result wrappers - ta-lib)
     "calculate_obv_result",
     "calculate_mfi_result",
-    # Other indicators
-    "calculate_macd",
+    # Volatility indicators (ATR engine - pure pandas)
     "calculate_atr",
-    "calculate_adx",
-    "calculate_adx_result",
+    # Volatility indicators (result wrappers - ta-lib)
     "calculate_atr_result",
     "calculate_bollinger_width",
     "calculate_historical_volatility",
+    # Other indicators
+    "calculate_adx_result",
     "calculate_session_levels",
 ]

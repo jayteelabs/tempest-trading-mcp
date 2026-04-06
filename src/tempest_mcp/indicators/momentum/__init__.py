@@ -1,8 +1,20 @@
 """Momentum indicators subpackage.
 
-Provides RSI, MACD, Stochastic, CCI, Williams %R, and ROC calculations.
+Provides RSI, MACD, Stochastic, ADX calculations.
 """
 
+from tempest_mcp.indicators.momentum.macd_adx_stoch import (
+    ADX_DEFAULT_PERIOD,
+    MACD_DEFAULT_FAST,
+    MACD_DEFAULT_SIGNAL,
+    MACD_DEFAULT_SLOW,
+    STOCH_DEFAULT_D_PERIOD,
+    STOCH_DEFAULT_K_PERIOD,
+    STOCH_DEFAULT_SMOOTH_K,
+    calculate_adx,
+    calculate_macd,
+    calculate_stochastic,
+)
 from tempest_mcp.indicators.momentum.rsi import (
     CENTERLINE,
     OVERBOUGHT_THRESHOLD,
@@ -117,6 +129,12 @@ __all__ = [
     "detect_rsi_extremes",
     "detect_rsi_divergence",
     "detect_rsi_cross",
+    # MACD engine functions (pure pandas, always available)
+    "calculate_macd",
+    # ADX engine functions (pure pandas, always available)
+    "calculate_adx",
+    # Stochastic engine functions (pure pandas, always available)
+    "calculate_stochastic",
     # Result wrappers (ta-lib based, optional)
     "calculate_rsi_result",
     "calculate_macd_result",
@@ -126,4 +144,11 @@ __all__ = [
     "OVERSOLD_THRESHOLD",
     "OVERBOUGHT_THRESHOLD",
     "CENTERLINE",
+    "MACD_DEFAULT_FAST",
+    "MACD_DEFAULT_SLOW",
+    "MACD_DEFAULT_SIGNAL",
+    "ADX_DEFAULT_PERIOD",
+    "STOCH_DEFAULT_K_PERIOD",
+    "STOCH_DEFAULT_D_PERIOD",
+    "STOCH_DEFAULT_SMOOTH_K",
 ]
