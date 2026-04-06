@@ -11,7 +11,7 @@ from tempest_mcp.indicators.trend.ema import (
     detect_ema_cross,
     golden_cross,
 )
-from tempest_mcp.models.indicator import ADXResult, EMAResult, SupertrendResult
+from tempest_mcp.models.indicator import EMAResult, SupertrendResult
 
 
 def calculate_supertrend(
@@ -84,6 +84,7 @@ def calculate_supertrend(
         },
     )
 
+
 def calculate_ema_result(close, periods: list[int] | None = None) -> EMAResult:
     """Calculate EMA result wrapper for multiple periods.
 
@@ -104,50 +105,10 @@ def calculate_ema_result(close, periods: list[int] | None = None) -> EMAResult:
         values[f"ema_{period}"] = float(valid_ema[-1]) if len(valid_ema) > 0 else 0.0
     return EMAResult(symbol="", timeframe="", timestamp=0.0, values=values)
 
-def calculate_adx_result(high, low, close, period: int = 14) -> ADXResult:
-    """Calculate ADX result wrapper.
-
-    Args:
-        high: High prices
-        low: Low prices
-        close: Close prices
-        period: ADX period (default 14)
-
-    Returns:
-        ADXResult with adx, plus_di, minus_di, trend, direction values
-    """
-    high_arr = np.array(high, dtype=np.float64)
-    low_arr = np.array(low, dtype=np.float64)
-    close_arr = np.array(close, dtype=np.float64)
-    adx = talib.ADX(high_arr, low_arr, close_arr, timeperiod=period)
-    plus_di = talib.PLUS_DI(high_arr, low_arr, close_arr, timeperiod=period)
-    minus_di = talib.MINUS_DI(high_arr, low_arr, close_arr, timeperiod=period)
-    valid_adx = adx[~np.isnan(adx)]
-    valid_plus = plus_di[~np.isnan(plus_di)]
-    valid_minus = minus_di[~np.isnan(minus_di)]
-    latest_adx = float(valid_adx[-1]) if len(valid_adx) > 0 else 0.0
-    latest_plus = float(valid_plus[-1]) if len(valid_plus) > 0 else 0.0
-    latest_minus = float(valid_minus[-1]) if len(valid_minus) > 0 else 0.0
-    trend = "strong" if latest_adx > 25 else "weak"
-    direction = "up" if latest_plus > latest_minus else "down"
-    return ADXResult(
-        symbol="",
-        timeframe="",
-        timestamp=0.0,
-        values={
-            "adx": latest_adx,
-            "plus_di": latest_plus,
-            "minus_di": latest_minus,
-            "trend": trend,
-            "direction": direction,
-        },
-    )
 
 __all__ = [
-
     "calculate_supertrend",
     "calculate_ema_result",
-    "calculate_adx_result",
     "EMA_PERIODS",
     "calculate_ema",
     "calculate_ema_stack",

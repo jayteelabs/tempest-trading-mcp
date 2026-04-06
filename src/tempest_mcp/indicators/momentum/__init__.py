@@ -1,8 +1,20 @@
 """Momentum indicators subpackage.
 
-Provides RSI, MACD, Stochastic, CCI, Williams %R, and ROC calculations.
+Provides RSI, MACD, Stochastic, ADX calculations.
 """
 
+from tempest_mcp.indicators.momentum.macd_adx_stoch import (
+    ADX_DEFAULT_PERIOD,
+    MACD_DEFAULT_FAST,
+    MACD_DEFAULT_SIGNAL,
+    MACD_DEFAULT_SLOW,
+    STOCH_DEFAULT_D_PERIOD,
+    STOCH_DEFAULT_K_PERIOD,
+    STOCH_DEFAULT_SMOOTH_K,
+    calculate_adx,
+    calculate_macd,
+    calculate_stochastic,
+)
 from tempest_mcp.indicators.momentum.rsi import (
     CENTERLINE,
     OVERBOUGHT_THRESHOLD,
@@ -20,6 +32,7 @@ try:
     import talib
 
     from tempest_mcp.models.indicator import (
+        ADXResult,
         MACDResult,
         RSIResult,
         StochasticResult,
@@ -95,6 +108,35 @@ try:
             },
         )
 
+    def calculate_adx_result(high, low, close, period: int = 14) -> "ADXResult":
+        """Calculate ADX result wrapper using ta-lib."""
+        high_arr = np.array(high, dtype=np.float64)
+        low_arr = np.array(low, dtype=np.float64)
+        close_arr = np.array(close, dtype=np.float64)
+        adx = talib.ADX(high_arr, low_arr, close_arr, timeperiod=period)
+        plus_di = talib.PLUS_DI(high_arr, low_arr, close_arr, timeperiod=period)
+        minus_di = talib.MINUS_DI(high_arr, low_arr, close_arr, timeperiod=period)
+        valid_adx = adx[~np.isnan(adx)]
+        valid_plus = plus_di[~np.isnan(plus_di)]
+        valid_minus = minus_di[~np.isnan(minus_di)]
+        latest_adx = float(valid_adx[-1]) if len(valid_adx) > 0 else 0.0
+        latest_plus = float(valid_plus[-1]) if len(valid_plus) > 0 else 0.0
+        latest_minus = float(valid_minus[-1]) if len(valid_minus) > 0 else 0.0
+        trend = "strong" if latest_adx > 25 else "weak"
+        direction = "up" if latest_plus > latest_minus else "down"
+        return ADXResult(
+            symbol="",
+            timeframe="",
+            timestamp=0.0,
+            values={
+                "adx": latest_adx,
+                "plus_di": latest_plus,
+                "minus_di": latest_minus,
+                "trend": trend,
+                "direction": direction,
+            },
+        )
+
     _HAS_TALIB = True
 
 except ImportError:
@@ -110,6 +152,9 @@ except ImportError:
     def calculate_stochastic_result(*args, **kwargs):
         raise ImportError("ta-lib not available - install with: pip install ta-lib")
 
+    def calculate_adx_result(*args, **kwargs):
+        raise ImportError("ta-lib not available - install with: pip install ta-lib")
+
 
 __all__ = [
     # RSI engine functions (pure pandas, always available)
@@ -117,13 +162,27 @@ __all__ = [
     "detect_rsi_extremes",
     "detect_rsi_divergence",
     "detect_rsi_cross",
+    # MACD engine functions (pure pandas, always available)
+    "calculate_macd",
+    # ADX engine functions (pure pandas, always available)
+    "calculate_adx",
+    # Stochastic engine functions (pure pandas, always available)
+    "calculate_stochastic",
     # Result wrappers (ta-lib based, optional)
     "calculate_rsi_result",
     "calculate_macd_result",
     "calculate_stochastic_result",
+    "calculate_adx_result",
     # Constants
     "RSI_DEFAULT_PERIOD",
     "OVERSOLD_THRESHOLD",
     "OVERBOUGHT_THRESHOLD",
     "CENTERLINE",
+    "MACD_DEFAULT_FAST",
+    "MACD_DEFAULT_SLOW",
+    "MACD_DEFAULT_SIGNAL",
+    "ADX_DEFAULT_PERIOD",
+    "STOCH_DEFAULT_K_PERIOD",
+    "STOCH_DEFAULT_D_PERIOD",
+    "STOCH_DEFAULT_SMOOTH_K",
 ]
