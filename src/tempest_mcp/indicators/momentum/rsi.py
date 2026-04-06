@@ -268,8 +268,18 @@ def detect_rsi_divergence(prices: pd.Series, rsi: pd.Series, window: int = 20) -
     if prices.empty or rsi.empty:
         return pd.DataFrame(columns=["date", "type", "price", "rsi_value"])
 
-    # Align series by index
+    # Warn if indices don't match (silent data loss prevention)
+    original_len = len(prices)
     prices, rsi = prices.align(rsi, join="inner")
+    if len(prices) < original_len:
+        logger.warning(
+            "Index alignment dropped %d rows (prices: %d, rsi: %d -> aligned: %d). "
+            "Ensure prices and RSI share the same index.",
+            original_len - len(prices),
+            original_len,
+            len(rsi),
+            len(prices),
+        )
 
     # Filter out NaN values
     valid_mask = prices.notna() & rsi.notna()
@@ -283,23 +293,29 @@ def detect_rsi_divergence(prices: pd.Series, rsi: pd.Series, window: int = 20) -
     half_window = window // 2
 
     for i in range(half_window, len(prices) - half_window):
-        start_idx = i - half_window
-        end_idx = i + half_window + 1
-
-        local_prices = prices.iloc[start_idx:end_idx]
-
         current_price = prices.iloc[i]
         current_rsi = rsi.iloc[i]
 
-        # Check if current point is a local extremum in price
-        is_price_low = current_price <= local_prices.min()
-        is_price_high = current_price >= local_prices.max()
+        # Check if current point is a local extremum using proper neighbor comparison
+        # A local low must be lower than BOTH neighbors
+        # A local high must be higher than BOTH neighbors
+        is_price_low = (
+            (current_price <= prices.iloc[i - 1] and current_price <= prices.iloc[i + 1])
+            if i > 0 and i < len(prices) - 1
+            else False
+        )
+
+        is_price_high = (
+            (current_price >= prices.iloc[i - 1] and current_price >= prices.iloc[i + 1])
+            if i > 0 and i < len(prices) - 1
+            else False
+        )
 
         if not (is_price_low or is_price_high):
             continue
 
         # Look for previous extremum of the same type in earlier data
-        lookback_start = max(0, i - window * 2)
+        lookback_start = max(0, i - window)
         lookback_prices = prices.iloc[lookback_start:i]
         lookback_rsi = rsi.iloc[lookback_start:i]
 
@@ -307,58 +323,64 @@ def detect_rsi_divergence(prices: pd.Series, rsi: pd.Series, window: int = 20) -
             continue
 
         if is_price_low:
-            # Price making lower low - check for bullish divergence
-            prev_lows = lookback_prices[
-                lookback_prices <= lookback_prices.rolling(window, min_periods=1).min()
-            ]
-            if len(prev_lows) > 0:
-                prev_low_idx = prev_lows.index[-1]
-                prev_low_price = lookback_prices.loc[prev_low_idx]
-                prev_low_rsi = lookback_rsi.loc[prev_low_idx]
+            # Find previous local lows in lookback window using proper extrema detection
+            # A local low: lower than both neighbors
+            if len(lookback_prices) > 2:
+                prev_local_lows_mask = (
+                    lookback_prices.iloc[1:-1] < lookback_prices.iloc[:-2].values
+                ) & (lookback_prices.iloc[1:-1] < lookback_prices.iloc[2:].values)
+                prev_local_lows = lookback_prices.iloc[1:-1][prev_local_lows_mask]
+                if len(prev_local_lows) > 0:
+                    prev_low_idx = prev_local_lows.index[-1]
+                    prev_low_price = lookback_prices.loc[prev_low_idx]
+                    prev_low_rsi = lookback_rsi.loc[prev_low_idx]
 
-                # Bullish divergence: Lower Low in price, Higher Low in RSI
-                if current_price < prev_low_price and current_rsi > prev_low_rsi:
-                    idx_timestamp = prices.index[i]
-                    if isinstance(idx_timestamp, pd.Timestamp):
-                        date_val = idx_timestamp
-                    else:
-                        date_val = pd.to_datetime(idx_timestamp, errors="coerce")
+                    # Bullish divergence: Lower Low in price, Higher Low in RSI
+                    if current_price < prev_low_price and current_rsi > prev_low_rsi:
+                        idx_timestamp = prices.index[i]
+                        if isinstance(idx_timestamp, pd.Timestamp):
+                            date_val = idx_timestamp
+                        else:
+                            date_val = pd.to_datetime(idx_timestamp, errors="coerce")
 
-                    records.append(
-                        {
-                            "date": date_val,
-                            "type": "bullish",
-                            "price": float(current_price),
-                            "rsi_value": float(current_rsi),
-                        }
-                    )
+                        records.append(
+                            {
+                                "date": date_val,
+                                "type": "bullish",
+                                "price": float(current_price),
+                                "rsi_value": float(current_rsi),
+                            }
+                        )
 
         elif is_price_high:
-            # Price making higher high - check for bearish divergence
-            prev_highs = lookback_prices[
-                lookback_prices >= lookback_prices.rolling(window, min_periods=1).max()
-            ]
-            if len(prev_highs) > 0:
-                prev_high_idx = prev_highs.index[-1]
-                prev_high_price = lookback_prices.loc[prev_high_idx]
-                prev_high_rsi = lookback_rsi.loc[prev_high_idx]
+            # Find previous local highs in lookback window using proper extrema detection
+            # A local high: higher than both neighbors
+            if len(lookback_prices) > 2:
+                prev_local_highs_mask = (
+                    lookback_prices.iloc[1:-1] > lookback_prices.iloc[:-2].values
+                ) & (lookback_prices.iloc[1:-1] > lookback_prices.iloc[2:].values)
+                prev_local_highs = lookback_prices.iloc[1:-1][prev_local_highs_mask]
+                if len(prev_local_highs) > 0:
+                    prev_high_idx = prev_local_highs.index[-1]
+                    prev_high_price = lookback_prices.loc[prev_high_idx]
+                    prev_high_rsi = lookback_rsi.loc[prev_high_idx]
 
-                # Bearish divergence: Higher High in price, Lower High in RSI
-                if current_price > prev_high_price and current_rsi < prev_high_rsi:
-                    idx_timestamp = prices.index[i]
-                    if isinstance(idx_timestamp, pd.Timestamp):
-                        date_val = idx_timestamp
-                    else:
-                        date_val = pd.to_datetime(idx_timestamp, errors="coerce")
+                    # Bearish divergence: Higher High in price, Lower High in RSI
+                    if current_price > prev_high_price and current_rsi < prev_high_rsi:
+                        idx_timestamp = prices.index[i]
+                        if isinstance(idx_timestamp, pd.Timestamp):
+                            date_val = idx_timestamp
+                        else:
+                            date_val = pd.to_datetime(idx_timestamp, errors="coerce")
 
-                    records.append(
-                        {
-                            "date": date_val,
-                            "type": "bearish",
-                            "price": float(current_price),
-                            "rsi_value": float(current_rsi),
-                        }
-                    )
+                        records.append(
+                            {
+                                "date": date_val,
+                                "type": "bearish",
+                                "price": float(current_price),
+                                "rsi_value": float(current_rsi),
+                            }
+                        )
 
     return pd.DataFrame(records)
 
