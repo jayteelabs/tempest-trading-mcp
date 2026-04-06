@@ -2,6 +2,7 @@
 
 from .momentum import (
     calculate_adx,
+    calculate_adx_result,
     calculate_macd,
     calculate_macd_result,
     calculate_rsi,
@@ -14,7 +15,6 @@ from .momentum import (
 )
 from .session_levels import calculate_session_levels
 from .trend import (
-    calculate_adx_result,
     calculate_ema,
     calculate_ema_result,
     calculate_ema_stack,
@@ -60,6 +60,7 @@ __all__ = [
     "calculate_rsi_result",
     "calculate_macd_result",
     "calculate_stochastic_result",
+    "calculate_adx_result",
     # Volume indicators (VWAP engine - pure pandas)
     "calculate_vwap",
     "calculate_vwap_bands",
@@ -75,6 +76,5 @@ __all__ = [
     "calculate_bollinger_width",
     "calculate_historical_volatility",
     # Other indicators
-    "calculate_adx_result",
     "calculate_session_levels",
 ]
