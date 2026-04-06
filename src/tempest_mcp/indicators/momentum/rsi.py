@@ -204,9 +204,10 @@ def detect_rsi_extremes(rsi: pd.Series, oversold: int = 30, overbought: int = 70
     zones = rsi_valid.apply(get_zone)
 
     # Detect zone transitions (where zone changes from previous value)
-    # First valid point is a transition
+    # Only mark first point as transition if it's not neutral (actual zone entry)
     zone_changes = zones != zones.shift(1)
-    zone_changes.iloc[0] = True
+    if zones.iloc[0] == "neutral":
+        zone_changes.iloc[0] = False
 
     # Get transition points
     transition_indices = zone_changes[zone_changes].index
@@ -297,16 +298,16 @@ def detect_rsi_divergence(prices: pd.Series, rsi: pd.Series, window: int = 20) -
         current_rsi = rsi.iloc[i]
 
         # Check if current point is a local extremum using proper neighbor comparison
-        # A local low must be lower than BOTH neighbors
-        # A local high must be higher than BOTH neighbors
+        # A local low must be LOWER than BOTH neighbors (strict inequality)
+        # A local high must be HIGHER than BOTH neighbors (strict inequality)
         is_price_low = (
-            (current_price <= prices.iloc[i - 1] and current_price <= prices.iloc[i + 1])
+            (current_price < prices.iloc[i - 1] and current_price < prices.iloc[i + 1])
             if i > 0 and i < len(prices) - 1
             else False
         )
 
         is_price_high = (
-            (current_price >= prices.iloc[i - 1] and current_price >= prices.iloc[i + 1])
+            (current_price > prices.iloc[i - 1] and current_price > prices.iloc[i + 1])
             if i > 0 and i < len(prices) - 1
             else False
         )
@@ -418,13 +419,17 @@ def detect_rsi_cross(rsi: pd.Series, threshold: float = 50.0) -> pd.DataFrame:
     if len(rsi_valid) < 2:
         return pd.DataFrame(columns=["date", "direction", "value"])
 
-    # Calculate position relative to threshold
-    above_threshold = rsi_valid > threshold
+    # Calculate position relative to threshold using >= and < for inclusive cross detection
+    # Bullish cross: RSI moves from < threshold to >= threshold
+    # Bearish cross: RSI moves from >= threshold to < threshold
+    above_threshold = rsi_valid >= threshold
 
-    # Detect state changes (actual crossover points)
+    # Detect state changes (crossover points)
     cross_changes = above_threshold.astype(int).diff()
 
     # Get indices where cross occurred (diff is non-zero and not NaN)
+    # diff = -1 means False->True (bullish cross)
+    # diff = 1 means True->False (bearish cross)
     cross_indices = cross_changes[cross_changes.notna() & (cross_changes != 0)].index
 
     if len(cross_indices) == 0:
@@ -433,20 +438,11 @@ def detect_rsi_cross(rsi: pd.Series, threshold: float = 50.0) -> pd.DataFrame:
     # Build result DataFrame
     records = []
     for idx in cross_indices:
-        idx_pos = rsi_valid.index.get_loc(idx)
-        curr_above = bool(above_threshold.loc[idx])
+        diff_val = int(cross_changes.loc[idx])
 
-        # If exactly at threshold (not above), verify it's a true cross
-        if not curr_above and abs(float(rsi_valid.loc[idx]) - threshold) < 1e-9:
-            if idx_pos > 0:
-                prev_val = float(rsi_valid.iloc[idx_pos - 1])
-                if prev_val <= threshold:
-                    # Was below or equal before, now equal - not a true cross_down
-                    continue
-            else:
-                continue
-
-        direction = "bullish" if curr_above else "bearish"
+        # Determine direction based on diff sign
+        # With >= threshold: diff = 1 means False->True (bullish), diff = -1 means True->False (bearish)
+        direction = "bullish" if diff_val == 1 else "bearish"
 
         # Convert index to timestamp if needed
         if isinstance(idx, pd.Timestamp):
