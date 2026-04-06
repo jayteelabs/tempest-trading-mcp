@@ -18,13 +18,11 @@ from tempest_mcp.indicators.momentum.rsi import (
 try:
     import numpy as np
     import talib
+
     from tempest_mcp.models.indicator import (
-        CCIResult,
         MACDResult,
-        ROCResult,
         RSIResult,
         StochasticResult,
-        WilliamsRResult,
     )
 
     def calculate_rsi_result(close, period: int = 14) -> "RSIResult":
@@ -34,7 +32,9 @@ try:
         valid_rsi = rsi[~np.isnan(rsi)]
         latest_rsi = float(valid_rsi[-1]) if len(valid_rsi) > 0 else 50.0
         return RSIResult(
-            symbol="", timeframe="", timestamp=0.0,
+            symbol="",
+            timeframe="",
+            timestamp=0.0,
             values={"rsi": latest_rsi, "overbought": latest_rsi > 70, "oversold": latest_rsi < 30},
         )
 
@@ -52,8 +52,15 @@ try:
         latest_hist = float(hist[valid_idx][-1]) if np.any(valid_idx) else 0.0
         trend = "bullish" if latest_hist > 0 else "bearish"
         return MACDResult(
-            symbol="", timeframe="", timestamp=0.0,
-            values={"macd": latest_macd, "signal": latest_signal, "histogram": latest_hist, "trend": trend},
+            symbol="",
+            timeframe="",
+            timestamp=0.0,
+            values={
+                "macd": latest_macd,
+                "signal": latest_signal,
+                "histogram": latest_hist,
+                "trend": trend,
+            },
         )
 
     def calculate_stochastic_result(
@@ -64,30 +71,42 @@ try:
         low_arr = np.array(low, dtype=np.float64)
         close_arr = np.array(close, dtype=np.float64)
         slowk, slowd = talib.STOCH(
-            high_arr, low_arr, close_arr,
-            fastk_period=k_period, slowk_period=d_period, slowk_matype=0,
-            slowd_period=d_period, slowd_matype=0,
+            high_arr,
+            low_arr,
+            close_arr,
+            fastk_period=k_period,
+            slowk_period=d_period,
+            slowk_matype=0,
+            slowd_period=d_period,
+            slowd_matype=0,
         )
         valid_idx = ~np.isnan(slowk)
         latest_k = float(slowk[valid_idx][-1]) if np.any(valid_idx) else 50.0
         latest_d = float(slowd[valid_idx][-1]) if np.any(valid_idx) else 50.0
         return StochasticResult(
-            symbol="", timeframe="", timestamp=0.0,
-            values={"k": latest_k, "d": latest_d, "overbought": latest_k > 80, "oversold": latest_k < 20},
+            symbol="",
+            timeframe="",
+            timestamp=0.0,
+            values={
+                "k": latest_k,
+                "d": latest_d,
+                "overbought": latest_k > 80,
+                "oversold": latest_k < 20,
+            },
         )
 
     _HAS_TALIB = True
 
 except ImportError:
     _HAS_TALIB = False
-    
+
     # Stub functions that raise ImportError when called
     def calculate_rsi_result(*args, **kwargs):
         raise ImportError("ta-lib not available - install with: pip install ta-lib")
-    
+
     def calculate_macd_result(*args, **kwargs):
         raise ImportError("ta-lib not available - install with: pip install ta-lib")
-    
+
     def calculate_stochastic_result(*args, **kwargs):
         raise ImportError("ta-lib not available - install with: pip install ta-lib")
 

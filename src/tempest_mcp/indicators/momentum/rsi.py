@@ -11,8 +11,8 @@ Smoothing types:
 - EMA: Exponential moving average (alpha = 2/(period+1))
 """
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 from tempest_mcp.logging_config import get_logger
 
@@ -79,11 +79,7 @@ def _calculate_ema_custom(series: pd.Series, period: int) -> pd.Series:
     return series.ewm(span=period, adjust=False).mean()
 
 
-def calculate_rsi(
-    prices: pd.Series,
-    period: int = 14,
-    smooth_type: str = "smma"
-) -> pd.Series:
+def calculate_rsi(prices: pd.Series, period: int = 14, smooth_type: str = "smma") -> pd.Series:
     """Calculate Relative Strength Index (RSI).
 
     RSI measures the speed and magnitude of price movements to identify
@@ -143,17 +139,17 @@ def calculate_rsi(
     # RSI = 100 - (100 / (1 + RS))
     # Handle division by zero: if avg_loss is 0, RS is inf, RSI is 100
     rs = avg_gains / avg_losses
-    
+
     # When avg_loss is 0 but avg_gain > 0, RSI should be 100
     # When both are 0 (no movement), RSI should be 50 (neutral)
     # When avg_gain is 0 and avg_loss > 0, RSI should be 0
     rsi = 100.0 - (100.0 / (1.0 + rs))
-    
+
     # Handle edge cases:
     # - When avg_loss = 0 and avg_gain > 0: RS = inf, RSI = 100 - 0 = 100 (correct)
     # - When both = 0: RS = NaN, RSI = NaN -> should be 50 (no movement)
     # - When avg_gain = 0 and avg_loss > 0: RS = 0, RSI = 0 (correct)
-    
+
     # For flat prices (no movement), set RSI to 50 (neutral)
     no_movement_mask = (avg_gains == 0) & (avg_losses == 0)
     rsi = rsi.where(~no_movement_mask, 50.0)
@@ -164,11 +160,7 @@ def calculate_rsi(
     return rsi
 
 
-def detect_rsi_extremes(
-    rsi: pd.Series,
-    oversold: int = 30,
-    overbought: int = 70
-) -> pd.DataFrame:
+def detect_rsi_extremes(rsi: pd.Series, oversold: int = 30, overbought: int = 70) -> pd.DataFrame:
     """Detect RSI zone transitions at threshold crossings.
 
     Identifies points where RSI enters or exits oversold/overbought zones.
@@ -236,20 +228,18 @@ def detect_rsi_extremes(
             if pd.isna(date_val):
                 date_val = idx
 
-        records.append({
-            "date": date_val,
-            "zone": zone_val,
-            "value": rsi_val,
-        })
+        records.append(
+            {
+                "date": date_val,
+                "zone": zone_val,
+                "value": rsi_val,
+            }
+        )
 
     return pd.DataFrame(records)
 
 
-def detect_rsi_divergence(
-    prices: pd.Series,
-    rsi: pd.Series,
-    window: int = 20
-) -> pd.DataFrame:
+def detect_rsi_divergence(prices: pd.Series, rsi: pd.Series, window: int = 20) -> pd.DataFrame:
     """Detect RSI divergence patterns.
 
     Bullish divergence: Price makes Lower Low (LL) while RSI makes Higher Low (HL)
@@ -297,7 +287,6 @@ def detect_rsi_divergence(
         end_idx = i + half_window + 1
 
         local_prices = prices.iloc[start_idx:end_idx]
-        local_rsi = rsi.iloc[start_idx:end_idx]
 
         current_price = prices.iloc[i]
         current_rsi = rsi.iloc[i]
@@ -319,7 +308,9 @@ def detect_rsi_divergence(
 
         if is_price_low:
             # Price making lower low - check for bullish divergence
-            prev_lows = lookback_prices[lookback_prices <= lookback_prices.rolling(window, min_periods=1).min()]
+            prev_lows = lookback_prices[
+                lookback_prices <= lookback_prices.rolling(window, min_periods=1).min()
+            ]
             if len(prev_lows) > 0:
                 prev_low_idx = prev_lows.index[-1]
                 prev_low_price = lookback_prices.loc[prev_low_idx]
@@ -333,16 +324,20 @@ def detect_rsi_divergence(
                     else:
                         date_val = pd.to_datetime(idx_timestamp, errors="coerce")
 
-                    records.append({
-                        "date": date_val,
-                        "type": "bullish",
-                        "price": float(current_price),
-                        "rsi_value": float(current_rsi),
-                    })
+                    records.append(
+                        {
+                            "date": date_val,
+                            "type": "bullish",
+                            "price": float(current_price),
+                            "rsi_value": float(current_rsi),
+                        }
+                    )
 
         elif is_price_high:
             # Price making higher high - check for bearish divergence
-            prev_highs = lookback_prices[lookback_prices >= lookback_prices.rolling(window, min_periods=1).max()]
+            prev_highs = lookback_prices[
+                lookback_prices >= lookback_prices.rolling(window, min_periods=1).max()
+            ]
             if len(prev_highs) > 0:
                 prev_high_idx = prev_highs.index[-1]
                 prev_high_price = lookback_prices.loc[prev_high_idx]
@@ -356,20 +351,19 @@ def detect_rsi_divergence(
                     else:
                         date_val = pd.to_datetime(idx_timestamp, errors="coerce")
 
-                    records.append({
-                        "date": date_val,
-                        "type": "bearish",
-                        "price": float(current_price),
-                        "rsi_value": float(current_rsi),
-                    })
+                    records.append(
+                        {
+                            "date": date_val,
+                            "type": "bearish",
+                            "price": float(current_price),
+                            "rsi_value": float(current_rsi),
+                        }
+                    )
 
     return pd.DataFrame(records)
 
 
-def detect_rsi_cross(
-    rsi: pd.Series,
-    threshold: float = 50.0
-) -> pd.DataFrame:
+def detect_rsi_cross(rsi: pd.Series, threshold: float = 50.0) -> pd.DataFrame:
     """Detect RSI crosses through a threshold level.
 
     Identifies points where RSI crosses above (bullish) or below (bearish)
@@ -442,11 +436,13 @@ def detect_rsi_cross(
             if pd.isna(date_val):
                 date_val = idx
 
-        records.append({
-            "date": date_val,
-            "direction": direction,
-            "value": float(rsi_valid.loc[idx]),
-        })
+        records.append(
+            {
+                "date": date_val,
+                "direction": direction,
+                "value": float(rsi_valid.loc[idx]),
+            }
+        )
 
     return pd.DataFrame(records)
 
