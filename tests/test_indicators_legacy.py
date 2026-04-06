@@ -1,9 +1,11 @@
 """Tests for technical indicators."""
+
 import pytest
 
 from tempest_mcp.indicators.momentum import calculate_macd_result, calculate_rsi_result
 from tempest_mcp.indicators.ta_wrapper import IndicatorError, calculate_ema, calculate_rsi
-from tempest_mcp.indicators.trend import calculate_supertrend, calculate_vwap
+from tempest_mcp.indicators.trend import calculate_supertrend
+from tempest_mcp.indicators.volume import calculate_vwap
 
 
 class TestTAWrapper:
@@ -19,14 +21,12 @@ class TestTAWrapper:
         with pytest.raises(IndicatorError):
             calculate_rsi([100, 101], period=14)
 
-class TestTrend:
-    def test_vwap(self, ohlcv_data):
-        result = calculate_vwap(ohlcv_data["high"], ohlcv_data["low"], ohlcv_data["close"], ohlcv_data["volume"])
-        assert "vwap" in result.values
 
+class TestTrend:
     def test_supertrend(self, ohlcv_data):
         result = calculate_supertrend(ohlcv_data["high"], ohlcv_data["low"], ohlcv_data["close"])
         assert "supertrend" in result.values
+
 
 class TestMomentum:
     def test_rsi_result(self, price_data):
