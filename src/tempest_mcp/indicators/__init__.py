@@ -21,7 +21,6 @@ from .trend import (
     calculate_ema_result,
     calculate_ema_stack,
     calculate_supertrend,
-    calculate_vwap,
     death_cross,
     detect_ema_cross,
     golden_cross,
@@ -31,14 +30,20 @@ from .volatility import (
     calculate_bollinger_width,
     calculate_historical_volatility,
 )
-from .volume import calculate_mfi_result, calculate_obv_result
+from .volume import (
+    SESSION_ANCHORS,
+    calculate_mfi_result,
+    calculate_obv_result,
+    calculate_vwap,
+    calculate_vwap_bands,
+    detect_vwap_cross,
+)
 
 __all__ = [
     # Trend indicators
     "calculate_ema",
     "calculate_ema_result",
     "calculate_ema_stack",
-    "calculate_vwap",
     "calculate_supertrend",
     "detect_ema_cross",
     "golden_cross",
@@ -52,6 +57,14 @@ __all__ = [
     "calculate_rsi_result",
     "calculate_macd_result",
     "calculate_stochastic_result",
+    # Volume indicators (VWAP engine - pure pandas)
+    "calculate_vwap",
+    "calculate_vwap_bands",
+    "detect_vwap_cross",
+    "SESSION_ANCHORS",
+    # Volume indicators (result wrappers - ta-lib)
+    "calculate_obv_result",
+    "calculate_mfi_result",
     # Other indicators
     "calculate_macd",
     "calculate_atr",
@@ -60,7 +73,5 @@ __all__ = [
     "calculate_atr_result",
     "calculate_bollinger_width",
     "calculate_historical_volatility",
-    "calculate_obv_result",
-    "calculate_mfi_result",
     "calculate_session_levels",
 ]
