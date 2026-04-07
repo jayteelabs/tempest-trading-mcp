@@ -2,7 +2,6 @@
 
 import pandas as pd
 import pytest
-import numpy as np
 
 from tempest_mcp.indicators.volume import calculate_obv
 
@@ -122,6 +121,20 @@ class TestCalculateOBV:
         with pytest.raises(ValueError, match="same length"):
             calculate_obv(close, volume)
 
+    def test_negative_volume_raises_error(self):
+        """Test that negative volume raises ValueError."""
+        close = pd.Series(
+            [100, 102, 101, 103],
+            index=pd.date_range("2024-01-01", periods=4, freq="h", tz="UTC"),
+        )
+        volume = pd.Series(
+            [1000, 1100, -500, 1200],  # Negative volume at index 2
+            index=close.index,
+        )
+
+        with pytest.raises(ValueError, match="non-negative"):
+            calculate_obv(close, volume)
+
     def test_empty_series(self):
         """Test returns empty Series for empty input."""
         close = pd.Series([], dtype=float)
@@ -193,7 +206,9 @@ class TestIntegration:
         )
         volume = pd.Series(
             ohlcv_data["volume"],
-            index=pd.date_range("2024-01-01", periods=len(ohlcv_data["volume"]), freq="h", tz="UTC"),
+            index=pd.date_range(
+                "2024-01-01", periods=len(ohlcv_data["volume"]), freq="h", tz="UTC"
+            ),
         )
 
         obv = calculate_obv(close, volume)

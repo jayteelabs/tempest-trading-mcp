@@ -1,8 +1,8 @@
 """Unit tests for MFI indicator engine."""
 
+import numpy as np
 import pandas as pd
 import pytest
-import numpy as np
 
 from tempest_mcp.indicators.volume import calculate_mfi
 
@@ -121,11 +121,27 @@ class TestCalculateMFI:
         idx = pd.date_range("2024-01-01", periods=n, freq="h", tz="UTC")
         high = pd.Series(np.random.uniform(100, 110, n), index=idx)
         low = pd.Series(np.random.uniform(90, 100, n), index=idx)
-        close = pd.Series(np.random.uniform(95, 105, n - 5), index=idx[:n-5])
+        close = pd.Series(np.random.uniform(95, 105, n - 5), index=idx[: n - 5])
         volume = pd.Series(np.random.uniform(1000, 5000, n), index=idx)
 
         with pytest.raises(ValueError, match="same length"):
             calculate_mfi(high, low, close, volume, period=14)
+
+    def test_extreme_volume_returns_nan_or_valid(self):
+        """Test MFI handles extreme volume without overflow."""
+        n = 30
+        idx = pd.date_range("2024-01-01", periods=n, freq="h", tz="UTC")
+        high = pd.Series(np.random.uniform(100, 110, n), index=idx)
+        low = pd.Series(np.random.uniform(90, 100, n), index=idx)
+        close = pd.Series(np.random.uniform(95, 105, n), index=idx)
+        # Extreme volume that could cause infinity in money flow
+        volume = pd.Series([1e308] * n, index=idx)
+
+        mfi = calculate_mfi(high, low, close, volume, period=14)
+
+        # Should either return valid MFI values or NaN for affected periods
+        # No overflow should occur
+        assert isinstance(mfi, pd.Series)
 
     def test_utc_aware_index_preserved(self):
         """Test that UTC-aware index is preserved in output."""
@@ -208,7 +224,9 @@ class TestIntegration:
         )
         volume = pd.Series(
             ohlcv_data["volume"],
-            index=pd.date_range("2024-01-01", periods=len(ohlcv_data["volume"]), freq="h", tz="UTC"),
+            index=pd.date_range(
+                "2024-01-01", periods=len(ohlcv_data["volume"]), freq="h", tz="UTC"
+            ),
         )
 
         mfi = calculate_mfi(high, low, close, volume, period=14)

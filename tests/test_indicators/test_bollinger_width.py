@@ -1,8 +1,8 @@
 """Unit tests for Bollinger Width indicator engine."""
 
+import numpy as np
 import pandas as pd
 import pytest
-import numpy as np
 
 from tempest_mcp.indicators.volatility import calculate_bollinger_width
 

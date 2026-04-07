@@ -157,6 +157,10 @@ def calculate_historical_volatility(
     if len(prices) < period + 1:
         return pd.Series(dtype=float)
 
+    # Validate prices are positive (required for log returns)
+    if (prices <= 0).any():
+        raise ValueError("Prices must be positive for log returns calculation")
+
     # Calculate log returns: ln(price[t] / price[t-1])
     log_returns = pd.Series(
         data=np.log(prices.values[1:] / prices.values[:-1]),

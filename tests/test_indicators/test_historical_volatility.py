@@ -1,8 +1,8 @@
 """Unit tests for Historical Volatility indicator engine."""
 
+import numpy as np
 import pandas as pd
 import pytest
-import numpy as np
 
 from tempest_mcp.indicators.volatility import calculate_historical_volatility
 
@@ -123,6 +123,24 @@ class TestCalculateHistoricalVolatility:
 
         with pytest.raises(ValueError, match="Period must be at least 2"):
             calculate_historical_volatility(prices, period=0)
+
+    def test_zero_or_negative_price_raises_error(self):
+        """Test that zero or negative prices raise ValueError."""
+        # Zero price - need period+1 = 253 prices minimum
+        prices_zero = pd.Series(
+            [100.0, 0, 101.0, 102.0, 103.0] + [100.0] * 248,
+            index=pd.date_range("2024-01-01", periods=253, freq="h", tz="UTC"),
+        )
+        with pytest.raises(ValueError, match="Prices must be positive"):
+            calculate_historical_volatility(prices_zero, period=252)
+
+        # Negative price
+        prices_neg = pd.Series(
+            [100.0, -1.0, 101.0, 102.0, 103.0] + [100.0] * 248,
+            index=pd.date_range("2024-01-01", periods=253, freq="h", tz="UTC"),
+        )
+        with pytest.raises(ValueError, match="Prices must be positive"):
+            calculate_historical_volatility(prices_neg, period=252)
 
     def test_empty_series(self):
         """Test returns empty Series for empty input."""

@@ -18,6 +18,7 @@ try:
     import talib
 
     from tempest_mcp.models.indicator import MFIResult, OBVResult
+
     _HAS_TALIB = True
 except ImportError:
     _HAS_TALIB = False
@@ -84,6 +85,10 @@ def calculate_obv(
     # Calculate price changes
     close_vals = aligned["close"].values
     volume_vals = aligned["volume"].values
+
+    # Validate volume is non-negative
+    if (volume_vals < 0).any():
+        raise ValueError("Volume must be non-negative")
 
     # Initialize OBV array
     obv = np.zeros(len(close_vals))
@@ -181,12 +186,15 @@ def calculate_mfi(
         volume.index = volume.index.tz_localize("UTC")
 
     # Align all series
-    df = pd.DataFrame({
-        "high": high,
-        "low": low,
-        "close": close,
-        "volume": volume,
-    }, index=high.index)
+    df = pd.DataFrame(
+        {
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
+        },
+        index=high.index,
+    )
     df = df.dropna()
 
     if len(df) < period + 1:
@@ -205,8 +213,12 @@ def calculate_mfi(
     # MFI value at index i represents the MFI for period ending at i
     for i in range(period, len(typical_price)):
         # Sum flows for the period [i - period + 1, i]
-        period_flows = raw_money_flow.iloc[i - period + 1:i + 1]
-        period_tp = typical_price.iloc[i - period + 1:i + 1]
+        period_flows = raw_money_flow.iloc[i - period + 1 : i + 1]
+        period_tp = typical_price.iloc[i - period + 1 : i + 1]
+
+        # Check for infinity in period flows - skip period if found
+        if (period_flows == float("inf")).any() or (period_flows == float("-inf")).any():
+            continue
 
         # Compare each TP to the previous one WITHIN the period
         # tp_change[j] = tp[j] - tp[j-1] where j is within the period
@@ -260,7 +272,12 @@ def calculate_obv_result(close, volume, ema_period: int = 20) -> "OBVResult":
     latest_obv = float(valid_obv[-1]) if len(valid_obv) > 0 else 0.0
     latest_ema = float(valid_ema[-1]) if len(valid_ema) > 0 else 0.0
     trend = "bullish" if latest_obv > latest_ema else "bearish"
-    return OBVResult(symbol="", timeframe="", timestamp=0.0, values={"obv": latest_obv, "obv_ema": latest_ema, "trend": trend})
+    return OBVResult(
+        symbol="",
+        timeframe="",
+        timestamp=0.0,
+        values={"obv": latest_obv, "obv_ema": latest_ema, "trend": trend},
+    )
 
 
 def calculate_mfi_result(high, low, close, volume, period: int = 14) -> "MFIResult":
@@ -278,7 +295,12 @@ def calculate_mfi_result(high, low, close, volume, period: int = 14) -> "MFIResu
     mfi = talib.MFI(high_arr, low_arr, close_arr, volume_arr, timeperiod=period)
     valid_mfi = mfi[~np.isnan(mfi)]
     latest_mfi = float(valid_mfi[-1]) if len(valid_mfi) > 0 else 50.0
-    return MFIResult(symbol="", timeframe="", timestamp=0.0, values={"mfi": latest_mfi, "overbought": latest_mfi > 80, "oversold": latest_mfi < 20})
+    return MFIResult(
+        symbol="",
+        timeframe="",
+        timestamp=0.0,
+        values={"mfi": latest_mfi, "overbought": latest_mfi > 80, "oversold": latest_mfi < 20},
+    )
 
 
 __all__ = [
