@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 from typing import Literal
 
 import pandas as pd
 import pytz
+
+NY_TZ = pytz.timezone("America/New_York")
 
 
 def detect_session_levels(
@@ -27,6 +30,10 @@ def detect_session_levels(
         - Asia: 00:00–09:00 UTC (fixed, no DST)
         - London: 08:00–17:00 UTC (fixed, no DST)
         - NY: 09:30–16:00 US Eastern (converts to UTC with DST using pytz)
+
+    Note:
+        When the DataFrame spans multiple days, only bars from the most recent
+        session day are used (not aggregated across all days).
     """
     valid_sessions = {"asia", "london", "ny"}
     if session_type not in valid_sessions:
@@ -35,24 +42,26 @@ def detect_session_levels(
     if ohlcv_df.empty:
         return _empty_session_result(session_type)
 
+    last_bar_time = ohlcv_df.index[-1]
+
     # Asia: 00:00–09:00 UTC (fixed)
     if session_type == "asia":
         start_hour, end_hour = 0, 9
+        session_day_candidate = last_bar_time.date()
         mask = (ohlcv_df.index.hour >= start_hour) & (ohlcv_df.index.hour < end_hour)
 
     # London: 08:00–17:00 UTC (fixed)
     elif session_type == "london":
         start_hour, end_hour = 8, 17
+        session_day_candidate = last_bar_time.date()
         mask = (ohlcv_df.index.hour >= start_hour) & (ohlcv_df.index.hour < end_hour)
 
     # NY: 09:30–16:00 US Eastern (converts to UTC with DST)
     else:  # ny
-        ny_tz = pytz.timezone("America/New_York")
 
         def ny_to_utc_mask(idx: pd.DatetimeIndex) -> pd.Series:
             """Create boolean mask for bars falling within NY session window."""
-            # Convert each UTC timestamp to NY time and check if within 09:30–16:00 ET
-            ny_times = idx.tz_convert(ny_tz)
+            ny_times = idx.tz_convert(NY_TZ)
             start_hour, start_min = 9, 30
             end_hour, end_min = 16, 0
             in_start = (ny_times.hour > start_hour) | (
@@ -64,26 +73,55 @@ def detect_session_levels(
             return in_start & in_end
 
         mask = ny_to_utc_mask(ohlcv_df.index)
+        # Session day in NY time
+        ny_last_bar = last_bar_time.tz_convert(NY_TZ)
+        session_day_candidate = ny_last_bar.date()
 
+    # Filter to bars matching session window
     session_bars = ohlcv_df[mask]
 
     if len(session_bars) == 0:
         return _empty_session_result(session_type)
 
-    session_high = float(session_bars["high"].max())
-    session_low = float(session_bars["low"].min())
+    # Find the most recent session day that has bars
+    # Use the last bar's date as the primary session day; if no bars on that day,
+    # use the previous calendar day (handles case where last bar is before session starts)
+    most_recent_session_day = session_day_candidate
+
+    def filter_to_session_day(df: pd.DataFrame, session_day: date, stype: str) -> pd.DataFrame:
+        """Filter bars to only those on the specified session day."""
+        if stype == "ny":
+            # Filter by NY date
+            df_ny = df.index.tz_convert(NY_TZ)
+            day_mask = pd.DatetimeIndex(df_ny).date == session_day
+            return df[day_mask]
+        else:
+            # Filter by UTC date
+            return df[df.index.date == session_day]
+
+    # Check if most recent day has bars; if not, try previous day
+    bars_on_day = filter_to_session_day(session_bars, most_recent_session_day, session_type)
+    if len(bars_on_day) == 0:
+        most_recent_session_day = session_day_candidate - timedelta(days=1)
+        bars_on_day = filter_to_session_day(session_bars, most_recent_session_day, session_type)
+
+    if len(bars_on_day) == 0:
+        return _empty_session_result(session_type)
+
+    session_high = float(bars_on_day["high"].max())
+    session_low = float(bars_on_day["low"].min())
     session_range = session_high - session_low
     midpoint = (session_high + session_low) / 2
 
     return {
         "session_type": session_type,
-        "session_start_utc": session_bars.index[0],
-        "session_end_utc": session_bars.index[-1],
+        "session_start_utc": bars_on_day.index[0],
+        "session_end_utc": bars_on_day.index[-1],
         "high": session_high,
         "low": session_low,
         "range": session_range,
         "midpoint": midpoint,
-        "bars": len(session_bars),
+        "bars": len(bars_on_day),
     }
 
 
@@ -140,7 +178,7 @@ def detect_pdh_pdl(ohlcv_df: pd.DataFrame) -> dict:
     pdc = float(previous_day_bars["close"].iloc[-1])  # Last close of the day
     pd_range = pdh - pdl
 
-    # Find timestamps when PDH and PDL occurred
+    # Find timestamps when PDH and PDL occurred (first occurrence if multiple bars share the value)
     pdh_mask = previous_day_bars["high"] == pdh
     pdl_mask = previous_day_bars["low"] == pdl
     pdh_timestamp = previous_day_bars[pdh_mask].index[0]
