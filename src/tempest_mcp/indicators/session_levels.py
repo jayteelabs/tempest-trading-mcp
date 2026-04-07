@@ -1,7 +1,6 @@
 """Session levels: Asia, London, New York PDH/PDL detection."""
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 from typing import Literal
 
@@ -126,7 +125,7 @@ def detect_pdh_pdl(ohlcv_df: pd.DataFrame) -> dict:
 
     # Find the UTC calendar day immediately before the first bar
     tz = pytz.UTC
-    current_day_start = tz.localize(pd.Timestamp(first_bar_date, tzinfo=tz))
+    current_day_start = pd.Timestamp(first_bar_date, tz=tz)
     previous_day_start = current_day_start - pd.Timedelta(days=1)
     previous_day_end = current_day_start
 
