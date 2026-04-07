@@ -1,16 +1,15 @@
 """Tests for backtest engine (ENG-16)."""
 from datetime import datetime, timedelta
 
-import numpy as np
 import pandas as pd
 import pytest
 
 from tempest_mcp.backtest.commission import (
-    calculate_commission,
     apply_slippage,
+    calculate_commission,
     calculate_net_pnl,
 )
-from tempest_mcp.backtest.engine import BacktestEngine, Trade, BacktestResult
+from tempest_mcp.backtest.engine import BacktestEngine, BacktestResult, Trade
 
 
 class TestCommissionFunctions:
@@ -96,15 +95,16 @@ class TestBacktestEngine:
         return pd.DataFrame(data, index=pd.DatetimeIndex(times))
 
     def _make_signals(self, n: int, entries: list[int], exits: list[int]) -> pd.Series:
-        """Helper to create signals series."""
-        signals = [0] * n
+        """Helper to create signals series with matching DatetimeIndex."""
+        times = [datetime(2024, 1, 1) + timedelta(hours=i) for i in range(n)]
+        signals = pd.Series(0, index=pd.DatetimeIndex(times))
         for e in entries:
             if 0 <= e < n:
-                signals[e] = 1
+                signals.iloc[e] = 1
         for x in exits:
             if 0 <= x < n:
-                signals[x] = -1
-        return pd.Series(signals, index=pd.RangeIndex(n))
+                signals.iloc[x] = -1
+        return signals
 
     def test_insufficient_data_raises(self):
         df = self._make_ohlcv(1)
@@ -199,19 +199,20 @@ class TestBacktestEngine:
         assert result.final_equity != result.initial_capital
 
     def test_position_sizing_round_to_8_decimals(self):
-        # With price=100 and cash=100000, size should be 1000 (100000/100)
+        # Entry at bar 1 open = 100.0 (start_price=99, step=1), exit at bar 2 open = 101.0
+        # With cash=100000 and entry_price=100, size = round(100000/100, 8) = 1000
         n = 3
-        ohlcv = self._make_ohlcv(n, start_price=100.0, step=1.0)
+        ohlcv = self._make_ohlcv(n, start_price=99.0, step=1.0)  # bar 1 open = 100.0
         signals = self._make_signals(n, entries=[0], exits=[1])
         engine = BacktestEngine(initial_capital=100000.0, commission_pct=0.0, slippage_bps=0.0)
         result = engine.run(ohlcv, signals)
 
         assert len(result.trades) == 1
         trade = result.trades[0]
-        # size = round(100000 / 100, 8) = 1000
+        # entry at bar 1 open = 100.0 (start_price=99), size = round(100000/100, 8) = 1000
         assert trade.size == 1000.0
-        # gross_pnl should be (exit - entry) * size
-        assert abs(trade.gross_pnl - (ohlcv["close"].iloc[1] - ohlcv["open"].iloc[1]) * 1000) < 0.01
+        # gross_pnl = (exit_price - entry_price) * size = (101 - 100) * 1000 = 1000
+        assert abs(trade.gross_pnl - (101.0 - 100.0) * 1000) < 0.01
 
     def test_metrics_computed(self):
         n = 6

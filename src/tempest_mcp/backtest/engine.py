@@ -2,11 +2,10 @@
 from dataclasses import dataclass
 from typing import Any
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 from tempest_mcp.backtest.commission import apply_slippage
-
 
 # ---------------------------------------------------------------------------
 # Dataclasses per ENG-16 spec (do NOT import from models.backtest)
@@ -61,7 +60,7 @@ class BacktestEngine:
         self._position: dict[str, Any] | None = None  # {entry_price, size, entry_time, entry_idx}
         self._trades: list[Trade] = []
         self._equity_curve: list[float] = []
-        self._open_position = False
+        self._has_open_position = False
 
     def run(self, ohlcv_df: pd.DataFrame, signals: pd.Series) -> BacktestResult:
         """Run backtest on OHLCV data with entry/exit signals.
@@ -79,13 +78,12 @@ class BacktestEngine:
         self._position = None
         self._trades = []
         self._equity_curve = []
-        self._open_position = False
+        self._has_open_position = False
 
         # Process bars from index 1 onwards (first bar signal is ignored — no prior bar for execution)
         for i in range(1, len(ohlcv_df)):
             prev_idx = i - 1
             curr_idx = i
-            signal = signals.iloc[curr_idx]
 
             # Execute on next bar open if prior bar had signal
             prev_signal = signals.iloc[prev_idx]
@@ -101,7 +99,7 @@ class BacktestEngine:
 
         # Check if position is still open at end
         if self._position is not None:
-            self._open_position = True
+            self._has_open_position = True
 
         # Build equity curve series
         equity_series = pd.Series(self._equity_curve, index=ohlcv_df.index[1:])
@@ -113,7 +111,7 @@ class BacktestEngine:
             trades=self._trades,
             equity_curve=equity_series,
             metrics=metrics,
-            open_position=self._open_position,
+            open_position=self._has_open_position,
             initial_capital=self.initial_capital,
             final_equity=self._equity_curve[-1] if self._equity_curve else self.initial_capital,
         )
