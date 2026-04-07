@@ -1,6 +1,23 @@
 """Backtesting engine."""
 
-from tempest_mcp.backtest.commission import CommissionModel
-from tempest_mcp.backtest.engine import BacktestEngine
+from tempest_mcp.backtest.commission import (
+    CommissionModel,
+    apply_slippage,
+    calculate_commission,
+    calculate_net_pnl,
+)
+from tempest_mcp.backtest.engine import (
+    BacktestEngine,
+    BacktestResult,
+    Trade,
+)
 
-__all__ = ["BacktestEngine", "CommissionModel"]
+__all__ = [
+    "BacktestEngine",
+    "Trade",
+    "BacktestResult",
+    "CommissionModel",
+    "calculate_commission",
+    "apply_slippage",
+    "calculate_net_pnl",
+]
