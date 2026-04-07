@@ -13,7 +13,10 @@ from .momentum import (
     detect_rsi_divergence,
     detect_rsi_extremes,
 )
-from .session_levels import calculate_session_levels
+from .session_levels import (
+    detect_pdh_pdl,
+    detect_session_levels,
+)
 from .trend import (
     calculate_ema,
     calculate_ema_result,
@@ -75,6 +78,7 @@ __all__ = [
     "calculate_atr_result",
     "calculate_bollinger_width",
     "calculate_historical_volatility",
-    # Other indicators
-    "calculate_session_levels",
+    # Session level indicators
+    "detect_session_levels",
+    "detect_pdh_pdl",
 ]
