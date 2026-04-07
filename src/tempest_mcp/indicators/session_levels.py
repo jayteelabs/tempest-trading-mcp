@@ -1,9 +1,10 @@
 """Session levels: Asia, London, New York PDH/PDL detection."""
+
 from __future__ import annotations
 
-import pandas as pd
 from typing import Literal
 
+import pandas as pd
 import pytz
 
 
@@ -29,9 +30,7 @@ def detect_session_levels(
     """
     valid_sessions = {"asia", "london", "ny"}
     if session_type not in valid_sessions:
-        raise ValueError(
-            f"Invalid session_type: '{session_type}'. Must be one of {valid_sessions}"
-        )
+        raise ValueError(f"Invalid session_type: '{session_type}'. Must be one of {valid_sessions}")
 
     if ohlcv_df.empty:
         return _empty_session_result(session_type)
@@ -127,7 +126,6 @@ def detect_pdh_pdl(ohlcv_df: pd.DataFrame) -> dict:
     tz = pytz.UTC
     current_day_start = pd.Timestamp(first_bar_date, tz=tz)
     previous_day_start = current_day_start - pd.Timedelta(days=1)
-    previous_day_end = current_day_start
 
     # Get all bars from the previous UTC calendar day
     previous_day_bars = ohlcv_df[
