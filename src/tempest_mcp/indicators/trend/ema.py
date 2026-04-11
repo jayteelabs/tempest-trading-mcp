@@ -57,10 +57,8 @@ def calculate_ema_stack(prices: pd.Series) -> dict[str, pd.Series]:
     Args:
         prices: Series of price values (typically close prices) with datetime index
 
-    Returns:
-        Dictionary with keys 'ema7', 'ema25', 'ema50', 'ema200',
-        each containing a pd.Series aligned with the input prices index.
-        Series will be empty if insufficient data for that period.
+    Raises:
+        ValueError: If fewer than 200 price values are provided.
 
     Example:
         >>> prices = pd.Series(...)  # 300+ data points
@@ -70,6 +68,12 @@ def calculate_ema_stack(prices: pd.Series) -> dict[str, pd.Series]:
     """
     if prices.empty:
         return {}
+
+    # Largest period in the stack is 200; require at least that many values
+    if len(prices) < 200:
+        raise ValueError(
+            f"calculate_ema_stack requires at least 200 price values, got {len(prices)}"
+        )
 
     result = {}
 

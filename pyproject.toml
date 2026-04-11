@@ -68,3 +68,6 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-v --tb=short"
 pythonpath = ["src"]
+markers = [
+    "integration: marks tests as integration tests (require --run-integration to execute)",
+]
