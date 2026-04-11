@@ -9,7 +9,7 @@ Normal CI does NOT run these — they are for manual/scheduled integration valid
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import pytest
@@ -17,9 +17,9 @@ import pytest
 from tempest_mcp.data import (
     CCXTAdapter,
     DataSourceRouter,
-    YFAdapter,
     get_live_adapter,
 )
+from tempest_mcp.data.yf_adapter import fetch_ohlcv as fetch_yf_ohlcv
 from tempest_mcp.indicators import (
     calculate_ema_stack,
     calculate_rsi,
@@ -32,19 +32,25 @@ from tempest_mcp.indicators import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _days_ago(n: int) -> datetime:
-    return datetime.utcnow() - timedelta(days=n)
+    return datetime.now(timezone.utc) - timedelta(days=n)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 # ---------------------------------------------------------------------------
 # 1. Data Layer — Historical (YFinance adapter)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_yf_btcusd_ohlcv():
     start = _days_ago(90)
-    end = datetime.utcnow()
-    df = YFAdapter().fetch_ohlcv("BTC-USD", start, end)
+    end = _utc_now()
+    df = fetch_yf_ohlcv("BTC-USD", start=start, end=end)
     assert not df.empty, "BTC-USD OHLCV should not be empty"
     for col in ("open", "high", "low", "close", "volume"):
         assert col in df.columns, f"Missing column: {col}"
@@ -55,8 +61,8 @@ def test_yf_btcusd_ohlcv():
 @pytest.mark.integration
 def test_yf_ethusd_ohlcv():
     start = _days_ago(90)
-    end = datetime.utcnow()
-    df = YFAdapter().fetch_ohlcv("ETH-USD", start, end)
+    end = _utc_now()
+    df = fetch_yf_ohlcv("ETH-USD", start=start, end=end)
     assert not df.empty, "ETH-USD OHLCV should not be empty"
     for col in ("open", "high", "low", "close", "volume"):
         assert col in df.columns, f"Missing column: {col}"
@@ -65,8 +71,8 @@ def test_yf_ethusd_ohlcv():
 @pytest.mark.integration
 def test_yf_dogeusd_ohlcv():
     start = _days_ago(90)
-    end = datetime.utcnow()
-    df = YFAdapter().fetch_ohlcv("DOGE-USD", start, end)
+    end = _utc_now()
+    df = fetch_yf_ohlcv("DOGE-USD", start=start, end=end)
     assert not df.empty, "DOGE-USD OHLCV should not be empty"
     for col in ("open", "high", "low", "close", "volume"):
         assert col in df.columns, f"Missing column: {col}"
@@ -75,8 +81,8 @@ def test_yf_dogeusd_ohlcv():
 @pytest.mark.integration
 def test_yf_empty_on_invalid_symbol():
     start = _days_ago(30)
-    end = datetime.utcnow()
-    df = YFAdapter().fetch_ohlcv("NOTASYM-XYZ", start, end)
+    end = _utc_now()
+    df = fetch_yf_ohlcv("NOTASYM-XYZ", start=start, end=end)
     assert isinstance(df, pd.DataFrame), "Should return DataFrame, not raise"
     assert df.empty, "Invalid symbol should return empty DataFrame"
 
@@ -84,6 +90,7 @@ def test_yf_empty_on_invalid_symbol():
 # ---------------------------------------------------------------------------
 # 2. Data Layer — Live (CCXT adapter)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 def test_ccxt_btcusdt_live_price():
@@ -117,6 +124,7 @@ def test_ccxt_ohlcv_fetch():
 # 3. Data Layer — Historical via router
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_historical_source_crypto():
     router = DataSourceRouter()
@@ -145,6 +153,7 @@ def test_historical_fallback_stock_symbol():
 # 4. Indicator Engine — EMA
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_ema_stack_btc_bull_trend():
     """Fetch BTC-USD daily OHLCV and compute EMA stack.
@@ -152,9 +161,9 @@ def test_ema_stack_btc_bull_trend():
     Verifies all four EMA series are non-empty and have no NaN in the last 10 values.
     Does NOT assert bull-trend ordering — that is environment-dependent.
     """
-    start = _days_ago(90)
-    end = datetime.utcnow()
-    df = YFAdapter().fetch_ohlcv("BTC-USD", start, end)
+    start = _days_ago(250)
+    end = _utc_now()
+    df = fetch_yf_ohlcv("BTC-USD", start=start, end=end)
     assert not df.empty, "BTC-USD data must be available"
 
     close = df["close"].squeeze()
@@ -172,9 +181,9 @@ def test_ema_stack_btc_bull_trend():
 @pytest.mark.integration
 def test_ema_stack_values_defined():
     """Sanity check: all EMA values in the stack are non-NaN for recent bars."""
-    start = _days_ago(90)
-    end = datetime.utcnow()
-    df = YFAdapter().fetch_ohlcv("BTC-USD", start, end)
+    start = _days_ago(250)
+    end = _utc_now()
+    df = fetch_yf_ohlcv("BTC-USD", start=start, end=end)
     close = df["close"].squeeze()
     stack = calculate_ema_stack(close)
 
@@ -187,12 +196,13 @@ def test_ema_stack_values_defined():
 # 5. Indicator Engine — RSI
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_rsi_btc_known_range():
     """RSI(14) values must always fall within [0, 100]."""
     start = _days_ago(180)
-    end = datetime.utcnow()
-    df = YFAdapter().fetch_ohlcv("BTC-USD", start, end)
+    end = _utc_now()
+    df = fetch_yf_ohlcv("BTC-USD", start=start, end=end)
     assert not df.empty, "BTC-USD data must be available"
 
     close = df["close"].squeeze()
@@ -208,39 +218,43 @@ def test_rsi_btc_known_range():
 # 6. Indicator Engine — Session Levels
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_session_levels_asia_hnl():
     start = _days_ago(30)
-    end = datetime.utcnow()
-    df = YFAdapter().fetch_ohlcv("BTC-USD", start, end)
+    end = _utc_now()
+    df = fetch_yf_ohlcv("BTC-USD", start=start, end=end)
     assert not df.empty
     result = calculate_session_levels(df.index, df["high"].squeeze(), df["low"].squeeze())
-    assert result.asia_high >= result.asia_low, "Asia high must be ≥ Asia low"
+    assert result.values["asia_high"] >= result.values["asia_low"], "Asia high must be ≥ Asia low"
 
 
 @pytest.mark.integration
 def test_session_levels_london_hnl():
     start = _days_ago(30)
-    end = datetime.utcnow()
-    df = YFAdapter().fetch_ohlcv("BTC-USD", start, end)
+    end = _utc_now()
+    df = fetch_yf_ohlcv("BTC-USD", start=start, end=end)
     assert not df.empty
     result = calculate_session_levels(df.index, df["high"].squeeze(), df["low"].squeeze())
-    assert result.london_high >= result.london_low, "London high must be ≥ London low"
+    assert result.values["london_high"] >= result.values["london_low"], (
+        "London high must be ≥ London low"
+    )
 
 
 @pytest.mark.integration
 def test_session_levels_ny_hnl():
     start = _days_ago(30)
-    end = datetime.utcnow()
-    df = YFAdapter().fetch_ohlcv("BTC-USD", start, end)
+    end = _utc_now()
+    df = fetch_yf_ohlcv("BTC-USD", start=start, end=end)
     assert not df.empty
     result = calculate_session_levels(df.index, df["high"].squeeze(), df["low"].squeeze())
-    assert result.ny_high >= result.ny_low, "NY high must be ≥ NY low"
+    assert result.values["ny_high"] >= result.values["ny_low"], "NY high must be ≥ NY low"
 
 
 # ---------------------------------------------------------------------------
 # 7. Indicator Engine — VWAP
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 def test_vwap_btcusdt():
@@ -270,6 +284,7 @@ def test_vwap_btcusdt():
 # 8. Error Handling
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_insufficient_data_raises():
     """Calling calculate_ema_stack with fewer than 200 values should raise ValueError.
@@ -286,7 +301,7 @@ def test_insufficient_data_raises():
 def test_empty_df_returns_empty():
     """Garbage symbol returns empty DataFrame — does not raise."""
     start = _days_ago(30)
-    end = datetime.utcnow()
-    df = YFAdapter().fetch_ohlcv("GARBAGEXYZ-999", start, end)
+    end = _utc_now()
+    df = fetch_yf_ohlcv("GARBAGEXYZ-999", start=start, end=end)
     assert isinstance(df, pd.DataFrame), "Should return DataFrame, not raise"
     assert df.empty, "Garbage symbol should return empty DataFrame"
