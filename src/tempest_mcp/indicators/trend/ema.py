@@ -4,6 +4,7 @@ Implements EMA calculations for periods 7, 25, 50, and 200 with crossover detect
 and stack confirmation for trend analysis.
 """
 
+import numpy as np
 import pandas as pd
 
 from tempest_mcp.logging_config import get_logger
@@ -12,6 +13,22 @@ logger = get_logger(__name__)
 
 # Standard EMA periods for stack analysis
 EMA_PERIODS = [7, 25, 50, 200]
+
+
+def _validate_prices(prices: pd.Series) -> None:
+    """Validate EMA input before delegating to pandas internals."""
+    if not isinstance(prices, pd.Series):
+        raise TypeError("prices must be a pandas Series")
+
+    if prices.empty:
+        return
+
+    if not pd.api.types.is_numeric_dtype(prices):
+        raise ValueError("prices must contain numeric values")
+
+    finite_prices = prices.dropna()
+    if not finite_prices.empty and not np.isfinite(finite_prices.to_numpy(dtype=float)).all():
+        raise ValueError("prices must contain only finite numeric values")
 
 
 def calculate_ema(prices: pd.Series, period: int) -> pd.Series:
@@ -28,13 +45,16 @@ def calculate_ema(prices: pd.Series, period: int) -> pd.Series:
         Returns empty Series if insufficient data (len < period).
 
     Raises:
-        ValueError: If period is not a positive integer.
+        TypeError: If prices is not a pandas Series.
+        ValueError: If period is not a positive integer or prices is non-numeric.
 
     Example:
         >>> prices = pd.Series([100, 101, 102, 103, 104], index=pd.date_range('2024-01-01', periods=5))
         >>> ema = calculate_ema(prices, period=3)
     """
-    if not isinstance(period, int) or period <= 0:
+    _validate_prices(prices)
+
+    if type(period) is not int or period <= 0:
         raise ValueError("Period must be a positive integer")
 
     if len(prices) < period:
@@ -58,7 +78,8 @@ def calculate_ema_stack(prices: pd.Series) -> dict[str, pd.Series]:
         prices: Series of price values (typically close prices) with datetime index
 
     Raises:
-        ValueError: If fewer than 200 price values are provided.
+        TypeError: If prices is not a pandas Series.
+        ValueError: If prices is non-numeric or fewer than 200 price values are provided.
 
     Example:
         >>> prices = pd.Series(...)  # 300+ data points
@@ -66,6 +87,8 @@ def calculate_ema_stack(prices: pd.Series) -> dict[str, pd.Series]:
         >>> print(stack.keys())
         dict_keys(['ema7', 'ema25', 'ema50', 'ema200'])
     """
+    _validate_prices(prices)
+
     if prices.empty:
         return {}
 

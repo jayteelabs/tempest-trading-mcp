@@ -66,7 +66,7 @@ known-first-party = ["tempest_mcp"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short --strict-markers"
 pythonpath = ["src"]
 markers = [
     "integration: marks tests as integration tests (require --run-integration to execute)",

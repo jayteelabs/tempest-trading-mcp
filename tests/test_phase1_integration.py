@@ -27,7 +27,6 @@ from tempest_mcp.indicators import (
     calculate_vwap,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -295,6 +294,19 @@ def test_insufficient_data_raises():
     short_prices = pd.Series(range(50))  # 50 values < 200
     with pytest.raises(ValueError):
         calculate_ema_stack(short_prices)
+
+
+@pytest.mark.integration
+def test_ema_stack_rejects_non_series_input():
+    with pytest.raises(TypeError, match="prices must be a pandas Series"):
+        calculate_ema_stack([1.0] * 200)
+
+
+@pytest.mark.integration
+def test_ema_stack_rejects_non_finite_values():
+    prices = pd.Series([float(i) for i in range(199)] + [float("inf")])
+    with pytest.raises(ValueError, match="finite numeric values"):
+        calculate_ema_stack(prices)
 
 
 @pytest.mark.integration
