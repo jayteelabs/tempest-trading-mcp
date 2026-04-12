@@ -10,6 +10,27 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../src"))
 
 
+def pytest_addoption(parser):
+    """Register custom pytest options for integration test runs."""
+    parser.addoption(
+        "--run-integration",
+        action="store_true",
+        default=False,
+        help="Run tests marked as integration.",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip integration tests unless explicitly enabled."""
+    if config.getoption("--run-integration"):
+        return
+
+    skip_integration = pytest.mark.skip(reason="need --run-integration option to run")
+    for item in items:
+        if "integration" in item.keywords:
+            item.add_marker(skip_integration)
+
+
 @pytest.fixture
 def ccxt_adapter():
     """Create a CCXTAdapter instance for testing."""
@@ -62,3 +83,15 @@ def ohlcv_data(price_data):
     low = price_data * (1 - np.abs(np.random.normal(0, 0.01, len(price_data))))
     volume = np.random.uniform(1000, 5000, len(price_data))
     return {"open": price_data, "high": high, "low": low, "close": price_data, "volume": volume}
+
+
+@pytest.fixture(scope="session")
+def network_available():
+    """Check if network is available by attempting connection to DNS server."""
+    import socket
+
+    try:
+        socket.create_connection(("8.8.8.8", 53), timeout=3)
+        return True
+    except OSError:
+        return False

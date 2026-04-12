@@ -48,32 +48,46 @@ def calculate_ema(prices: pd.Series, period: int) -> pd.Series:
     return ema
 
 
-def calculate_ema_stack(prices: pd.Series) -> dict[str, pd.Series]:
-    """Calculate all four standard EMA periods in a single call.
+def calculate_ema_stack(prices: pd.Series, periods: list[int] | None = None) -> dict[str, pd.Series]:
+    """Calculate EMA periods in a single call.
 
-    Returns EMAs for periods 7, 25, 50, and 200 - the standard stack
+    Returns EMAs for the specified periods - the standard stack
     used for trend confirmation in the EMA Stack strategy (TVMCP-019).
 
     Args:
         prices: Series of price values (typically close prices) with datetime index
+        periods: List of EMA periods to calculate. Defaults to [7, 25, 50, 200].
 
     Returns:
-        Dictionary with keys 'ema7', 'ema25', 'ema50', 'ema200',
+        Dictionary with keys 'ema{N}' for each period,
         each containing a pd.Series aligned with the input prices index.
         Series will be empty if insufficient data for that period.
 
+    Raises:
+        ValueError: If len(prices) < max(periods) - insufficient data for the
+            longest period.
+
     Example:
         >>> prices = pd.Series(...)  # 300+ data points
-        >>> stack = calculate_ema_stack(prices)
+        >>> stack = calculate_ema_stack(prices, [7, 25, 50, 200])
         >>> print(stack.keys())
         dict_keys(['ema7', 'ema25', 'ema50', 'ema200'])
     """
+    if periods is None:
+        periods = EMA_PERIODS
+
     if prices.empty:
         return {}
 
+    if len(prices) < max(periods):
+        raise ValueError(
+            f"Insufficient data for EMA calculation: {len(prices)} values required for "
+            f"period {max(periods)}. Need at least {max(periods)} data points."
+        )
+
     result = {}
 
-    for period in EMA_PERIODS:
+    for period in periods:
         ema = calculate_ema(prices, period)
         result[f"ema{period}"] = ema
 

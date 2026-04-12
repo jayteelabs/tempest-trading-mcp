@@ -1,4 +1,6 @@
-name: Haga Lane A Security
+# Shion Lane B — adversarial code review check
+# Self-hosted runner: tempesti-01
+name: Shion Lane B Check
 
 on:
   pull_request:
@@ -8,9 +10,10 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  checks: write
 
 jobs:
-  lane-a-security:
+  lane-b-check:
     runs-on: self-hosted
     steps:
       - name: Checkout repository
@@ -37,8 +40,8 @@ jobs:
             echo "DIFF_TRUNCATED=true" >> $GITHUB_OUTPUT
           fi
 
-      - name: Run Lane A security review
-        id: lane-a
+      - name: Run Lane B adversarial review
+        id: lane-b
         env:
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
         run: |
@@ -48,10 +51,10 @@ jobs:
           REPO="${{ github.repository }}"
           DIFF=$(cat /tmp/pr_diff.txt)
 
-          LANE_A_RESULT=$(/home/tempest/.opencode/bin/opencode run \
-            --agent "haga/PROMPT" \
+          LANE_B_RESULT=$(/home/tempest/.opencode/bin/opencode run \
+            --agent "shion" \
             --model minimax/MiniMax-M2.7-highspeed \
-            "You are running Lane A (Security) review for this PR:
+            "You are running Lane B (Logic/Edge/Adversarial) review for this PR:
 
             Repository: $REPO
             PR #: $PR_NUMBER
@@ -61,33 +64,45 @@ jobs:
             Diff (code changes):
             $DIFF
 
-            Focus: Auth, sessions, input validation, SQL queries, API endpoints, file uploads, permissions, vulnerability detection. Think like a security researcher. Look for SQL injection, XSS, auth bypasses, insecure deserialization, hardcoded secrets, unsafe imports.
-            Format your response as security findings with severity (Critical/High/Medium/Low), file, line, description, and recommendation.
-            If no security issues found: respond with exactly 'Lane A: PASS — no security concerns identified.'
+            Focus: Error states, data transformation, multi-file interactions, edge cases, logic correctness, adversarial/breaker mindset. Be harsh. Look for ways this code can fail, crash, or be exploited.
+            Format your response as a structured finding list. For each issue found: severity (Critical/High/Medium/Low), file, line, description, recommendation.
+            If no issues found: respond with exactly 'Lane B: PASS — no critical logic concerns identified.'
 
-            IMPORTANT: Your final line must be 'Lane A: [PASS or FAIL]' based on whether you found Critical or High severity issues.")
+            IMPORTANT: If you find ANY High or Critical severity issues, your final line must be exactly 'Lane B: FAIL'
+            If only Medium/Low or no issues, your final line must be exactly 'Lane B: PASS'")
 
-          echo "$LANE_A_RESULT" > /tmp/lane_a_result.txt
+          echo "$LANE_B_RESULT" > /tmp/lane_b_result.txt
+          if echo "$LANE_B_RESULT" | grep -q "Lane B: FAIL"; then
+            echo "CONCLUSION=failure" >> $GITHUB_OUTPUT
+          else
+            echo "CONCLUSION=success" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Post PR comment
+      - name: Create GitHub Check Run
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          LANE_A_RESULT=$(cat /tmp/lane_a_result.txt)
-
           python3 << 'PYEOF'
           import json, urllib.request, os
 
-          lane_a_result = open('/tmp/lane_a_result.txt').read()
+          lane_b_result = open('/tmp/lane_b_result.txt').read()
+          conclusion = "failure" if "Lane B: FAIL" in lane_b_result else "success"
 
           payload = {
-              "body": lane_a_result
+              "name": "Shion Lane B (Code Review)",
+              "head_sha": os.environ['GITHUB_SHA'],
+              "status": "completed",
+              "conclusion": conclusion,
+              "output": {
+                  "title": "Shion Lane B — Logic & Edge Review",
+                  "summary": f"Lane B result: {conclusion}",
+                  "text": lane_b_result
+              }
           }
 
           data = json.dumps(payload).encode()
           req = urllib.request.Request(
-              f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues/{os.environ['PR_NUMBER']}/comments",
+              f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/check-runs",
               data=data,
               headers={
                   "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
