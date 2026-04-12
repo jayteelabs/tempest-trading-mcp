@@ -10,6 +10,27 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../src"))
 
 
+def pytest_addoption(parser):
+    """Register custom pytest options for integration test runs."""
+    parser.addoption(
+        "--run-integration",
+        action="store_true",
+        default=False,
+        help="Run tests marked as integration.",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip integration tests unless explicitly enabled."""
+    if config.getoption("--run-integration"):
+        return
+
+    skip_integration = pytest.mark.skip(reason="need --run-integration option to run")
+    for item in items:
+        if "integration" in item.keywords:
+            item.add_marker(skip_integration)
+
+
 @pytest.fixture
 def ccxt_adapter():
     """Create a CCXTAdapter instance for testing."""
