@@ -1,0 +1,102 @@
+name: Shion Lane A Security
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  lane-a-security:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get PR diff
+        id: diff
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          curl -s -L "https://github.com/$REPO/pull/$PR_NUM.diff" \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -o /tmp/pr_diff.txt
+          DIFF_LEN=$(wc -c < /tmp/pr_diff.txt)
+          echo "DIFF_LEN=$DIFF_LEN"
+          if [ "$DIFF_LEN" -gt 60000 ]; then
+            head -c 60000 /tmp/pr_diff.txt > /tmp/pr_diff_truncated.txt
+            echo -e "\n\n[Diff truncated — too large for display]" >> /tmp/pr_diff_truncated.txt
+            mv /tmp/pr_diff_truncated.txt /tmp/pr_diff.txt
+            echo "DIFF_TRUNCATED=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run Lane A security review
+        id: lane-a
+        env:
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          PR_URL="${{ github.event.pull_request.html_url }}"
+          REPO="${{ github.repository }}"
+          DIFF=$(cat /tmp/pr_diff.txt)
+
+          LANE_A_RESULT=$(/home/tempest/.opencode/bin/opencode run \
+            --agent "shion/PROMPT" \
+            --model minimax/MiniMax-M2.7-highspeed \
+            "You are running Lane A (Security) review for this PR:
+
+            Repository: $REPO
+            PR #: $PR_NUMBER
+            Title: $PR_TITLE
+            URL: $PR_URL
+
+            Diff (code changes):
+            $DIFF
+
+            Focus: Auth, sessions, input validation, SQL queries, API endpoints, file uploads, permissions, vulnerability detection. Think like a security researcher. Look for SQL injection, XSS, auth bypasses, insecure deserialization, hardcoded secrets, unsafe imports.
+            Format your response as security findings with severity (Critical/High/Medium/Low), file, line, description, and recommendation.
+            If no security issues found: respond with exactly 'Lane A: PASS — no security concerns identified.'
+
+            IMPORTANT: Your final line must be 'Lane A: [PASS or FAIL]' based on whether you found Critical or High severity issues.")
+
+          echo "$LANE_A_RESULT" > /tmp/lane_a_result.txt
+
+      - name: Post PR comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          LANE_A_RESULT=$(cat /tmp/lane_a_result.txt)
+
+          python3 << 'PYEOF'
+          import json, urllib.request, os
+
+          lane_a_result = open('/tmp/lane_a_result.txt').read()
+
+          payload = {
+              "body": lane_a_result
+          }
+
+          data = json.dumps(payload).encode()
+          req = urllib.request.Request(
+              f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues/{os.environ['PR_NUMBER']}/comments",
+              data=data,
+              headers={
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "Content-Type": "application/json"
+              },
+              method="POST"
+          )
+          with urllib.request.urlopen(req) as resp:
+              print(resp.read().decode())
+          PYEOF

@@ -66,5 +66,8 @@ known-first-party = ["tempest_mcp"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short -m 'not integration'"
 pythonpath = ["src"]
+markers = [
+    "integration: marks tests that require network access",
+]

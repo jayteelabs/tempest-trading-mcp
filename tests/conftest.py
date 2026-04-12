@@ -62,3 +62,15 @@ def ohlcv_data(price_data):
     low = price_data * (1 - np.abs(np.random.normal(0, 0.01, len(price_data))))
     volume = np.random.uniform(1000, 5000, len(price_data))
     return {"open": price_data, "high": high, "low": low, "close": price_data, "volume": volume}
+
+
+@pytest.fixture(scope="session")
+def network_available():
+    """Check if network is available by attempting connection to DNS server."""
+    import socket
+
+    try:
+        socket.create_connection(("8.8.8.8", 53), timeout=3)
+        return True
+    except OSError:
+        return False

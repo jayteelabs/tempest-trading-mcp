@@ -111,20 +111,14 @@ class TestCalculateEmaStack:
             assert ema.index.equals(prices.index)
 
     def test_insufficient_data_for_longest_period(self):
-        """Test that ema200 is empty when data is insufficient."""
+        """Test that ValueError is raised when data is insufficient for max period."""
         prices = pd.Series(
             range(100, 200),  # 100 values, not enough for EMA200
             index=pd.date_range("2024-01-01", periods=100, freq="h"),
         )
 
-        stack = calculate_ema_stack(prices)
-
-        # EMA7, EMA25, EMA50 should have data
-        assert not stack["ema7"].empty
-        assert not stack["ema25"].empty
-        assert not stack["ema50"].empty
-        # EMA200 should be empty
-        assert stack["ema200"].empty
+        with pytest.raises(ValueError, match="Insufficient data for EMA calculation"):
+            calculate_ema_stack(prices)
 
     def test_empty_series_returns_empty_stack(self):
         """calculate_ema_stack should handle empty price Series without error."""
