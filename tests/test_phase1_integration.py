@@ -20,7 +20,6 @@ from tempest_mcp.indicators import (
     detect_session_levels,
 )
 
-
 # =============================================================================
 # 1. Data Layer — Historical (YFinance adapter)
 # =============================================================================

@@ -49,7 +49,7 @@ jobs:
           DIFF=$(cat /tmp/pr_diff.txt)
 
           LANE_A_RESULT=$(/home/tempest/.opencode/bin/opencode run \
-            --agent "shion/PROMPT" \
+            --agent "shion" \
             --model minimax/MiniMax-M2.7-highspeed \
             "You are running Lane A (Security) review for this PR:
 

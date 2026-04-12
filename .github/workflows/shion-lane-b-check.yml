@@ -1,4 +1,4 @@
-# Haga Lane B — adversarial code review check
+# Shion Lane B — adversarial code review check
 # Self-hosted runner: tempesti-01
 name: Shion Lane B Check
 
@@ -52,7 +52,7 @@ jobs:
           DIFF=$(cat /tmp/pr_diff.txt)
 
           LANE_B_RESULT=$(/home/tempest/.opencode/bin/opencode run \
-            --agent "shion/PROMPT" \
+            --agent "shion" \
             --model minimax/MiniMax-M2.7-highspeed \
             "You are running Lane B (Logic/Edge/Adversarial) review for this PR:
 
@@ -89,12 +89,12 @@ jobs:
           conclusion = "failure" if "Lane B: FAIL" in lane_b_result else "success"
 
           payload = {
-              "name": "Haga Lane B (Code Review)",
+              "name": "Shion Lane B (Code Review)",
               "head_sha": os.environ['GITHUB_SHA'],
               "status": "completed",
               "conclusion": conclusion,
               "output": {
-                  "title": "Haga Lane B — Logic & Edge Review",
+                  "title": "Shion Lane B — Logic & Edge Review",
                   "summary": f"Lane B result: {conclusion}",
                   "text": lane_b_result
               }
