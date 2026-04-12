@@ -9,7 +9,13 @@ from tempest_mcp.backtest.commission import (
     calculate_commission,
     calculate_net_pnl,
 )
-from tempest_mcp.backtest.engine import BacktestEngine, BacktestResult, Trade
+from tempest_mcp.backtest.engine import (
+    BacktestEngine,
+    BacktestResult,
+    PositionDirection,
+    SignalAction,
+    Trade,
+)
 
 
 class TestCommissionFunctions:
@@ -274,7 +280,7 @@ class TestTradeDataclass:
             entry_price=100.0,
             exit_price=110.0,
             size=100.0,
-            direction=1,
+            direction=PositionDirection.LONG,
             gross_pnl=1000.0,
             net_pnl=973.75,
             commission=26.0,
@@ -286,7 +292,7 @@ class TestTradeDataclass:
         assert trade.entry_price == 100.0
         assert trade.exit_price == 110.0
         assert trade.size == 100.0
-        assert trade.direction == 1
+        assert trade.direction == PositionDirection.LONG
         assert trade.gross_pnl == 1000.0
         assert trade.net_pnl == 973.75
         assert trade.commission == 26.0
@@ -311,3 +317,300 @@ class TestBacktestResultDataclass:
         assert result.open_position is False
         assert result.initial_capital == 100000.0
         assert result.final_equity == 100000.0
+
+
+class TestSignalActionEnum:
+    """Tests for SignalAction enum (ENG-58)."""
+
+    def test_signal_action_values(self):
+        assert SignalAction.LONG_ENTRY.value == "long_entry"
+        assert SignalAction.LONG_EXIT.value == "long_exit"
+        assert SignalAction.SHORT_ENTRY.value == "short_entry"
+        assert SignalAction.SHORT_EXIT.value == "short_exit"
+        assert SignalAction.HOLD.value == "hold"
+
+    def test_signal_action_from_int_1(self):
+        assert SignalAction.from_int(1) == SignalAction.LONG_ENTRY
+
+    def test_signal_action_from_int_minus_1(self):
+        assert SignalAction.from_int(-1) == SignalAction.LONG_EXIT
+
+    def test_signal_action_from_int_0(self):
+        assert SignalAction.from_int(0) == SignalAction.HOLD
+
+    def test_signal_action_from_int_invalid(self):
+        with pytest.raises(ValueError, match="Invalid signal int value"):
+            SignalAction.from_int(99)
+
+
+class TestPositionDirectionEnum:
+    """Tests for PositionDirection enum (ENG-58)."""
+
+    def test_position_direction_values(self):
+        assert PositionDirection.FLAT.value == "flat"
+        assert PositionDirection.LONG.value == "long"
+        assert PositionDirection.SHORT.value == "short"
+
+
+class TestBidirectionalEngine:
+    """Tests for bidirectional backtest engine (ENG-58)."""
+
+    def _make_ohlcv(self, n: int, start_price: float = 100.0, step: float = 0.5) -> pd.DataFrame:
+        """Helper to create OHLCV DataFrame."""
+        times = [datetime(2024, 1, 1) + timedelta(hours=i) for i in range(n)]
+        data = {
+            "open": [start_price + i * step for i in range(n)],
+            "high": [start_price + i * step + 1 for i in range(n)],
+            "low": [start_price + i * step - 1 for i in range(n)],
+            "close": [start_price + i * step for i in range(n)],
+            "volume": [1000.0] * n,
+        }
+        return pd.DataFrame(data, index=pd.DatetimeIndex(times))
+
+    def _make_signal_series(self, n: int, mapping: dict[int, SignalAction]) -> pd.Series:
+        """Helper to create SignalAction series with matching DatetimeIndex."""
+        times = [datetime(2024, 1, 1) + timedelta(hours=i) for i in range(n)]
+        signals = pd.Series(SignalAction.HOLD, index=pd.DatetimeIndex(times))
+        for idx, action in mapping.items():
+            if 0 <= idx < n:
+                signals.iloc[idx] = action
+        return signals
+
+    def test_short_trade_lifecycle(self):
+        """Short trade: price falls, profit when short."""
+        # Bar 0: price=100, SHORT_ENTRY
+        # Bar 1: price=95 (falls), no signal
+        # Bar 2: price=90, SHORT_EXIT
+        n = 4
+        ohlcv = self._make_ohlcv(n, start_price=100.0, step=-5.0)  # falling prices
+        signals = self._make_signal_series(n, {0: SignalAction.SHORT_ENTRY, 2: SignalAction.SHORT_EXIT})
+        engine = BacktestEngine(initial_capital=100000.0, commission_pct=0.001, slippage_bps=5.0)
+        result = engine.run(ohlcv, signals)
+
+        assert len(result.trades) == 1
+        trade = result.trades[0]
+        assert trade.direction == PositionDirection.SHORT
+        # For short: entry_price > exit_price (short at high, cover at low for profit)
+        assert trade.entry_price > trade.exit_price
+        assert trade.net_pnl > 0  # profit on short
+        assert result.open_position is False
+
+    def test_flat_to_short_to_flat(self):
+        """Complete short round trip: FLAT -> SHORT -> FLAT."""
+        n = 4
+        ohlcv = self._make_ohlcv(n, start_price=100.0, step=-5.0)
+        signals = self._make_signal_series(n, {0: SignalAction.SHORT_ENTRY, 2: SignalAction.SHORT_EXIT})
+        engine = BacktestEngine(initial_capital=100000.0, commission_pct=0.0, slippage_bps=0.0)
+        result = engine.run(ohlcv, signals)
+
+        assert len(result.trades) == 1
+        assert result.trades[0].direction == PositionDirection.SHORT
+        assert result.open_position is False
+
+    def test_short_profit_when_price_falls(self):
+        """Verify short PnL formula: profit when entry_price > exit_price."""
+        n = 4
+        # entry at bar 1 open = 100 (start_price=99, step=1)
+        ohlcv = self._make_ohlcv(n, start_price=99.0, step=1.0)  # bar 1 open = 100, bar 2 open = 101
+        signals = self._make_signal_series(n, {0: SignalAction.SHORT_ENTRY, 1: SignalAction.SHORT_EXIT})
+        engine = BacktestEngine(initial_capital=100000.0, commission_pct=0.0, slippage_bps=0.0)
+        result = engine.run(ohlcv, signals)
+
+        trade = result.trades[0]
+        # Short: entry=100, exit=101, size=1000
+        # gross_pnl = (entry - exit) * size = (100 - 101) * 1000 = -1000 (loss)
+        assert trade.gross_pnl < 0
+
+    def test_short_loss_when_price_rises(self):
+        """Verify short PnL formula: loss when entry_price < exit_price."""
+        n = 4
+        # price rises: start=99, step=-1 so bar 1 open = 98 (entry), bar 2 open = 97
+        ohlcv = self._make_ohlcv(n, start_price=99.0, step=-1.0)  # bar 1 open = 98, bar 2 open = 97
+        signals = self._make_signal_series(n, {0: SignalAction.SHORT_ENTRY, 1: SignalAction.SHORT_EXIT})
+        engine = BacktestEngine(initial_capital=100000.0, commission_pct=0.0, slippage_bps=0.0)
+        result = engine.run(ohlcv, signals)
+
+        trade = result.trades[0]
+        # Short: entry=98, exit=97, size=~1020
+        # gross_pnl = (entry - exit) * size = (98 - 97) * size > 0 (profit)
+        assert trade.gross_pnl > 0
+
+    def test_long_short_sequence_through_flat(self):
+        """LONG -> FLAT -> SHORT -> FLAT (valid state transitions)."""
+        n = 8
+        ohlcv = self._make_ohlcv(n, start_price=100.0, step=1.0)
+        # Bar 0: LONG_ENTRY, Bar 2: LONG_EXIT (go flat), Bar 4: SHORT_ENTRY, Bar 6: SHORT_EXIT
+        signals = self._make_signal_series(
+            n,
+            {
+                0: SignalAction.LONG_ENTRY,
+                2: SignalAction.LONG_EXIT,
+                4: SignalAction.SHORT_ENTRY,
+                6: SignalAction.SHORT_EXIT,
+            },
+        )
+        engine = BacktestEngine(initial_capital=100000.0, commission_pct=0.0, slippage_bps=0.0)
+        result = engine.run(ohlcv, signals)
+
+        assert len(result.trades) == 2
+        assert result.trades[0].direction == PositionDirection.LONG
+        assert result.trades[1].direction == PositionDirection.SHORT
+        assert result.open_position is False
+
+    def test_invalid_long_to_short_direct_flip_raises(self):
+        """LONG -> SHORT without FLAT intermediate should raise ValueError."""
+        n = 6
+        ohlcv = self._make_ohlcv(n, start_price=100.0, step=1.0)
+        # Bar 0: LONG_ENTRY, Bar 2: SHORT_ENTRY (direct flip - invalid)
+        signals = self._make_signal_series(
+            n,
+            {
+                0: SignalAction.LONG_ENTRY,
+                2: SignalAction.SHORT_ENTRY,
+            },
+        )
+        engine = BacktestEngine(initial_capital=100000.0)
+        with pytest.raises(ValueError, match="Invalid transition.*cannot SHORT_ENTRY"):
+            engine.run(ohlcv, signals)
+
+    def test_invalid_short_to_long_direct_flip_raises(self):
+        """SHORT -> LONG without FLAT intermediate should raise ValueError."""
+        n = 6
+        ohlcv = self._make_ohlcv(n, start_price=100.0, step=1.0)
+        # Bar 0: SHORT_ENTRY, Bar 2: LONG_ENTRY (direct flip - invalid)
+        signals = self._make_signal_series(
+            n,
+            {
+                0: SignalAction.SHORT_ENTRY,
+                2: SignalAction.LONG_ENTRY,
+            },
+        )
+        engine = BacktestEngine(initial_capital=100000.0)
+        with pytest.raises(ValueError, match="Invalid transition.*cannot LONG_ENTRY"):
+            engine.run(ohlcv, signals)
+
+    def test_short_exit_without_position_is_noop(self):
+        """SHORT_EXIT when flat is a no-op (no position to close)."""
+        n = 4
+        ohlcv = self._make_ohlcv(n, start_price=100.0, step=1.0)
+        signals = self._make_signal_series(n, {0: SignalAction.SHORT_EXIT})  # no entry first
+        engine = BacktestEngine(initial_capital=100000.0)
+        result = engine.run(ohlcv, signals)  # should not raise, just no-op
+        assert len(result.trades) == 0
+        assert result.open_position is False
+
+    def test_long_exit_without_position_is_noop(self):
+        """LONG_EXIT when flat is a no-op (no position to close)."""
+        n = 4
+        ohlcv = self._make_ohlcv(n, start_price=100.0, step=1.0)
+        signals = self._make_signal_series(n, {0: SignalAction.LONG_EXIT})  # no entry first
+        engine = BacktestEngine(initial_capital=100000.0)
+        result = engine.run(ohlcv, signals)  # should not raise, just no-op
+        assert len(result.trades) == 0
+        assert result.open_position is False
+
+    def test_short_trade_with_commission_and_slippage(self):
+        """Short trade correctly accounts for commission and slippage."""
+        n = 4
+        # start_price=100, step=-5 so bar 1 open=95 (entry), bar 3 open=85 (exit)
+        ohlcv = self._make_ohlcv(n, start_price=100.0, step=-5.0)
+        signals = self._make_signal_series(n, {0: SignalAction.SHORT_ENTRY, 2: SignalAction.SHORT_EXIT})
+        engine = BacktestEngine(initial_capital=100000.0, commission_pct=0.001, slippage_bps=5.0)
+        result = engine.run(ohlcv, signals)
+
+        assert len(result.trades) == 1
+        trade = result.trades[0]
+        assert trade.commission > 0
+        assert trade.slippage_cost > 0
+        # net_pnl should be less than gross_pnl due to costs
+        assert abs(trade.net_pnl) < abs(trade.gross_pnl)
+
+    def test_long_trade_still_works_correctly(self):
+        """Verify existing long-only behavior is preserved."""
+        n = 4
+        ohlcv = self._make_ohlcv(n, start_price=100.0, step=5.0)  # rising prices
+        signals = self._make_signal_series(n, {0: SignalAction.LONG_ENTRY, 2: SignalAction.LONG_EXIT})
+        engine = BacktestEngine(initial_capital=100000.0, commission_pct=0.0, slippage_bps=0.0)
+        result = engine.run(ohlcv, signals)
+
+        assert len(result.trades) == 1
+        trade = result.trades[0]
+        assert trade.direction == PositionDirection.LONG
+        assert trade.entry_price < trade.exit_price  # entry < exit for long profit
+        assert trade.net_pnl > 0
+
+    def test_short_position_sizing(self):
+        """Short position size is based on cash, same as long."""
+        n = 3
+        # bar 1 open = 100.0 (start_price=99, step=1)
+        ohlcv = self._make_ohlcv(n, start_price=99.0, step=1.0)
+        signals = self._make_signal_series(n, {0: SignalAction.SHORT_ENTRY, 1: SignalAction.SHORT_EXIT})
+        engine = BacktestEngine(initial_capital=100000.0, commission_pct=0.0, slippage_bps=0.0)
+        result = engine.run(ohlcv, signals)
+
+        trade = result.trades[0]
+        # size = round(100000 / 100, 8) = 1000
+        assert trade.size == 1000.0
+
+    def test_equity_tracks_unrealized_short_pnl(self):
+        """Equity correctly reflects unrealized PnL for open short position."""
+        n = 5
+        ohlcv = self._make_ohlcv(n, start_price=100.0, step=-5.0)  # falling prices
+        signals = self._make_signal_series(n, {0: SignalAction.SHORT_ENTRY})  # no exit
+        engine = BacktestEngine(initial_capital=100000.0, commission_pct=0.0, slippage_bps=0.0)
+        result = engine.run(ohlcv, signals)
+
+        # Position still open
+        assert result.open_position is True
+        assert len(result.trades) == 0
+        # Equity should increase as price falls (short profits)
+        assert result.final_equity > result.initial_capital
+
+    def test_equity_tracks_unrealized_long_pnl(self):
+        """Equity correctly reflects unrealized PnL for open long position."""
+        n = 5
+        ohlcv = self._make_ohlcv(n, start_price=100.0, step=5.0)  # rising prices
+        signals = self._make_signal_series(n, {0: SignalAction.LONG_ENTRY})  # no exit
+        engine = BacktestEngine(initial_capital=100000.0, commission_pct=0.0, slippage_bps=0.0)
+        result = engine.run(ohlcv, signals)
+
+        # Position still open
+        assert result.open_position is True
+        assert len(result.trades) == 0
+        # Equity should increase as price rises (long profits)
+        assert result.final_equity > result.initial_capital
+
+    def test_multiple_short_trades_sequence(self):
+        """Multiple short round trips in sequence."""
+        n = 8
+        ohlcv = self._make_ohlcv(n, start_price=100.0, step=-1.0)  # falling
+        signals = self._make_signal_series(
+            n,
+            {
+                0: SignalAction.SHORT_ENTRY,
+                2: SignalAction.SHORT_EXIT,
+                4: SignalAction.SHORT_ENTRY,
+                6: SignalAction.SHORT_EXIT,
+            },
+        )
+        engine = BacktestEngine(initial_capital=100000.0, commission_pct=0.0, slippage_bps=0.0)
+        result = engine.run(ohlcv, signals)
+
+        assert len(result.trades) == 2
+        for trade in result.trades:
+            assert trade.direction == PositionDirection.SHORT
+
+    def test_signal_action_enum_series_input(self):
+        """Engine accepts SignalAction enum values directly in signals Series."""
+        n = 4
+        ohlcv = self._make_ohlcv(n, start_price=100.0, step=5.0)
+        times = [datetime(2024, 1, 1) + timedelta(hours=i) for i in range(n)]
+        signals = pd.Series(
+            [SignalAction.LONG_ENTRY, SignalAction.HOLD, SignalAction.LONG_EXIT, SignalAction.HOLD],
+            index=pd.DatetimeIndex(times),
+        )
+        engine = BacktestEngine(initial_capital=100000.0, commission_pct=0.0, slippage_bps=0.0)
+        result = engine.run(ohlcv, signals)
+
+        assert len(result.trades) == 1
+        assert result.trades[0].direction == PositionDirection.LONG
