@@ -27,7 +27,7 @@ jobs:
 
       - name: Produce design findings
         run: |
-          python .github/scripts/review/run_design_review.py \
+          python3 .github/scripts/review/run_design_review.py \
             --pr "$PR_NUMBER" \
             --title "$PR_TITLE" \
             --url "$PR_URL" \
@@ -60,7 +60,7 @@ jobs:
 
       - name: Produce security audit findings
         run: |
-          python .github/scripts/review/run_security_audit.py \
+          python3 .github/scripts/review/run_security_audit.py \
             --pr "$PR_NUMBER" \
             --title "$PR_TITLE" \
             --url "$PR_URL" \
@@ -93,7 +93,7 @@ jobs:
 
       - name: Produce logic audit findings
         run: |
-          python .github/scripts/review/run_logic_audit.py \
+          python3 .github/scripts/review/run_logic_audit.py \
             --pr "$PR_NUMBER" \
             --title "$PR_TITLE" \
             --url "$PR_URL" \
@@ -134,7 +134,7 @@ jobs:
 
       - name: Publish consolidated review
         run: |
-          python .github/scripts/review/publish_review.py \
+          python3 .github/scripts/review/publish_review.py \
             --pr "$PR_NUMBER" \
             --title "$PR_TITLE" \
             --url "$PR_URL" \
