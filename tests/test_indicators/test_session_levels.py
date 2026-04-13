@@ -83,6 +83,23 @@ class TestDetectSessionLevels:
         assert result["session_type"] == "ny"
         assert result["bars"] == 6
 
+    def test_new_york_alias_normalizes_to_ny(self):
+        """Compatibility alias should normalize to the canonical ny session id."""
+        dates = pd.date_range("2024-03-15", periods=24, freq="h", tz="UTC")
+        data = {
+            "open": [100.0 + i * 0.1 for i in range(24)],
+            "high": [101.0 + i * 0.1 for i in range(24)],
+            "low": [99.0 + i * 0.1 for i in range(24)],
+            "close": [100.5 + i * 0.1 for i in range(24)],
+            "volume": [1000.0] * 24,
+        }
+        df = pd.DataFrame(data, index=dates)
+
+        result = detect_session_levels(df, "new_york")
+
+        assert result["session_type"] == "ny"
+        assert result["bars"] == 6
+
     def test_no_bars_in_session_window(self):
         """Test when no bars fall within session window returns bars=0 and NaN."""
         # Create data for a single day at night hours only (no Asia/London/NY session bars)
@@ -164,11 +181,10 @@ class TestDetectPdhPdl:
     """Tests for detect_pdh_pdl function."""
 
     def test_normal_multi_day_data(self):
-        """Test PDH/PDL returns insufficient_data when first bar is at UTC midnight.
+        """PDH/PDL should be computed from the prior ET business day.
 
-        When first bar is at UTC midnight, previous day has no bars because
-        the previous day range [midnight-1day, midnight) doesn't contain any bars.
-        This is working as designed - the test verifies this behavior.
+        The reference point is the latest/current bar in the dataset, not the
+        first loaded bar.
         """
         # Create 2 full days of data: March 12 and March 13
         dates = pd.date_range("2024-03-12", periods=48, freq="h", tz="UTC")
@@ -181,10 +197,15 @@ class TestDetectPdhPdl:
         }
         df = pd.DataFrame(data, index=dates)
 
-        # First bar is March 12 00:00, previous day March 11 has no bars
         result = detect_pdh_pdl(df)
-        assert result["position"] == "insufficient_data"
-        assert pd.isna(result["previous_day_high"])
+
+        assert result["previous_day_high"] == pytest.approx(103.7)
+        assert result["previous_day_low"] == pytest.approx(99.4)
+        assert result["previous_day_close"] == pytest.approx(103.2)
+        assert result["previous_day_range"] == pytest.approx(4.3)
+        assert result["position"] == "above_pdh"
+        assert result["pdh_timestamp_utc"] == pd.Timestamp("2024-03-13 03:00:00+00:00")
+        assert result["pdl_timestamp_utc"] == pd.Timestamp("2024-03-12 04:00:00+00:00")
 
     def test_single_day_insufficient_data(self):
         """Test that less than 2 days returns insufficient_data."""
@@ -205,12 +226,7 @@ class TestDetectPdhPdl:
         assert pd.isna(result["previous_day_high"])
 
     def test_pivot_and_levels_calculation(self):
-        """Test pivot, r1, r2, s1, s2 formula verification.
-
-        When first bar is at UTC midnight, insufficient_data is returned.
-        This test verifies the formulas work correctly by checking the calculation
-        logic separately.
-        """
+        """Test pivot, r1, r2, s1, s2 formula verification."""
         # Test formulas directly
         pdh, pdl, pdc = 110.0, 90.0, 100.0
         pivot = (pdh + pdl + pdc) / 3

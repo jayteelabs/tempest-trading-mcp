@@ -11,7 +11,7 @@ Timestamp: TypeAlias = float
 class SessionType(Enum):
     ASIA = "asia"
     LONDON = "london"
-    NEW_YORK = "new_york"
+    NEW_YORK = "ny"
 
 
 @dataclass(frozen=True)

@@ -1,40 +1,43 @@
 """VWAP Indicator Engine - Volume Weighted Average Price calculations.
 
 Implements VWAP calculations with session anchoring for different trading sessions
-(Asia, London, NY, Daily). VWAP resets at the start of each session based on UTC time.
+(Asia, London, NY, Daily). Tempest keeps internal timestamps in UTC, but session
+anchors follow their business timezone conventions.
 
 VWAP Formula:
     VWAP = cumulative(typical_price × volume) / cumulative(volume)
     where typical_price = (high + low + close) / 3
 
-Session Anchors (UTC times - NO DST):
+Session Anchors:
     - 'asia': 00:00 UTC
     - 'london': 08:00 UTC
-    - 'ny': 13:30 UTC (NYSE open, DEFAULT)
-    - 'daily': 00:00 UTC (calendar day)
+    - 'ny': 09:30 America/New_York (DST-aware, DEFAULT)
+    - 'daily': 00:00 America/New_York (ET business day)
 
 Pre-first-anchor behavior: accumulates from bar 0, resets at first anchor boundary.
 """
 
 import pandas as pd
 
-# Session anchor times in UTC (NO DST adjustments)
+from tempest_mcp.time_utils import BUSINESS_TZ, BUSINESS_TZ_NAME
+
+# Session anchor definitions. Asia/London stay UTC-based; NY and daily use ET.
 SESSION_ANCHORS = {
-    "asia": 0,  # 00:00 UTC
-    "london": 8,  # 08:00 UTC
-    "ny": 13.5,  # 13:30 UTC (NYSE open)
-    "daily": 0,  # 00:00 UTC (calendar day)
+    "asia": {"timezone": "UTC", "hour": 0, "minute": 0},
+    "london": {"timezone": "UTC", "hour": 8, "minute": 0},
+    "ny": {"timezone": BUSINESS_TZ_NAME, "hour": 9, "minute": 30},
+    "daily": {"timezone": BUSINESS_TZ_NAME, "hour": 0, "minute": 0},
 }
 
 
-def _get_session_anchor_hour(anchor: str) -> float:
-    """Get the UTC hour for a session anchor.
+def _get_session_anchor(anchor: str) -> dict[str, str | int]:
+    """Get the timezone-aware session anchor definition.
 
     Args:
         anchor: Session anchor type ('asia', 'london', 'ny', 'daily')
 
     Returns:
-        UTC hour as float (e.g., 13.5 for 13:30)
+        Mapping with timezone, hour, and minute keys.
 
     Raises:
         ValueError: If anchor type is not recognized
@@ -66,15 +69,17 @@ def _ensure_utc_index(series: pd.Series) -> pd.Series:
     return series
 
 
-def _calculate_session_groups(dates: pd.DatetimeIndex, anchor_hour: float) -> pd.Series:
+def _calculate_session_groups(
+    dates: pd.DatetimeIndex,
+    anchor: dict[str, str | int],
+) -> pd.Series:
     """Calculate session group identifiers for VWAP accumulation.
 
     Each session is identified by a unique group ID. VWAP resets at each
     new session group.
 
-    A session runs from ``anchor_hour`` on day D to just before ``anchor_hour`` on
-    day D+1 in UTC. For example, with an anchor of 13.5 (13:30 UTC), the session
-    runs from 13:30 UTC to the next day's 13:30 UTC.
+    A session runs from the configured anchor on day D to just before the same
+    anchor on day D+1 in the anchor's business timezone.
 
     Note: Bars exactly at ``anchor_hour`` (e.g., 13:30:00.000000) are assigned to the
     NEW session (day D+1), not the previous session. This is because the boundary
@@ -83,45 +88,43 @@ def _calculate_session_groups(dates: pd.DatetimeIndex, anchor_hour: float) -> pd
     start of the next session.
 
     The grouping logic is implemented by:
-    1. Converting all timestamps to UTC.
-    2. For rows where ``hour + minute / 60 + second / 3600 < anchor_hour``,
-       subtracting one calendar day from the timestamp.
-    3. Using ``normalize()`` on the adjusted timestamps as the session key.
+    1. Converting all timestamps to the anchor timezone.
+    2. Building that local day's anchor boundary.
+    3. Moving rows before the boundary to the prior local day.
+    4. Converting the resulting session start back to UTC for the group key.
 
     Args:
         dates: DatetimeIndex containing all timestamps to group. Can be tz-naive
             (interpreted as UTC) or tz-aware.
-        anchor_hour: Anchor time in hours since midnight UTC at which a new session
-            begins, e.g. 13.5 for 13:30 UTC.
+        anchor: Mapping with anchor timezone, hour, and minute.
 
     Returns:
-        A pandas Series indexed like ``dates`` whose values are normalized
-        UTC timestamps (midnight of the session's anchor day). These can be
+        A pandas Series indexed like ``dates`` whose values are UTC timestamps
+        representing the session start. These can be
         used directly as group keys for VWAP accumulation.
     """
     if not isinstance(dates, pd.DatetimeIndex):
         raise TypeError("dates must be a pandas DatetimeIndex")
 
-    # Work on a copy, ensure everything is in UTC
+    # Work on a copy, ensure everything is in UTC first
     idx = dates
     if idx.tz is None:
         idx = idx.tz_localize("UTC")
     else:
         idx = idx.tz_convert("UTC")
 
-    # Compute fractional hour of day
-    fractional_hour = (
-        idx.hour + idx.minute / 60.0 + idx.second / 3600.0 + idx.microsecond / (3600.0 * 1e6)
+    anchor_tz_name = str(anchor["timezone"])
+    anchor_hour = int(anchor["hour"])
+    anchor_minute = int(anchor["minute"])
+    anchor_tz = BUSINESS_TZ if anchor_tz_name == BUSINESS_TZ_NAME else "UTC"
+
+    local_idx = idx.tz_convert(anchor_tz)
+    boundary_today = local_idx.normalize() + pd.Timedelta(hours=anchor_hour, minutes=anchor_minute)
+    before_boundary = local_idx < boundary_today
+    session_starts_local = boundary_today - pd.to_timedelta(
+        before_boundary.astype("int64"), unit="D"
     )
-
-    # True for timestamps before the anchor_hour; these belong to the previous session
-    before_anchor = fractional_hour < anchor_hour
-
-    # Subtract one day where appropriate
-    adjusted_idx = idx - pd.to_timedelta(before_anchor.astype("int64"), unit="D")
-
-    # Normalized adjusted dates serve as explicit session identifiers
-    session_keys = adjusted_idx.normalize()
+    session_keys = pd.DatetimeIndex(session_starts_local).tz_convert("UTC")
 
     return pd.Series(session_keys, index=dates)
 
@@ -137,14 +140,14 @@ def calculate_vwap(
 
     VWAP = cumulative(typical_price × volume) / cumulative(volume), reset at session anchor.
 
-    Session anchors (UTC times - NO DST):
+    Session anchors:
         - 'asia': 00:00 UTC
         - 'london': 08:00 UTC
-        - 'ny': 13:30 UTC (DEFAULT)
-        - 'daily': 00:00 UTC (calendar day)
+        - 'ny': 09:30 America/New_York (DST-aware, DEFAULT)
+        - 'daily': 00:00 America/New_York (ET business day)
 
     Pre-first-anchor: accumulates from bar 0, resets at first anchor boundary encountered.
-    After first reset: resets at defined UTC times each trading day.
+    After first reset: resets at defined local-session boundaries each trading day.
 
     Args:
         high: Series of high prices with DatetimeIndex (UTC-aware or treated as UTC)
@@ -175,8 +178,8 @@ def calculate_vwap(
     if not (len(high) == len(low) == len(close) == len(volume)):
         raise ValueError("All input Series must have the same length")
 
-    # Get anchor hour
-    anchor_hour = _get_session_anchor_hour(anchor)
+    # Get anchor configuration
+    anchor_config = _get_session_anchor(anchor)
 
     # Ensure UTC-aware index
     high = _ensure_utc_index(high)
@@ -205,7 +208,7 @@ def calculate_vwap(
     tp_volume = typical_price * volume
 
     # Get session groups
-    session_groups = _calculate_session_groups(high.index, anchor_hour)
+    session_groups = _calculate_session_groups(high.index, anchor_config)
 
     # Create a DataFrame for groupby operations
     df = pd.DataFrame(

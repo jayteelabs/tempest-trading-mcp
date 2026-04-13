@@ -11,6 +11,7 @@ from tempest_mcp.config import ErrorCodes, get_config
 from tempest_mcp.data._symbols import normalize_to_yf
 from tempest_mcp.logging_config import get_logger
 from tempest_mcp.models.market import Kline, KlineData, Ticker
+from tempest_mcp.time_utils import BUSINESS_TZ_NAME, coerce_window_datetime_to_utc
 
 logger = get_logger(__name__)
 
@@ -74,8 +75,11 @@ def fetch_ohlcv(
         symbol: Asset symbol in yfinance native format (e.g., BTC-USD, ETH-USD).
                 Option B: no symbol conversion needed — BTC-USD and ETH-USD work as-is.
         interval: Data interval (1m, 5m, 15m, 30m, 1h, 1d, 1wk, 1mo). Default: 1d.
-        start: Start datetime (UTC). Defaults to 30 days ago for 1d interval.
-        end: End datetime (UTC). Defaults to now.
+        start: Start datetime for the request window. Naive datetimes are
+            interpreted in America/New_York, then converted to UTC. Defaults to
+            30 days ago for 1d interval.
+        end: End datetime for the request window. Naive datetimes are
+            interpreted in America/New_York, then converted to UTC. Defaults to now.
         auto_adjust: Whether to adjust prices for splits/dividends. Default: True.
 
     Returns:
@@ -96,13 +100,22 @@ def fetch_ohlcv(
         # Default: 30 days for daily, shorter for intraday
         start = now_utc - timedelta(days=30)
 
-    # Ensure timezone-aware - naive datetimes are interpreted as UTC
+    # Ensure timezone-aware - naive datetimes are interpreted as ET business time
     if start.tzinfo is None:
-        start = start.replace(tzinfo=timezone.utc)
-        logger.warning("fetch_ohlcv: naive start datetime interpreted as UTC", start=start)
+        logger.warning(
+            "fetch_ohlcv: naive start datetime interpreted as business timezone",
+            start=start,
+            timezone=BUSINESS_TZ_NAME,
+        )
     if end is not None and end.tzinfo is None:
-        end = end.replace(tzinfo=timezone.utc)
-        logger.warning("fetch_ohlcv: naive end datetime interpreted as UTC", end=end)
+        logger.warning(
+            "fetch_ohlcv: naive end datetime interpreted as business timezone",
+            end=end,
+            timezone=BUSINESS_TZ_NAME,
+        )
+
+    start = coerce_window_datetime_to_utc(start)
+    end = coerce_window_datetime_to_utc(end)
 
     # Map interval to yfinance format
     interval_map: dict[str, str] = {

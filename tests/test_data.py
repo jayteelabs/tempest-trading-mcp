@@ -8,7 +8,7 @@ Tests cover:
 - Error handling per D14 (no exception propagation)
 """
 
-from datetime import timezone
+from datetime import datetime, timezone
 
 import pandas as pd
 import pytest
@@ -458,6 +458,85 @@ class TestHistoricalAdapter:
         assert not df.empty
         assert df.index.tz is not None
         assert list(df.columns) == ["open", "high", "low", "close", "volume"]
+
+    def test_historical_fetch_interprets_naive_datetimes_as_et(self, monkeypatch):
+        """Naive request windows should be interpreted in America/New_York."""
+        from tempest_mcp.data import yf_adapter
+        from tempest_mcp.data._hist import HistoricalDataSource
+
+        source = HistoricalDataSource()
+        captured: dict[str, object] = {}
+
+        class DummyCCXTHistorical:
+            def fetch_ohlcv_historical(self, *args, **kwargs):
+                captured["since"] = kwargs.get("since")
+                captured["params"] = kwargs.get("params")
+                return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+        source._ccxt = DummyCCXTHistorical()
+
+        def _fake_yf_fetch(
+            symbol: str, interval: str = "1d", start=None, end=None, auto_adjust=True
+        ):
+            captured["start"] = start
+            captured["end"] = end
+            return (
+                pd.DataFrame(
+                    _sample_ohlcv_rows(),
+                    columns=["timestamp", "open", "high", "low", "close", "volume"],
+                )
+                .assign(timestamp=lambda df: pd.to_datetime(df["timestamp"], unit="ms", utc=True))
+                .set_index("timestamp")[["open", "high", "low", "close", "volume"]]
+            )
+
+        monkeypatch.setattr(yf_adapter, "fetch_ohlcv", _fake_yf_fetch)
+
+        source.fetch_ohlcv(
+            "BTCUSDT",
+            "1d",
+            start=datetime(2024, 1, 2, 0, 0, 0),
+            end=datetime(2024, 1, 3, 0, 0, 0),
+        )
+
+        assert captured["start"] == datetime(2024, 1, 2, 5, 0, 0, tzinfo=timezone.utc)
+        assert captured["end"] == datetime(2024, 1, 3, 5, 0, 0, tzinfo=timezone.utc)
+
+
+class TestYFinanceAdapter:
+    """Tests for the standalone Yahoo Finance historical helper."""
+
+    def test_fetch_ohlcv_interprets_naive_datetimes_as_et(self, monkeypatch):
+        """Standalone yfinance helper should apply ET defaults to naive datetimes."""
+        from tempest_mcp.data import yf_adapter
+
+        captured: dict[str, object] = {}
+
+        def _fake_download(*, tickers, start, end, interval, auto_adjust, progress, timeout):
+            captured["start"] = start
+            captured["end"] = end
+            return pd.DataFrame(
+                {
+                    "Open": [100.0],
+                    "High": [101.0],
+                    "Low": [99.0],
+                    "Close": [100.5],
+                    "Volume": [1000.0],
+                },
+                index=pd.DatetimeIndex([pd.Timestamp("2024-01-02 05:00:00+00:00")]),
+            )
+
+        monkeypatch.setattr(yf_adapter.yf, "download", _fake_download)
+
+        df = yf_adapter.fetch_ohlcv(
+            "BTC-USD",
+            interval="1d",
+            start=datetime(2024, 1, 2, 0, 0, 0),
+            end=datetime(2024, 1, 3, 0, 0, 0),
+        )
+
+        assert not df.empty
+        assert captured["start"] == datetime(2024, 1, 2, 5, 0, 0, tzinfo=timezone.utc)
+        assert captured["end"] == datetime(2024, 1, 3, 5, 0, 0, tzinfo=timezone.utc)
 
 
 class TestDataSourceRouter:
