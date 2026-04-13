@@ -120,7 +120,6 @@ jobs:
       PR_URL: ${{ github.event.pull_request.html_url }}
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -131,6 +130,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts/
+
+      - name: Refresh tempest-engineering app token
+        run: |
+          source ~/.config/tempest-engineering/github-app.env
+          python3 ~/bin/github-token-refresh.py
+          echo "GH_TOKEN=$(cat ~/.config/tempest-engineering/github-mcp.token)" >> "$GITHUB_ENV"
 
       - name: Publish consolidated review
         run: |

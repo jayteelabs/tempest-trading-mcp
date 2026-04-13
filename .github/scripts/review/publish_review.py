@@ -19,6 +19,11 @@ from review.validate_findings import classify_findings
 
 CHECK_RUN_NAME = "Review / Publish"
 MARKER_PREFIX = "tempest-review"
+STAGE_DISPLAY_NAMES = {
+    "review/design": "Shuna / Design",
+    "review/security_audit": "Shion / Security Audit (Lane A)",
+    "review/logic_audit": "Shion / Logic Audit (Lane B)",
+}
 
 
 def main() -> int:
@@ -160,6 +165,9 @@ def build_inline_comment(finding: dict[str, Any], head_sha: str) -> dict[str, An
     )
     title = finding.get("title") or finding["body"]
     body_lines = [f"**{title}**", finding["body"]]
+    reported_by = format_reported_by(finding)
+    if reported_by:
+        body_lines.append(f"Reported by: {reported_by}")
     if finding.get("evidence"):
         body_lines.append(f"Evidence: {finding['evidence']}")
     body_lines.append(marker_block)
@@ -265,6 +273,7 @@ def serialize_publication(finding: dict[str, Any]) -> dict[str, Any]:
     return {
         "fingerprint": finding["fingerprint"],
         "stage": finding["stage"],
+        "reported_by": format_reported_by(finding),
         "decision": "publish_inline",
         "path": finding["path"],
         "line": finding["line"],
@@ -276,6 +285,7 @@ def serialize_summary_only(finding: dict[str, Any]) -> dict[str, Any]:
     return {
         "fingerprint": finding["fingerprint"],
         "stage": finding["stage"],
+        "reported_by": format_reported_by(finding),
         "decision": finding["decision"],
         "body": finding["body"],
         "reason": finding["reason"],
@@ -293,6 +303,12 @@ def serialize_drop(finding: dict[str, Any]) -> dict[str, Any]:
 
 def count_decisions(findings: list[dict[str, Any]], decision: str) -> int:
     return sum(1 for finding in findings if finding.get("decision") == decision)
+
+
+def format_reported_by(finding: dict[str, Any]) -> str:
+    stages = finding.get("stages") or [finding.get("stage")]
+    labels = [STAGE_DISPLAY_NAMES.get(stage, stage) for stage in stages if stage]
+    return ", ".join(dict.fromkeys(labels))
 
 
 if __name__ == "__main__":

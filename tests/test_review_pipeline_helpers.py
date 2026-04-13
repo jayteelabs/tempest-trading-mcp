@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT / ".github" / "scripts"))
 
 from review.collect_changed_lines import parse_unified_diff
 from review.dedupe_findings import fingerprint_for, merge_duplicate_findings
-from review.publish_review import build_inline_comment
+from review.publish_review import build_inline_comment, format_reported_by
 from review.schema import Finding, extract_json_document
 from review.validate_findings import classify_findings
 
@@ -180,6 +180,7 @@ def test_build_inline_comment_embeds_review_markers() -> None:
         {
             "fingerprint": "abc123",
             "stage": "review/design",
+            "stages": ["review/design", "review/logic_audit"],
             "title": "Contract drift",
             "body": "Return the structured response here.",
             "path": "src/example.py",
@@ -191,5 +192,15 @@ def test_build_inline_comment_embeds_review_markers() -> None:
 
     assert comment["path"] == "src/example.py"
     assert comment["line"] == 21
+    assert "Reported by: Shuna / Design, Shion / Logic Audit (Lane B)" in comment["body"]
     assert "tempest-review:fingerprint=abc123" in comment["body"]
     assert "tempest-review:head-sha=deadbeef" in comment["body"]
+
+
+def test_format_reported_by_uses_stage_labels() -> None:
+    finding = {
+        "stage": "review/security_audit",
+        "stages": ["review/design", "review/security_audit", "review/security_audit"],
+    }
+
+    assert format_reported_by(finding) == "Shuna / Design, Shion / Security Audit (Lane A)"
