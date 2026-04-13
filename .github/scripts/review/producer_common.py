@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import traceback
+from pathlib import Path
 
 from review.schema import extract_json_document, normalize_findings, write_artifact
 from review.utils import repo_root, validate_git_sha
@@ -58,17 +59,10 @@ def collect_reference_documents(stage: str, ticket_id: str | None) -> tuple[list
         )
 
     if stage == "review/design":
-        docs_dir = root / "docs"
-        if docs_dir.exists():
-            if ticket_id:
-                for path in sorted(docs_dir.glob(f"{ticket_id}*.md")):
-                    references.append(
-                        (str(path.relative_to(root)), path.read_text(encoding="utf-8"))
-                    )
-            for path in sorted(docs_dir.glob("*.md")):
-                rel_path = str(path.relative_to(root))
-                if rel_path not in {item[0] for item in references}:
-                    references.append((rel_path, path.read_text(encoding="utf-8")))
+        for path in design_reference_paths(root, ticket_id):
+            rel_path = str(path.relative_to(root))
+            if rel_path not in {item[0] for item in references}:
+                references.append((rel_path, path.read_text(encoding="utf-8")))
 
     snippets: list[str] = []
     total = 0
@@ -82,6 +76,49 @@ def collect_reference_documents(stage: str, ticket_id: str | None) -> tuple[list
         total += len(snippet)
 
     return used_paths, "\n".join(snippets).strip()
+
+
+def design_reference_paths(root: Path, ticket_id: str | None) -> list[Path]:
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+    search_roots = [
+        root / "docs",
+        root / "design-outputs",
+        root / "specs",
+        root / "prd",
+    ]
+
+    def add(path: Path) -> None:
+        if path.is_file() and path.suffix == ".md" and path not in seen:
+            seen.add(path)
+            candidates.append(path)
+
+    if ticket_id:
+        ticket_patterns = [
+            f"**/{ticket_id}*.md",
+            f"**/*{ticket_id}*.md",
+        ]
+        for directory in search_roots:
+            if not directory.exists():
+                continue
+            for pattern in ticket_patterns:
+                for path in sorted(directory.glob(pattern)):
+                    add(path)
+
+    keyword_patterns = ["**/*prd*.md", "**/*spec*.md", "**/*design*.md", "**/*requirements*.md"]
+    for directory in search_roots:
+        if not directory.exists():
+            continue
+        for pattern in keyword_patterns:
+            for path in sorted(directory.glob(pattern)):
+                add(path)
+
+    docs_dir = root / "docs"
+    if docs_dir.exists():
+        for path in sorted(docs_dir.glob("*.md")):
+            add(path)
+
+    return candidates
 
 
 def stage_focus(stage: str) -> str:
@@ -136,6 +173,7 @@ Rules:
 - If there are no valid findings, return {{"findings": []}}.
 - Ignore naming-only suggestions, empty package markers, module-size/style opinions, intentional documented auth patterns, and speculative refactors without concrete impact.
 - Do not misclassify `except Exception` as catching `KeyboardInterrupt` or `SystemExit`; in Python those derive from `BaseException` and propagate.
+- Write `body` as concise GitHub-flavored markdown. Prefer 1-2 short paragraphs and bullets only when they improve readability.
 - Keep body concise and ready to publish as a GitHub review comment.
 
 Focus:

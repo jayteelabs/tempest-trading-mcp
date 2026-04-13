@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT / ".github" / "scripts"))
 
 from review.collect_changed_lines import parse_unified_diff
 from review.dedupe_findings import fingerprint_for, merge_duplicate_findings
+from review.producer_common import design_reference_paths
 from review.publish_review import (
     build_inline_comment,
     build_review_body,
@@ -264,6 +265,22 @@ def test_resolve_artifact_path_rejects_non_artifact_paths() -> None:
         assert "Artifact path must stay within" in str(exc)
     else:
         raise AssertionError("expected resolve_artifact_path to reject traversal")
+
+
+def test_design_reference_paths_include_ticket_and_prd_docs(tmp_path: Path) -> None:
+    docs = tmp_path / "docs"
+    specs = tmp_path / "specs"
+    docs.mkdir()
+    specs.mkdir()
+    (docs / "ENG-62-prd.md").write_text("ticket prd", encoding="utf-8")
+    (docs / "architecture.md").write_text("arch", encoding="utf-8")
+    (specs / "review-design-spec.md").write_text("spec", encoding="utf-8")
+
+    paths = design_reference_paths(tmp_path, "ENG-62")
+
+    relative = {str(path.relative_to(tmp_path)) for path in paths}
+    assert "docs/ENG-62-prd.md" in relative
+    assert "specs/review-design-spec.md" in relative
 
 
 def test_own_pr_review_blocked_matches_github_error() -> None:
