@@ -20,6 +20,7 @@ import structlog
 
 from tempest_mcp.data._contracts import empty_ohlcv_frame
 from tempest_mcp.data._symbols import normalize_to_ccxt_market, normalize_to_yf
+from tempest_mcp.time_utils import BUSINESS_TZ_NAME, coerce_window_datetime_to_utc
 
 logger = structlog.get_logger()
 
@@ -52,8 +53,10 @@ class HistoricalDataAdapter(Protocol):
             interval: Data interval (1m, 5m, 15m, 30m, 1h, 4h*, 1d, 1wk, 1mo)
                 * Note: "4h" is supported by CCXT but NOT by yfinance (fallback).
                   For 4h via yfinance, aggregate from 1h or use CCXT directly.
-            start: Start datetime (UTC). Naive datetimes are interpreted as UTC.
-            end: End datetime (UTC). Naive datetimes are interpreted as UTC.
+            start: Start datetime for the request window. Naive datetimes are
+                interpreted in America/New_York, then converted to UTC.
+            end: End datetime for the request window. Naive datetimes are
+                interpreted in America/New_York, then converted to UTC.
             auto_adjust: Whether to adjust for splits/dividends (yfinance only;
                 CCXT always returns split-adjusted spot prices)
 
@@ -117,17 +120,21 @@ class HistoricalDataSource:
         return mapped
 
     def _ensure_utc(self, dt: datetime | None, name: str) -> datetime | None:
-        """Normalize datetime to UTC-aware. Naive datetimes are interpreted as UTC."""
+        """Normalize datetime to UTC-aware.
+
+        Naive request-window datetimes are interpreted in the default business
+        timezone (America/New_York).
+        """
         if dt is None:
             return None
         if dt.tzinfo is None:
             logger.warning(
-                "naive_datetime_interpreted_as_utc",
+                "naive_datetime_interpreted_as_business_tz",
                 param=name,
                 dt=str(dt),
+                timezone=BUSINESS_TZ_NAME,
             )
-            return dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
+        return coerce_window_datetime_to_utc(dt)
 
     def _interval_seconds(self, interval: str) -> int:
         """Get interval duration in seconds."""
@@ -160,8 +167,10 @@ class HistoricalDataSource:
         Args:
             symbol: Asset symbol (CCXT format preferred, e.g. BTC/USDT)
             interval: Data interval (1m, 5m, 15m, 30m, 1h, 4h, 1d, 1wk, 1mo)
-            start: Start datetime (UTC). Naive datetimes interpreted as UTC.
-            end: End datetime (UTC). Naive datetimes interpreted as UTC.
+            start: Start datetime for the request window. Naive datetimes are
+                interpreted in America/New_York, then converted to UTC.
+            end: End datetime for the request window. Naive datetimes are
+                interpreted in America/New_York, then converted to UTC.
             auto_adjust: Whether to adjust for splits/dividends (yfinance only;
                 CCXT always returns split-adjusted spot prices)
 

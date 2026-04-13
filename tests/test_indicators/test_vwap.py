@@ -65,7 +65,7 @@ class TestCalculateVwap:
         assert vwap.iloc[2] == pytest.approx(expected_vwap2, rel=1e-6)
 
     def test_session_boundary_reset_ny(self):
-        """Test VWAP resets at NY session boundary (13:30 UTC).
+        """Test VWAP resets at NY session boundary in January (14:30 UTC / 09:30 ET).
 
         Uses asymmetric prices/volumes so that the reset is verifiable.
         """
@@ -78,10 +78,26 @@ class TestCalculateVwap:
 
         vwap = calculate_vwap(high, low, close, volume, anchor="ny")
 
-        # NY session starts at 13:30 UTC
-        # Bars 0-1 (12:00, 13:00): before 13:30, same pre-session
-        # Bar 2 (14:00): after 13:30, NEW SESSION — reset
+        # NY session starts at 14:30 UTC on 2024-01-01 (EST)
+        # Bars 0-2 (12:00, 13:00, 14:00): before 14:30, same pre-session
+        # Bar 3 (15:00): after 14:30, NEW SESSION — reset
         # Because prices jump across the boundary, pre/post VWAP differ
+        pre_boundary_vwap = vwap.iloc[2]
+        post_boundary_vwap = vwap.iloc[4]
+
+        assert pre_boundary_vwap != post_boundary_vwap
+        assert not vwap.isna().any()
+
+    def test_session_boundary_reset_ny_after_dst(self):
+        """Test NY VWAP reset shifts to 13:30 UTC after DST starts."""
+        dates = pd.date_range("2024-03-11 12:00", periods=5, freq="h", tz="UTC")
+        high = pd.Series([100.0, 100.0, 200.0, 200.0, 200.0], index=dates)
+        low = pd.Series([99.0, 99.0, 199.0, 199.0, 199.0], index=dates)
+        close = pd.Series([99.5, 99.5, 199.5, 199.5, 199.5], index=dates)
+        volume = pd.Series([1000.0] * 5, index=dates)
+
+        vwap = calculate_vwap(high, low, close, volume, anchor="ny")
+
         pre_boundary_vwap = vwap.iloc[1]
         post_boundary_vwap = vwap.iloc[3]
 
@@ -138,11 +154,11 @@ class TestCalculateVwap:
         assert not vwap.isna().any()
 
     def test_session_boundary_reset_daily(self):
-        """Test VWAP resets at daily boundary (00:00 UTC).
+        """Test VWAP resets at ET daily boundary (05:00 UTC in January).
 
-        daily anchor is same as asia (00:00 UTC). Uses asymmetric prices so reset is verifiable.
+        Uses asymmetric prices so reset is verifiable.
         """
-        dates = pd.date_range("2024-01-01 22:00", periods=5, freq="h", tz="UTC")
+        dates = pd.date_range("2024-01-02 03:00", periods=5, freq="h", tz="UTC")
         high = pd.Series([100.0, 100.0, 200.0, 200.0, 200.0], index=dates)
         low = pd.Series([99.0, 99.0, 199.0, 199.0, 199.0], index=dates)
         close = pd.Series([99.5, 99.5, 199.5, 199.5, 199.5], index=dates)
@@ -492,11 +508,19 @@ class TestSessionAnchors:
         assert "daily" in SESSION_ANCHORS
 
     def test_session_anchor_values(self):
-        """Test that session anchor values are correct (UTC hours)."""
-        assert SESSION_ANCHORS["asia"] == 0  # 00:00 UTC
-        assert SESSION_ANCHORS["london"] == 8  # 08:00 UTC
-        assert SESSION_ANCHORS["ny"] == 13.5  # 13:30 UTC
-        assert SESSION_ANCHORS["daily"] == 0  # 00:00 UTC
+        """Test that session anchor definitions are correct."""
+        assert SESSION_ANCHORS["asia"] == {"timezone": "UTC", "hour": 0, "minute": 0}
+        assert SESSION_ANCHORS["london"] == {"timezone": "UTC", "hour": 8, "minute": 0}
+        assert SESSION_ANCHORS["ny"] == {
+            "timezone": "America/New_York",
+            "hour": 9,
+            "minute": 30,
+        }
+        assert SESSION_ANCHORS["daily"] == {
+            "timezone": "America/New_York",
+            "hour": 0,
+            "minute": 0,
+        }
 
 
 class TestIntegration:

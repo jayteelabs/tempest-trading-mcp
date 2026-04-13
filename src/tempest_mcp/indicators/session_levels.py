@@ -3,23 +3,25 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Literal
+from typing import Literal, TypeAlias
 
 import pandas as pd
-import pytz
 
-NY_TZ = pytz.timezone("America/New_York")
+from tempest_mcp.time_utils import BUSINESS_TZ, business_day_bounds_utc
+
+NY_TZ = BUSINESS_TZ
+
+SessionTypeInput: TypeAlias = Literal["asia", "london", "ny", "new_york"]
 
 
-def detect_session_levels(
-    ohlcv_df: pd.DataFrame, session_type: Literal["asia", "london", "ny"]
-) -> dict:
+def detect_session_levels(ohlcv_df: pd.DataFrame, session_type: SessionTypeInput) -> dict:
     """Detect session high/low levels for Asia, London, or NY session.
 
     Args:
         ohlcv_df: DataFrame with UTC-aware pd.Timestamp index and columns
                   [open, high, low, close, volume]
-        session_type: One of "asia", "london", "ny"
+        session_type: Canonical values are "asia", "london", and "ny".
+            "new_york" is accepted as a compatibility alias and normalized to "ny".
 
     Returns:
         dict with session_type, session_start_utc, session_end_utc, high, low,
@@ -29,12 +31,13 @@ def detect_session_levels(
     Session windows (UTC):
         - Asia: 00:00–09:00 UTC (fixed, no DST)
         - London: 08:00–17:00 UTC (fixed, no DST)
-        - NY: 09:30–16:00 US Eastern (converts to UTC with DST using pytz)
+        - NY: 09:30–16:00 US Eastern (converts to UTC with DST using zoneinfo)
 
     Note:
         When the DataFrame spans multiple days, only bars from the most recent
         session day are used (not aggregated across all days).
     """
+    session_type = _normalize_session_type(session_type)
     valid_sessions = {"asia", "london", "ny"}
     if session_type not in valid_sessions:
         raise ValueError(f"Invalid session_type: '{session_type}'. Must be one of {valid_sessions}")
@@ -139,6 +142,13 @@ def _empty_session_result(session_type: str) -> dict:
     }
 
 
+def _normalize_session_type(session_type: str) -> str:
+    """Normalize session aliases to the canonical runtime contract."""
+    if session_type == "new_york":
+        return "ny"
+    return session_type
+
+
 def detect_pdh_pdl(ohlcv_df: pd.DataFrame) -> dict:
     """Detect Previous Day High (PDH) and Previous Day Low (PDL).
 
@@ -150,27 +160,34 @@ def detect_pdh_pdl(ohlcv_df: pd.DataFrame) -> dict:
         dict with previous_day_high, previous_day_low, previous_day_close,
         previous_day_range, pdh_timestamp_utc, pdl_timestamp_utc, pivot,
         r1, r2, s1, s2, position.
-        Returns position="insufficient_data" if less than 2 full UTC calendar days.
+        Returns position="insufficient_data" if the prior ET business day is
+        not fully present in the dataset.
     """
     if ohlcv_df.empty:
         return _empty_pdh_pdl_result(position="insufficient_data")
 
-    # Need at least 2 full UTC calendar days of data
-    # First bar time is the reference; we look for bars on the UTC calendar day before
-    first_bar_time = ohlcv_df.index[0]
-    first_bar_date = first_bar_time.date()
+    # Compute the previous ET business day relative to the latest bar under evaluation.
+    last_bar_time = ohlcv_df.index[-1]
+    previous_day_start, previous_day_end = business_day_bounds_utc(last_bar_time, day_offset=-1)
 
-    # Find the UTC calendar day immediately before the first bar
-    tz = pytz.UTC
-    current_day_start = pd.Timestamp(first_bar_date, tz=tz)
-    previous_day_start = current_day_start - pd.Timedelta(days=1)
-
-    # Get all bars from the previous UTC calendar day
+    # Get all bars from the previous ET business day, expressed in UTC bounds.
     previous_day_bars = ohlcv_df[
-        (ohlcv_df.index >= previous_day_start) & (ohlcv_df.index < current_day_start)
+        (ohlcv_df.index >= previous_day_start) & (ohlcv_df.index < previous_day_end)
     ]
 
     if len(previous_day_bars) == 0:
+        return _empty_pdh_pdl_result(position="insufficient_data")
+
+    inferred_interval = pd.Timedelta(0)
+    if len(ohlcv_df.index) >= 2:
+        inferred_interval = ohlcv_df.index.to_series().diff().dropna().median()
+
+    dataset_starts_after_previous_day = ohlcv_df.index[0] > previous_day_start
+    previous_day_incomplete_at_end = inferred_interval > pd.Timedelta(
+        0
+    ) and previous_day_bars.index[-1] < (previous_day_end - inferred_interval)
+
+    if dataset_starts_after_previous_day or previous_day_incomplete_at_end:
         return _empty_pdh_pdl_result(position="insufficient_data")
 
     pdh = float(previous_day_bars["high"].max())
