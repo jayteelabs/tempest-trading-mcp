@@ -107,12 +107,13 @@ def main() -> int:
         published_inline.append(finding)
 
     all_drops = [*duplicate_drops, *rerun_duplicate_drops, *validation_drops]
-    review_event = determine_review_event([*published_inline, *summary_only])
+    requested_review_event = determine_review_event([*published_inline, *summary_only])
     diff_summary = summarize_diff(args.base_sha, args.head_sha)
+    actual_review_event = requested_review_event
     summary_payload = {
         "pr_number": int(args.pr),
         "head_sha": args.head_sha,
-        "review_event": review_event,
+        "review_event": actual_review_event,
         "published": [serialize_publication(finding) for finding in published_inline],
         "summary_only": [serialize_summary_only(finding) for finding in summary_only],
         "dropped": [serialize_drop(finding) for finding in all_drops],
@@ -141,12 +142,14 @@ def main() -> int:
     )
 
     if published_inline or not review_exists_for_head:
-        api.create_review(
+        actual_review_event = create_summary_review(
+            api=api,
             pull_number=int(args.pr),
             commit_id=args.head_sha,
             body=review_body,
-            event=review_event,
+            requested_event=requested_review_event,
         )
+        summary_payload["review_event"] = actual_review_event
 
     for comment in published_inline:
         try:
@@ -210,6 +213,38 @@ def has_publisher_review(reviews: list[dict[str, Any]], head_sha: str) -> bool:
         if markers.get("publisher") == "review_publish" and markers.get("head-sha") == head_sha:
             return True
     return False
+
+
+def create_summary_review(
+    *,
+    api: GitHubApi,
+    pull_number: int,
+    commit_id: str,
+    body: str,
+    requested_event: str,
+) -> str:
+    try:
+        api.create_review(
+            pull_number=pull_number,
+            commit_id=commit_id,
+            body=body,
+            event=requested_event,
+        )
+        return requested_event
+    except GitHubApiError as exc:
+        if requested_event == "REQUEST_CHANGES" and own_pr_review_blocked(exc):
+            api.create_review(
+                pull_number=pull_number,
+                commit_id=commit_id,
+                body=body,
+                event="COMMENT",
+            )
+            return "COMMENT"
+        raise
+
+
+def own_pr_review_blocked(error: GitHubApiError) -> bool:
+    return "Can not request changes on your own pull request" in str(error)
 
 
 def extract_markers(body: str) -> dict[str, str]:

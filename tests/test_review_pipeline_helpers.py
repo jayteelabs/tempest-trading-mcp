@@ -13,8 +13,10 @@ from review.dedupe_findings import fingerprint_for, merge_duplicate_findings
 from review.publish_review import (
     build_inline_comment,
     build_review_body,
+    create_summary_review,
     format_reported_by,
     humanize_title,
+    own_pr_review_blocked,
     severity_style,
 )
 from review.schema import Finding, extract_json_document
@@ -262,3 +264,42 @@ def test_resolve_artifact_path_rejects_non_artifact_paths() -> None:
         assert "Artifact path must stay within" in str(exc)
     else:
         raise AssertionError("expected resolve_artifact_path to reject traversal")
+
+
+def test_own_pr_review_blocked_matches_github_error() -> None:
+    from review.github_api import GitHubApiError
+
+    error = GitHubApiError(
+        'GitHub API POST /pulls/27/reviews failed with 422: {"errors":["Review Can not request changes on your own pull request"]}'
+    )
+
+    assert own_pr_review_blocked(error) is True
+
+
+def test_create_summary_review_falls_back_to_comment() -> None:
+    from review.github_api import GitHubApiError
+
+    class FakeApi:
+        def __init__(self) -> None:
+            self.events: list[str] = []
+
+        def create_review(self, *, pull_number: int, commit_id: str, body: str, event: str) -> dict:
+            self.events.append(event)
+            if event == "REQUEST_CHANGES":
+                raise GitHubApiError(
+                    'GitHub API POST /pulls/27/reviews failed with 422: {"errors":["Review Can not request changes on your own pull request"]}'
+                )
+            return {"ok": True}
+
+    api = FakeApi()
+
+    event = create_summary_review(
+        api=api,
+        pull_number=27,
+        commit_id="deadbeef",
+        body="summary",
+        requested_event="REQUEST_CHANGES",
+    )
+
+    assert event == "COMMENT"
+    assert api.events == ["REQUEST_CHANGES", "COMMENT"]
