@@ -160,6 +160,8 @@ class TestHistoricalRouter:
         required_cols = ["open", "high", "low", "close", "volume"]
         for col in required_cols:
             assert col in df.columns
+        assert isinstance(df.index, pd.DatetimeIndex)
+        assert df.index.tz is not None, "Index must be UTC-aware"
 
     def test_historical_fallback_stock_symbol(self):
         """AAPL (stock symbol) exercises the yfinance fallback path explicitly."""
@@ -175,6 +177,11 @@ class TestHistoricalRouter:
 
         assert not df.empty, "AAPL should return data via yfinance fallback"
         assert isinstance(df, pd.DataFrame)
+        required_cols = ["open", "high", "low", "close", "volume"]
+        for col in required_cols:
+            assert col in df.columns
+        assert isinstance(df.index, pd.DatetimeIndex)
+        assert df.index.tz is not None, "Index must be UTC-aware"
 
 
 # =============================================================================

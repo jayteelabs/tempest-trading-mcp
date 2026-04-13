@@ -8,16 +8,94 @@ Tests cover:
 - Error handling per D14 (no exception propagation)
 """
 
+from datetime import timezone
+
 import pandas as pd
 import pytest
 
 from tempest_mcp.data._symbols import (
     get_base_currency,
     normalize_to_ccxt,
+    normalize_to_ccxt_exchange,
     normalize_to_tradingview,
     validate_symbol,
 )
 from tempest_mcp.errors import CCXTError, TradingViewError
+
+
+def _sample_ohlcv_rows() -> list[list[float]]:
+    ts = int(pd.Timestamp("2024-01-01", tz=timezone.utc).timestamp() * 1000)
+    return [
+        [ts, 100.0, 110.0, 95.0, 105.0, 1000.0],
+        [ts + 60000, 105.0, 115.0, 100.0, 110.0, 1200.0],
+    ]
+
+
+class DummyExchange:
+    def __init__(self, ohlcv_rows: list[list[float]] | None = None, last_price: float = 123.45):
+        self.ohlcv_rows = ohlcv_rows or _sample_ohlcv_rows()
+        self.last_price = last_price
+        self.last_ticker_symbol: str | None = None
+        self.last_ohlcv_symbol: str | None = None
+        self.last_orderbook_symbol: str | None = None
+
+    def fetch_ticker(self, symbol: str) -> dict:
+        self.last_ticker_symbol = symbol
+        return {"last": self.last_price}
+
+    def fetch_ohlcv(self, symbol: str, *args, **kwargs) -> list[list[float]]:
+        self.last_ohlcv_symbol = symbol
+        return self.ohlcv_rows
+
+    def fetch_order_book(self, symbol: str, limit: int = 20) -> dict:
+        self.last_orderbook_symbol = symbol
+        return {
+            "bids": [[100.0, 1.0]],
+            "asks": [[101.0, 2.0]],
+        }
+
+
+class DummyLiveAdapter:
+    def __init__(self):
+        self.last_symbol: str | None = None
+        self.last_timeframe: str | None = None
+        self.last_limit: int | None = None
+
+    def fetch_live_price(self, symbol: str, exchange: str = "binance") -> float:
+        self.last_symbol = symbol
+        return 111.0
+
+    def fetch_ohlcv_live(
+        self, symbol: str, timeframe: str = "1m", limit: int = 100
+    ) -> pd.DataFrame:
+        self.last_symbol = symbol
+        self.last_timeframe = timeframe
+        self.last_limit = limit
+        df = pd.DataFrame(
+            _sample_ohlcv_rows(), columns=["timestamp", "open", "high", "low", "close", "volume"]
+        )
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+        df.set_index("timestamp", inplace=True)
+        return df[["open", "high", "low", "close", "volume"]]
+
+    def fetch_orderbook_snapshot(self, symbol: str, limit: int = 20) -> dict:
+        self.last_symbol = symbol
+        self.last_limit = limit
+        return {
+            "bids": [[100.0, 1.0]],
+            "asks": [[101.0, 2.0]],
+            "timestamp": pd.Timestamp.now(tz="UTC"),
+        }
+
+
+@pytest.fixture
+def dummy_exchange():
+    return DummyExchange()
+
+
+@pytest.fixture
+def dummy_live_adapter():
+    return DummyLiveAdapter()
 
 
 class TestSymbolNormalization:
@@ -30,6 +108,17 @@ class TestSymbolNormalization:
     def test_normalize_btcusd_to_ccxt(self):
         """BTCUSD (TV format) should convert to BTCUSDT for CCXT."""
         assert normalize_to_ccxt("BTCUSD") == "BTCUSDT"
+
+    def test_normalize_yf_format_rejected_by_ccxt(self):
+        """BTC-USD should be rejected by CCXT normalization to avoid USD/USDT rewrites."""
+        with pytest.raises(ValueError):
+            normalize_to_ccxt("BTC-USD")
+
+    def test_normalize_to_ccxt_exchange(self):
+        """CCXT exchange format should be BASE/QUOTE."""
+        assert normalize_to_ccxt_exchange("BTCUSDT") == "BTC/USDT"
+        assert normalize_to_ccxt_exchange("BTCUSD") == "BTC/USDT"
+        assert normalize_to_ccxt_exchange("BTC/USDT") == "BTC/USDT"
 
     def test_normalize_btcusdt_to_tradingview(self):
         """BTCUSDT should convert to BTCUSD for TradingView."""
@@ -75,44 +164,52 @@ class TestCCXTAdapter:
         assert ccxt_adapter.exchange_name == "binance"
 
     def test_fetch_live_price_returns_float(self, ccxt_adapter):
-        """fetch_live_price should return float (D14 - NaN on error)."""
-        # Using an invalid symbol to test NaN return
+        """fetch_live_price should return float for valid path."""
+        ccxt_adapter.exchange = DummyExchange(last_price=222.0)
+        price = ccxt_adapter.fetch_live_price("BTCUSDT")
+        assert isinstance(price, float)
+
+    def test_fetch_live_price_invalid_symbol_returns_nan(self, ccxt_adapter):
+        """Invalid symbol format should return NaN without network call."""
         price = ccxt_adapter.fetch_live_price("INVALIDPAIR")
         assert isinstance(price, float)
+        assert pd.isna(price)
 
     def test_fetch_ohlcv_returns_dataframe(self, ccxt_adapter):
         """fetch_ohlcv_live should return DataFrame with correct columns."""
-        df = ccxt_adapter.fetch_ohlcv_live("INVALIDPAIR", "1m", 100)
+        ccxt_adapter.exchange = DummyExchange()
+        df = ccxt_adapter.fetch_ohlcv_live("BTCUSDT", "1m", 100)
 
-        # Should return DataFrame even on error (D14)
         assert isinstance(df, pd.DataFrame)
-
-        # Should have correct columns
         expected_columns = ["open", "high", "low", "close", "volume"]
         assert list(df.columns) == expected_columns
+        assert isinstance(df.index, pd.DatetimeIndex)
+        assert df.index.tz is not None, "Index must be UTC-aware"
+
+    def test_fetch_ohlcv_invalid_timeframe_returns_empty(self, ccxt_adapter):
+        """Unsupported timeframe returns empty DataFrame."""
+        df = ccxt_adapter.fetch_ohlcv_live("BTCUSDT", "10m", 100)
+        assert isinstance(df, pd.DataFrame)
+        assert df.empty
 
     def test_fetch_orderbook_returns_dict(self, ccxt_adapter):
         """fetch_orderbook_snapshot should return dict with correct keys."""
-        ob = ccxt_adapter.fetch_orderbook_snapshot("INVALIDPAIR", 20)
+        ccxt_adapter.exchange = DummyExchange()
+        ob = ccxt_adapter.fetch_orderbook_snapshot("BTCUSDT", 20)
 
-        # Should return dict even on error (D14)
         assert isinstance(ob, dict)
         assert "bids" in ob
         assert "asks" in ob
         assert "timestamp" in ob
-
-        # On error, should have empty values
-        assert ob["bids"] == []
-        assert ob["asks"] == []
-        assert ob["timestamp"] is None
+        assert ob["timestamp"].tzinfo is not None
 
     def test_symbol_normalization_in_adapter(self, ccxt_adapter):
         """Adapter should normalize TV symbols to CCXT format."""
-        # This test verifies the adapter uses normalize_to_ccxt
-        # The actual API call may fail, but we test the normalization path
+        dummy = DummyExchange()
+        ccxt_adapter.exchange = dummy
         df = ccxt_adapter.fetch_ohlcv_live("BTCUSD", "1m", 10)
-        # If normalization worked, we get a DataFrame (may be empty on API error)
         assert isinstance(df, pd.DataFrame)
+        assert dummy.last_ohlcv_symbol == "BTC/USDT"
 
 
 class TestTradingViewAdapter:
@@ -128,26 +225,34 @@ class TestTradingViewAdapter:
 
     def test_fetch_live_price_no_key_uses_ccxt_fallback(self, tv_adapter_no_key):
         """Without API key, should fall back to CCXT."""
-        # Should return float (NaN on error)
+        dummy = DummyLiveAdapter()
+        tv_adapter_no_key._ccxt_adapter = dummy
         price = tv_adapter_no_key.fetch_live_price("BTCUSDT")
         assert isinstance(price, float)
+        assert dummy.last_symbol == "BTCUSDT"
 
     def test_fetch_ohlcv_no_key_uses_ccxt_fallback(self, tv_adapter_no_key):
         """Without API key, should fall back to CCXT for OHLCV."""
+        dummy = DummyLiveAdapter()
+        tv_adapter_no_key._ccxt_adapter = dummy
         df = tv_adapter_no_key.fetch_ohlcv_live("BTCUSDT", "1m", 10)
 
         assert isinstance(df, pd.DataFrame)
         expected_columns = ["open", "high", "low", "close", "volume"]
         assert list(df.columns) == expected_columns
+        assert dummy.last_symbol == "BTCUSDT"
 
     def test_orderbook_delegates_to_ccxt(self, tv_adapter_with_key):
         """fetch_orderbook_snapshot should delegate to CCXT (D16)."""
+        dummy = DummyLiveAdapter()
+        tv_adapter_with_key._ccxt_adapter = dummy
         ob = tv_adapter_with_key.fetch_orderbook_snapshot("BTCUSDT", 20)
 
         assert isinstance(ob, dict)
         assert "bids" in ob
         assert "asks" in ob
         assert "timestamp" in ob
+        assert dummy.last_symbol == "BTCUSDT"
 
     def test_symbol_normalization_tv_format(self, tv_adapter_with_key):
         """TradingView adapter should normalize symbols to TV format."""
@@ -250,20 +355,109 @@ class TestHistoricalAdapter:
         adapter2 = get_historical_adapter()
         assert adapter1 is adapter2
 
-    def test_historical_data_source_fetch_ohlcv(self):
-        """HistoricalDataSource.fetch_ohlcv should return DataFrame."""
+    def test_historical_fetch_uses_yfinance_on_ccxt_empty(self, monkeypatch):
+        """When CCXT returns empty, yfinance fallback should be used."""
+        from tempest_mcp.data import yf_adapter
         from tempest_mcp.data._hist import HistoricalDataSource
 
         source = HistoricalDataSource()
-        # Use a known valid yfinance symbol with a date range
-        from datetime import datetime, timedelta, timezone
 
-        end = datetime.now(timezone.utc)
-        start = end - timedelta(days=10)
-        df = source.fetch_ohlcv("BTC-USD", "1d", start=start, end=end)
-        assert isinstance(df, pd.DataFrame)
-        expected_columns = ["open", "high", "low", "close", "volume"]
-        assert list(df.columns) == expected_columns
+        class DummyCCXTHistorical:
+            def __init__(self):
+                self.called = False
+
+            def fetch_ohlcv_historical(self, *args, **kwargs):
+                self.called = True
+                return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+        dummy_ccxt = DummyCCXTHistorical()
+        source._ccxt = dummy_ccxt
+
+        captured: dict[str, str] = {}
+
+        def _fake_yf_fetch(
+            symbol: str, interval: str = "1d", start=None, end=None, auto_adjust=True
+        ):
+            captured["symbol"] = symbol
+            df = pd.DataFrame(
+                _sample_ohlcv_rows(),
+                columns=["timestamp", "open", "high", "low", "close", "volume"],
+            )
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+            df.set_index("timestamp", inplace=True)
+            return df[["open", "high", "low", "close", "volume"]]
+
+        monkeypatch.setattr(yf_adapter, "fetch_ohlcv", _fake_yf_fetch)
+
+        df = source.fetch_ohlcv("BTCUSDT", "1d")
+        assert dummy_ccxt.called is True
+        assert captured["symbol"] == "BTC-USD"
+        assert not df.empty
+        assert df.index.tz is not None
+
+    def test_historical_fetch_direct_yf_for_usd_symbol(self, monkeypatch):
+        """Yfinance-style input should bypass CCXT to avoid USD->USDT rewrite."""
+        from tempest_mcp.data import yf_adapter
+        from tempest_mcp.data._hist import HistoricalDataSource
+
+        source = HistoricalDataSource()
+
+        class DummyCCXTHistorical:
+            def fetch_ohlcv_historical(self, *args, **kwargs):
+                raise AssertionError("CCXT should not be called for yfinance symbol inputs")
+
+        source._ccxt = DummyCCXTHistorical()
+
+        def _fake_yf_fetch(
+            symbol: str, interval: str = "1d", start=None, end=None, auto_adjust=True
+        ):
+            df = pd.DataFrame(
+                _sample_ohlcv_rows(),
+                columns=["timestamp", "open", "high", "low", "close", "volume"],
+            )
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+            df.set_index("timestamp", inplace=True)
+            return df[["open", "high", "low", "close", "volume"]]
+
+        monkeypatch.setattr(yf_adapter, "fetch_ohlcv", _fake_yf_fetch)
+
+        df = source.fetch_ohlcv("BTC-USD", "1d")
+        assert not df.empty
+        assert df.index.tz is not None
+
+    def test_historical_fetch_returns_ccxt_when_non_empty(self, monkeypatch):
+        """Non-empty CCXT response should return without fallback."""
+        from tempest_mcp.data import yf_adapter
+        from tempest_mcp.data._hist import HistoricalDataSource
+
+        source = HistoricalDataSource()
+
+        df_ccxt = pd.DataFrame(
+            _sample_ohlcv_rows(),
+            columns=["timestamp", "open", "high", "low", "close", "volume"],
+        )
+        df_ccxt["timestamp"] = pd.to_datetime(df_ccxt["timestamp"], unit="ms", utc=True)
+        df_ccxt.set_index("timestamp", inplace=True)
+        df_ccxt = df_ccxt[["open", "high", "low", "close", "volume"]]
+
+        class DummyCCXTHistorical:
+            def __init__(self, df: pd.DataFrame):
+                self.df = df
+
+            def fetch_ohlcv_historical(self, *args, **kwargs):
+                return self.df
+
+        source._ccxt = DummyCCXTHistorical(df_ccxt)
+
+        def _fake_yf_fetch(*args, **kwargs):
+            raise AssertionError("yfinance should not be called when CCXT returns data")
+
+        monkeypatch.setattr(yf_adapter, "fetch_ohlcv", _fake_yf_fetch)
+
+        df = source.fetch_ohlcv("BTCUSDT", "1d")
+        assert not df.empty
+        assert df.index.tz is not None
+        assert list(df.columns) == ["open", "high", "low", "close", "volume"]
 
 
 class TestDataSourceRouter:
