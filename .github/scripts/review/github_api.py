@@ -4,6 +4,7 @@ import json
 import urllib.parse
 import urllib.request
 from typing import Any
+from urllib.error import HTTPError
 
 
 class GitHubApi:
@@ -27,12 +28,27 @@ class GitHubApi:
         commit_id: str,
         body: str,
         event: str,
-        comments: list[dict[str, Any]],
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"commit_id": commit_id, "body": body, "event": event}
-        if comments:
-            payload["comments"] = comments
         return self._request("POST", f"/pulls/{pull_number}/reviews", payload)
+
+    def create_review_comment(
+        self,
+        *,
+        pull_number: int,
+        commit_id: str,
+        path: str,
+        line: int,
+        body: str,
+    ) -> dict[str, Any]:
+        payload = {
+            "body": body,
+            "commit_id": commit_id,
+            "path": path,
+            "line": line,
+            "side": "RIGHT",
+        }
+        return self._request("POST", f"/pulls/{pull_number}/comments", payload)
 
     def list_check_runs(self, ref: str, check_name: str) -> dict[str, Any]:
         query = urllib.parse.urlencode(
@@ -77,7 +93,13 @@ class GitHubApi:
                 "Content-Type": "application/json",
             },
         )
-        with urllib.request.urlopen(request) as response:
-            if response.length == 0:
-                return {}
-            return json.loads(response.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(request) as response:
+                if response.length == 0:
+                    return {}
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"GitHub API {method} {path} failed with {exc.code}: {detail}"
+            ) from exc

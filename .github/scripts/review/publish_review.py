@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -82,6 +83,7 @@ def main() -> int:
 
     all_drops = [*duplicate_drops, *rerun_duplicate_drops, *validation_drops]
     review_event = determine_review_event([*published_inline, *summary_only])
+    diff_summary = summarize_diff(args.base_sha, args.head_sha)
     summary_payload = {
         "pr_number": int(args.pr),
         "head_sha": args.head_sha,
@@ -100,12 +102,17 @@ def main() -> int:
     }
     print(json.dumps(summary_payload, indent=2))
 
+    publish_errors: list[str] = []
+
     review_body = build_review_body(
+        title=args.title,
         head_sha=args.head_sha,
+        diff_summary=diff_summary,
         published_inline=published_inline,
         summary_only=summary_only,
         drops=all_drops,
         artifact_errors=artifact_errors,
+        publish_errors=publish_errors,
     )
 
     if published_inline or not review_exists_for_head:
@@ -114,7 +121,32 @@ def main() -> int:
             commit_id=args.head_sha,
             body=review_body,
             event=review_event,
-            comments=[build_inline_comment(comment, args.head_sha) for comment in published_inline],
+        )
+
+    for comment in published_inline:
+        try:
+            api.create_review_comment(
+                pull_number=int(args.pr),
+                commit_id=args.head_sha,
+                path=comment["path"],
+                line=comment["line"],
+                body=build_inline_comment(comment, args.head_sha)["body"],
+            )
+        except Exception as exc:  # noqa: BLE001
+            publish_errors.append(
+                f"Inline comment publish failed for {comment['path']}:{comment['line']} ({comment['fingerprint']}): {exc}"
+            )
+
+    if publish_errors:
+        review_body = build_review_body(
+            title=args.title,
+            head_sha=args.head_sha,
+            diff_summary=diff_summary,
+            published_inline=published_inline,
+            summary_only=summary_only,
+            drops=all_drops,
+            artifact_errors=artifact_errors,
+            publish_errors=publish_errors,
         )
 
     api.upsert_check_run(
@@ -127,8 +159,11 @@ def main() -> int:
             url=args.url,
             summary_payload=summary_payload,
             artifact_errors=artifact_errors,
+            publish_errors=publish_errors,
         ),
-        conclusion=determine_check_conclusion([*published_inline, *summary_only], artifact_errors),
+        conclusion=determine_check_conclusion(
+            [*published_inline, *summary_only], [*artifact_errors, *publish_errors]
+        ),
     )
     return 0
 
@@ -181,20 +216,38 @@ def build_inline_comment(finding: dict[str, Any], head_sha: str) -> dict[str, An
 
 def build_review_body(
     *,
+    title: str,
     head_sha: str,
+    diff_summary: dict[str, Any],
     published_inline: list[dict[str, Any]],
     summary_only: list[dict[str, Any]],
     drops: list[dict[str, Any]],
     artifact_errors: list[str],
+    publish_errors: list[str],
 ) -> str:
-    lines = [
-        "## Review / Publish",
-        f"- Inline comments published: {len(published_inline)}",
-        f"- Summary-only findings: {len(summary_only)}",
-        f"- Duplicate findings dropped: {count_decisions(drops, 'drop_duplicate')}",
-        f"- Unverifiable findings dropped: {count_decisions(drops, 'drop_unverifiable')}",
-        f"- Outdated findings dropped: {count_decisions(drops, 'drop_outdated')}",
-    ]
+    lines = ["## Review / Publish", "", f"**Purpose:** {humanize_title(title)}", ""]
+
+    scope_bits = [f"**{diff_summary['file_count']} files** changed"]
+    if diff_summary["areas"]:
+        scope_bits.append(
+            "primary areas: " + ", ".join(f"`{area}`" for area in diff_summary["areas"])
+        )
+    lines.append("**Summary:** " + "; ".join(scope_bits) + ".")
+
+    if published_inline:
+        lines.append("")
+        lines.append(
+            f"Validated **{len(published_inline)}** inline finding(s) were published on the diff."
+        )
+    elif summary_only:
+        lines.append("")
+        lines.append(
+            "No line-anchored findings were published; validated notes are summarized below."
+        )
+    else:
+        lines.append("")
+        lines.append("No publishable review findings were produced for this head SHA.")
+
     if summary_only:
         lines.append("")
         lines.append("### Summary-only findings")
@@ -207,8 +260,19 @@ def build_review_body(
         lines.append("### Lane errors")
         for error in artifact_errors:
             lines.append(f"- {error}")
+    if publish_errors:
+        lines.append("")
+        lines.append("### Publish notes")
+        for error in publish_errors:
+            lines.append(f"- {error}")
     lines.extend(
         [
+            "",
+            (
+                f"_Duplicates: {count_decisions(drops, 'drop_duplicate')} | "
+                f"Unverifiable: {count_decisions(drops, 'drop_unverifiable')} | "
+                f"Outdated: {count_decisions(drops, 'drop_outdated')}_"
+            ),
             "",
             marker_lines(head_sha=head_sha),
         ]
@@ -232,6 +296,7 @@ def build_check_text(
     url: str,
     summary_payload: dict[str, Any],
     artifact_errors: list[str],
+    publish_errors: list[str],
 ) -> str:
     lines = [
         f"PR: {title}",
@@ -241,6 +306,8 @@ def build_check_text(
     ]
     if artifact_errors:
         lines.extend(["", "Lane errors:", *artifact_errors])
+    if publish_errors:
+        lines.extend(["", "Publish errors:", *publish_errors])
     return "\n".join(lines)
 
 
@@ -309,6 +376,46 @@ def format_reported_by(finding: dict[str, Any]) -> str:
     stages = finding.get("stages") or [finding.get("stage")]
     labels = [STAGE_DISPLAY_NAMES.get(stage, stage) for stage in stages if stage]
     return ", ".join(dict.fromkeys(labels))
+
+
+def humanize_title(title: str) -> str:
+    cleaned = re.sub(r"^[a-z]+\([^)]*\):\s*", "", title, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*\[[A-Z]+-\d+\]\s*$", "", cleaned).strip()
+    return cleaned or title
+
+
+def summarize_diff(base_sha: str, head_sha: str) -> dict[str, Any]:
+    result = subprocess.run(
+        ["git", "diff", "--name-only", base_sha, head_sha],
+        cwd=Path(__file__).resolve().parents[3],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    files = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    areas = summarize_areas(files)
+    return {"file_count": len(files), "areas": areas}
+
+
+def summarize_areas(files: list[str]) -> list[str]:
+    areas: list[str] = []
+    for path in files:
+        area = classify_area(path)
+        if area not in areas:
+            areas.append(area)
+    return areas[:3]
+
+
+def classify_area(path: str) -> str:
+    if path.startswith(".github/scripts/review/"):
+        return ".github/scripts/review"
+    if path.startswith(".github/workflows/"):
+        return ".github/workflows"
+    if path.startswith("tests/"):
+        return "tests"
+    if "/" in path:
+        return path.split("/", 1)[0]
+    return path
 
 
 if __name__ == "__main__":

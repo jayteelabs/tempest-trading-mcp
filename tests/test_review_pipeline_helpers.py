@@ -10,7 +10,12 @@ sys.path.insert(0, str(ROOT / ".github" / "scripts"))
 
 from review.collect_changed_lines import parse_unified_diff
 from review.dedupe_findings import fingerprint_for, merge_duplicate_findings
-from review.publish_review import build_inline_comment, format_reported_by
+from review.publish_review import (
+    build_inline_comment,
+    build_review_body,
+    format_reported_by,
+    humanize_title,
+)
 from review.schema import Finding, extract_json_document
 from review.validate_findings import classify_findings
 
@@ -204,3 +209,36 @@ def test_format_reported_by_uses_stage_labels() -> None:
     }
 
     assert format_reported_by(finding) == "Shuna / Design, Shion / Security Audit (Lane A)"
+
+
+def test_humanize_title_strips_prefix_and_ticket_suffix() -> None:
+    assert humanize_title("feat(ci): centralize AI PR review publishing [ENG-62]") == (
+        "centralize AI PR review publishing"
+    )
+
+
+def test_build_review_body_uses_brief_summary_and_footer() -> None:
+    body = build_review_body(
+        title="feat(ci): centralize AI PR review publishing [ENG-62]",
+        head_sha="deadbeef",
+        diff_summary={
+            "file_count": 3,
+            "areas": [".github/workflows", ".github/scripts/review", "tests"],
+        },
+        published_inline=[{"fingerprint": "a", "severity": "medium"}],
+        summary_only=[],
+        drops=[
+            {"decision": "drop_duplicate"},
+            {"decision": "drop_outdated"},
+        ],
+        artifact_errors=[],
+        publish_errors=[],
+    )
+
+    assert "**Purpose:** centralize AI PR review publishing" in body
+    assert (
+        "**Summary:** **3 files** changed; primary areas: `.github/workflows`, `.github/scripts/review`, `tests`."
+        in body
+    )
+    assert "Validated **1** inline finding(s) were published on the diff." in body
+    assert "_Duplicates: 1 | Unverifiable: 0 | Outdated: 1_" in body
