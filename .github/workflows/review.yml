@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   review_design:
-    name: Review / Design
+    name: Design
     runs-on: self-hosted
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -44,7 +44,7 @@ jobs:
           if-no-files-found: warn
 
   review_security_audit:
-    name: Review / Security Audit
+    name: Security Audit
     runs-on: self-hosted
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -77,7 +77,7 @@ jobs:
           if-no-files-found: warn
 
   review_logic_audit:
-    name: Review / Logic Audit
+    name: Logic Audit
     runs-on: self-hosted
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -110,7 +110,7 @@ jobs:
           if-no-files-found: warn
 
   review_publish:
-    name: Review / Publish
+    name: Publish
     runs-on: self-hosted
     needs: [review_design, review_security_audit, review_logic_audit]
     if: always()
