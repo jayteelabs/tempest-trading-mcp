@@ -9,6 +9,8 @@ from tempest_mcp.backtest.commission import (
 from tempest_mcp.backtest.engine import (
     BacktestEngine,
     BacktestResult,
+    PositionDirection,
+    SignalAction,
     Trade,
 )
 
@@ -20,4 +22,6 @@ __all__ = [
     "calculate_commission",
     "apply_slippage",
     "calculate_net_pnl",
+    "SignalAction",
+    "PositionDirection",
 ]

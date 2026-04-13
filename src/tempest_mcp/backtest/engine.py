@@ -1,11 +1,59 @@
-"""Backtesting engine — ENG-16 spec implementation."""
+"""Backtesting engine — ENG-16 spec implementation, extended for ENG-58 bidirectional support."""
+
 from dataclasses import dataclass
-from typing import Any
+from enum import Enum
 
 import numpy as np
 import pandas as pd
 
 from tempest_mcp.backtest.commission import apply_slippage
+
+# ---------------------------------------------------------------------------
+# Enums for bidirectional signal and position state (ENG-58)
+# ---------------------------------------------------------------------------
+
+
+class SignalAction(Enum):
+    """Bidirectional signal contract — replaces int sign semantics.
+
+    Each variant is unambiguous about intent:
+    - LONG_ENTRY  — open / extend a long position
+    - LONG_EXIT   — close an existing long position
+    - SHORT_ENTRY — open / extend a short position
+    - SHORT_EXIT  — close an existing short position
+    - HOLD        — no action
+    """
+    LONG_ENTRY = "long_entry"
+    LONG_EXIT = "long_exit"
+    SHORT_ENTRY = "short_entry"
+    SHORT_EXIT = "short_exit"
+    HOLD = "hold"
+
+    @classmethod
+    def from_int(cls, value: int) -> "SignalAction":
+        """Convert legacy int signal to SignalAction (backwards compatibility)."""
+        if isinstance(value, bool):
+            raise TypeError("Boolean signals are not supported. Use SignalAction explicitly.")
+
+        mapping = {
+            1: cls.LONG_ENTRY,
+            -1: cls.LONG_EXIT,
+            0: cls.HOLD,
+        }
+        if value not in mapping:
+            raise ValueError(f"Invalid signal int value: {value}. Use SignalAction enum directly.")
+        return mapping[value]
+
+
+class PositionDirection(Enum):
+    """Internal position state — distinct from trade side.
+
+    Enforces FLAT as mandatory intermediate state for directional flips.
+    """
+    FLAT = "flat"
+    LONG = "long"
+    SHORT = "short"
+
 
 # ---------------------------------------------------------------------------
 # Dataclasses per ENG-16 spec (do NOT import from models.backtest)
@@ -20,12 +68,12 @@ class Trade:
     entry_price: float
     exit_price: float
     size: float
-    direction: int           # 1 = long
-    gross_pnl: float         # (exit_price − entry_price) × size
-    net_pnl: float           # after commission + slippage
-    commission: float        # total commission paid (both sides)
+    direction: PositionDirection  # long or short
+    gross_pnl: float            # direction-aware PnL at exit
+    net_pnl: float              # after commission + slippage
+    commission: float           # total commission paid (both sides)
     slippage_cost: float
-    bars_held: int          # number of bars between entry and exit
+    bars_held: int              # number of bars between entry and exit
 
 
 @dataclass
@@ -45,7 +93,7 @@ class BacktestResult:
 
 
 class BacktestEngine:
-    """Long-only backtest engine with commission and slippage."""
+    """Bidirectional backtest engine with commission and slippage (ENG-58)."""
 
     def __init__(
         self,
@@ -57,7 +105,9 @@ class BacktestEngine:
         self.commission_pct = commission_pct
         self.slippage_bps = slippage_bps
         self._cash = initial_capital
-        self._position: dict[str, Any] | None = None  # {entry_price, size, entry_time, entry_idx}
+        # Internal position state: {entry_price, size, entry_time, entry_idx, direction}
+        self._position: dict[str, object] | None = None
+        self._position_direction: PositionDirection = PositionDirection.FLAT
         self._trades: list[Trade] = []
         self._equity_curve: list[float] = []
         self._has_open_position = False
@@ -66,16 +116,24 @@ class BacktestEngine:
         """Run backtest on OHLCV data with entry/exit signals.
 
         Signals fire at close, order executes at next bar open (no lookahead).
-        Long only: flat <-> position states.
+        Supports both long and short positions. FLAT is required as intermediate
+        state for any directional flip (LONG->SHORT or SHORT->LONG must go through FLAT).
         """
         if len(ohlcv_df) < 2:
             raise ValueError(f"Backtest requires at least 2 rows, got {len(ohlcv_df)}")
 
-        # Ensure signals index matches ohlcv_df index
-        signals = signals.reindex(ohlcv_df.index).fillna(0).astype(int)
+        required_columns = {"open", "high", "low", "close", "volume"}
+        missing_columns = required_columns.difference(ohlcv_df.columns)
+        if missing_columns:
+            missing_list = ", ".join(sorted(missing_columns))
+            raise ValueError(f"OHLCV DataFrame missing required columns: {missing_list}")
+
+        # Normalize signals to SignalAction enum
+        normalized = self._normalize_signals(signals, ohlcv_df.index)
 
         self._cash = self.initial_capital
         self._position = None
+        self._position_direction = PositionDirection.FLAT
         self._trades = []
         self._equity_curve = []
         self._has_open_position = False
@@ -86,12 +144,8 @@ class BacktestEngine:
             curr_idx = i
 
             # Execute on next bar open if prior bar had signal
-            prev_signal = signals.iloc[prev_idx]
-
-            if prev_signal == 1 and self._position is None:
-                self._open_position(ohlcv_df, prev_idx)
-            elif prev_signal == -1 and self._position is not None:
-                self._close_position(ohlcv_df, prev_idx)
+            prev_signal = normalized.iloc[prev_idx]
+            self._process_signal(prev_signal, ohlcv_df, prev_idx)
 
             # Record equity after potential trade execution
             equity = self._calculate_equity(ohlcv_df, curr_idx)
@@ -116,10 +170,81 @@ class BacktestEngine:
             final_equity=self._equity_curve[-1] if self._equity_curve else self.initial_capital,
         )
 
-    def _open_position(self, df: pd.DataFrame, idx: int) -> None:
-        """Open a long position at the next bar open after signal at idx."""
+    def _normalize_signals(self, signals: pd.Series, index: pd.Index) -> pd.Series:
+        """Normalize integer or SignalAction signals to SignalAction enum series."""
+        if pd.api.types.is_bool_dtype(signals.dtype):
+            raise TypeError("Boolean signals are not supported. Use SignalAction explicitly.")
+
+        normalized = signals.reindex(index)
+
+        if normalized.dtype == object:
+            normalized = normalized.where(~normalized.isna(), SignalAction.HOLD.value)
+            return normalized.apply(
+                lambda x: x if isinstance(x, SignalAction) else SignalAction(x)
+            )
+
+        numeric = pd.to_numeric(normalized, errors="coerce").fillna(0)
+        return numeric.astype(int).apply(SignalAction.from_int)
+
+    def _process_signal(self, signal: SignalAction, df: pd.DataFrame, idx: int) -> None:
+        """Process a single signal against current position state."""
+        if signal == SignalAction.HOLD:
+            return
+
+        if signal == SignalAction.LONG_ENTRY:
+            if self._position_direction == PositionDirection.LONG:
+                # Already in long position — no-op
+                return
+            if self._position_direction != PositionDirection.FLAT:
+                raise ValueError(
+                    f"Invalid transition: cannot LONG_ENTRY when position is {self._position_direction.value}. "
+                    f"Must close position first (transition through FLAT)."
+                )
+            self._open_position(df, idx, PositionDirection.LONG)
+
+        elif signal == SignalAction.SHORT_ENTRY:
+            if self._position_direction == PositionDirection.SHORT:
+                # Already in short position — no-op
+                return
+            if self._position_direction != PositionDirection.FLAT:
+                raise ValueError(
+                    f"Invalid transition: cannot SHORT_ENTRY when position is {self._position_direction.value}. "
+                    f"Must close position first (transition through FLAT)."
+                )
+            self._open_position(df, idx, PositionDirection.SHORT)
+
+        elif signal == SignalAction.LONG_EXIT:
+            if self._position_direction == PositionDirection.FLAT:
+                # Already flat — no-op
+                return
+            if self._position_direction != PositionDirection.LONG:
+                raise ValueError(
+                    f"Invalid transition: cannot LONG_EXIT when position is {self._position_direction.value}. "
+                    f"No long position to close."
+                )
+            self._close_position(df, idx)
+
+        elif signal == SignalAction.SHORT_EXIT:
+            if self._position_direction == PositionDirection.FLAT:
+                # Already flat — no-op
+                return
+            if self._position_direction != PositionDirection.SHORT:
+                raise ValueError(
+                    f"Invalid transition: cannot SHORT_EXIT when position is {self._position_direction.value}. "
+                    f"No short position to close."
+                )
+            self._close_position(df, idx)
+
+    def _open_position(self, df: pd.DataFrame, idx: int, direction: PositionDirection) -> None:
+        """Open a position at the next bar open after signal at idx."""
+        if self._position is not None:
+            return  # Already have a position (should not happen if state transitions are correct)
+
         entry_price = df["open"].iloc[idx + 1]  # execute at next bar open
-        entry_price = apply_slippage(entry_price, 1.0, 1, self.slippage_bps)
+
+        # Determine slippage direction: LONG_ENTRY pays slippage (buy), SHORT_ENTRY receives slippage (sell)
+        slippage_direction = 1 if direction == PositionDirection.LONG else -1
+        entry_price = apply_slippage(entry_price, 1.0, slippage_direction, self.slippage_bps)
 
         # Size = round(cash / entry_price, 8)
         size = round(self._cash / entry_price, 8)
@@ -135,28 +260,38 @@ class BacktestEngine:
             "entry_time": df.index[idx + 1],
             "entry_idx": idx + 1,
             "commission": commission,
+            "direction": direction,
         }
+        self._position_direction = direction
 
     def _close_position(self, df: pd.DataFrame, idx: int) -> None:
         """Close the current position at the next bar open after signal at idx."""
         if self._position is None:
             return
 
+        direction = self._position["direction"]
         exit_price = df["open"].iloc[idx + 1]  # execute at next bar open
-        direction = 1  # long
-        exit_price = apply_slippage(exit_price, 1.0, -1, self.slippage_bps)
+
+        # Slippage: for closing a long we sell (direction=-1), for closing a short we buy (direction=1)
+        slippage_direction = -1 if direction == PositionDirection.LONG else 1
+        exit_price = apply_slippage(exit_price, 1.0, slippage_direction, self.slippage_bps)
 
         size = self._position["size"]
         entry_price = self._position["entry_price"]
 
-        gross_pnl = (exit_price - entry_price) * size
+        # Direction-aware gross PnL:
+        # Long:  (exit_price - entry_price) * size  — profit when price rises
+        # Short: (entry_price - exit_price) * size  — profit when price falls
+        if direction == PositionDirection.LONG:
+            gross_pnl = (exit_price - entry_price) * size
+        else:  # SHORT
+            gross_pnl = (entry_price - exit_price) * size
+
         exit_commission = exit_price * size * self.commission_pct
         total_commission = self._position["commission"] + exit_commission
 
-        # Slippage cost = |exit_price - mid_price| * size (approximation)
+        # Slippage cost approximation (symmetric for both directions)
         mid_price = (entry_price + exit_price) / 2
-        slippage_cost = abs(exit_price - (entry_price if direction == 1 else entry_price)) * size
-        # More accurate slippage cost based on the apply_slippage formula
         slippage_cost = size * (self.slippage_bps / 10000) * mid_price
 
         net_pnl = gross_pnl - total_commission - slippage_cost
@@ -179,13 +314,25 @@ class BacktestEngine:
         )
         self._trades.append(trade)
         self._position = None
+        self._position_direction = PositionDirection.FLAT
 
     def _calculate_equity(self, df: pd.DataFrame, idx: int) -> float:
         """Calculate current equity (cash + unrealized PnL)."""
         equity = self._cash
         if self._position is not None:
             current_price = df["close"].iloc[idx]
-            unrealized = (current_price - self._position["entry_price"]) * self._position["size"]
+            direction = self._position["direction"]
+            entry_price = self._position["entry_price"]
+            size = self._position["size"]
+            # Direction-aware unrealized PnL:
+            # Long:  (current - entry) * size
+            # Short: (entry - current) * size
+            if direction == PositionDirection.LONG:
+                unrealized = (current_price - entry_price) * size
+            elif direction == PositionDirection.SHORT:
+                unrealized = (entry_price - current_price) * size
+            else:
+                raise ValueError(f"Unknown position direction: {direction}")
             equity += unrealized
         return equity
 
