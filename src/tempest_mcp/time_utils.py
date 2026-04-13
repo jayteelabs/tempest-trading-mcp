@@ -14,7 +14,7 @@ import pandas as pd
 
 BUSINESS_TZ_NAME = "America/New_York"
 BUSINESS_TZ = ZoneInfo(BUSINESS_TZ_NAME)
-UTC = timezone.utc
+UTC_TZ = timezone.utc
 
 
 def coerce_window_datetime_to_utc(dt: datetime | None) -> datetime | None:
@@ -27,7 +27,7 @@ def coerce_window_datetime_to_utc(dt: datetime | None) -> datetime | None:
         return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=BUSINESS_TZ)
-    return dt.astimezone(UTC)
+    return dt.astimezone(UTC_TZ)
 
 
 def ensure_utc_timestamp(timestamp: pd.Timestamp) -> pd.Timestamp:

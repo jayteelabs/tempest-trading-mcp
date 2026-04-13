@@ -3,26 +3,25 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Literal
+from typing import Literal, TypeAlias
 
 import pandas as pd
-import pytz
 
-from tempest_mcp.time_utils import business_day_bounds_utc
+from tempest_mcp.time_utils import BUSINESS_TZ, business_day_bounds_utc
 
-NY_TZ = pytz.timezone("America/New_York")
+NY_TZ = BUSINESS_TZ
+
+SessionTypeInput: TypeAlias = Literal["asia", "london", "ny", "new_york"]
 
 
-def detect_session_levels(
-    ohlcv_df: pd.DataFrame, session_type: Literal["asia", "london", "ny", "new_york"]
-) -> dict:
+def detect_session_levels(ohlcv_df: pd.DataFrame, session_type: SessionTypeInput) -> dict:
     """Detect session high/low levels for Asia, London, or NY session.
 
     Args:
         ohlcv_df: DataFrame with UTC-aware pd.Timestamp index and columns
                   [open, high, low, close, volume]
-        session_type: One of "asia", "london", "ny". "new_york" is
-            accepted as a compatibility alias and normalized to "ny".
+        session_type: Canonical values are "asia", "london", and "ny".
+            "new_york" is accepted as a compatibility alias and normalized to "ny".
 
     Returns:
         dict with session_type, session_start_utc, session_end_utc, high, low,
@@ -32,7 +31,7 @@ def detect_session_levels(
     Session windows (UTC):
         - Asia: 00:00–09:00 UTC (fixed, no DST)
         - London: 08:00–17:00 UTC (fixed, no DST)
-        - NY: 09:30–16:00 US Eastern (converts to UTC with DST using pytz)
+        - NY: 09:30–16:00 US Eastern (converts to UTC with DST using zoneinfo)
 
     Note:
         When the DataFrame spans multiple days, only bars from the most recent

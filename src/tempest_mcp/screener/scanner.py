@@ -126,7 +126,7 @@ class Screener:
     def session_breakout_scan(
         self, session: SessionType, symbols: list[str] | None = None
     ) -> list[ScanResult]:
-        from tempest_mcp.indicators.session_levels import calculate_session_levels
+        from tempest_mcp.indicators.session_levels import detect_session_levels
 
         symbols_to_scan = symbols or list(self.symbols)
         results = []
@@ -135,29 +135,26 @@ class Screener:
                 df = self.adapter.fetch_ohlcv_live(symbol, timeframe="1h", limit=48)
                 if df.empty:
                     continue
-                timestamps = [
-                    ts.timestamp() if isinstance(ts, pd.Timestamp) else float(ts) for ts in df.index
-                ]
-                high = df["high"].tolist()
-                low = df["low"].tolist()
                 close = df["close"].tolist()
-                session_result = calculate_session_levels(timestamps, high, low)
-                values = session_result.values
+                session_key = session.value
+                session_result = detect_session_levels(df, session_key)
                 current_price = close[-1]
                 filters_matched = []
-                session_key = session.value
-                session_high = values.get(f"{session_key}_high", 0)
-                session_low = values.get(f"{session_key}_low", 0)
+                session_high = float(session_result.get("high", 0.0) or 0.0)
+                session_low = float(session_result.get("low", 0.0) or 0.0)
                 if session_high > 0 and current_price > session_high:
                     filters_matched.append(f"{session_key}_high_breakout")
                 if session_low > 0 and current_price < session_low:
                     filters_matched.append(f"{session_key}_low_breakout")
                 score = 80.0 if filters_matched else 0.0
+                latest_ts = df.index[-1]
                 results.append(
                     ScanResult(
                         symbol=symbol,
                         exchange=self.exchange,
-                        timestamp=timestamps[-1],
+                        timestamp=latest_ts.timestamp()
+                        if isinstance(latest_ts, pd.Timestamp)
+                        else float(latest_ts),
                         price=current_price,
                         filters_matched=filters_matched,
                         indicator_values={
