@@ -21,34 +21,39 @@ def fingerprint_for(finding: Finding | dict[str, Any]) -> str:
 
 
 def merge_duplicate_findings(
-    findings: list[Finding],
+    findings: list[Finding | dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     merged: dict[str, dict[str, Any]] = {}
     dropped: list[dict[str, Any]] = []
 
     for finding in findings:
         fingerprint = fingerprint_for(finding)
-        current = finding.to_dict()
+        current = finding.to_dict() if isinstance(finding, Finding) else dict(finding)
         current["fingerprint"] = fingerprint
-        current["sources"] = [finding.source_agent]
-        current["stages"] = [finding.stage]
+        source_agent = _value(finding, "source_agent") or "unknown"
+        stage = _value(finding, "stage") or "unknown"
+        current["sources"] = [source_agent]
+        current["stages"] = [stage]
 
         existing = merged.get(fingerprint)
         if existing is None:
             merged[fingerprint] = current
             continue
 
-        existing["sources"] = sorted({*existing["sources"], finding.source_agent})
-        existing["stages"] = sorted({*existing["stages"], finding.stage})
+        existing["sources"] = sorted({*existing["sources"], source_agent})
+        existing["stages"] = sorted({*existing["stages"], stage})
         existing["confidence"] = (
-            max(existing.get("confidence") or 0.0, finding.confidence or 0.0) or None
+            max(existing.get("confidence") or 0.0, _value(finding, "confidence") or 0.0) or None
         )
-        existing["spec_refs"] = sorted({*existing.get("spec_refs", []), *finding.spec_refs})
-        existing["requires_spec_ref"] = (
-            existing.get("requires_spec_ref", False) or finding.requires_spec_ref
+        existing["spec_refs"] = sorted(
+            {*existing.get("spec_refs", []), *(_value(finding, "spec_refs") or [])}
+        )
+        existing["requires_spec_ref"] = existing.get("requires_spec_ref", False) or bool(
+            _value(finding, "requires_spec_ref")
         )
 
-        if SEVERITY_ORDER[finding.severity] > SEVERITY_ORDER[existing["severity"]]:
+        severity = _value(finding, "severity") or "medium"
+        if SEVERITY_ORDER[severity] > SEVERITY_ORDER[existing["severity"]]:
             for key in [
                 "source_agent",
                 "stage",
@@ -67,8 +72,8 @@ def merge_duplicate_findings(
                 "fingerprint": fingerprint,
                 "decision": "drop_duplicate",
                 "reason": "duplicate within merged findings",
-                "source_agent": finding.source_agent,
-                "stage": finding.stage,
+                "source_agent": source_agent,
+                "stage": stage,
             }
         )
 

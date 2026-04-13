@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".github" / "scripts"))
 
 from review.collect_changed_lines import parse_unified_diff
-from review.dedupe_findings import fingerprint_for
+from review.dedupe_findings import fingerprint_for, merge_duplicate_findings
 from review.publish_review import build_inline_comment
 from review.schema import Finding, extract_json_document
 from review.validate_findings import classify_findings
@@ -56,6 +56,48 @@ def test_fingerprint_ignores_case_and_whitespace() -> None:
     )
 
     assert fingerprint_for(first) == fingerprint_for(second)
+
+
+def test_merge_duplicate_findings_accepts_artifact_dicts() -> None:
+    findings = [
+        {
+            "source_agent": "shuna",
+            "stage": "review/design",
+            "severity": "medium",
+            "category": "contract",
+            "title": "Contract drift",
+            "body": "Return a structured object.",
+            "path": "src/example.py",
+            "line": 18,
+            "evidence": "Anchored in diff.",
+            "confidence": 0.6,
+            "spec_refs": [],
+            "requires_spec_ref": False,
+        },
+        {
+            "source_agent": "shion",
+            "stage": "review/logic_audit",
+            "severity": "high",
+            "category": "contract",
+            "title": "Contract drift",
+            "body": "Return a structured object.",
+            "path": "src/example.py",
+            "line": 18,
+            "evidence": "Anchored in diff.",
+            "confidence": 0.9,
+            "spec_refs": ["docs/spec.md"],
+            "requires_spec_ref": False,
+        },
+    ]
+
+    merged, dropped = merge_duplicate_findings(findings)
+
+    assert len(merged) == 1
+    assert merged[0]["severity"] == "high"
+    assert merged[0]["sources"] == ["shion", "shuna"]
+    assert merged[0]["stages"] == ["review/design", "review/logic_audit"]
+    assert merged[0]["spec_refs"] == ["docs/spec.md"]
+    assert len(dropped) == 1
 
 
 def test_classify_findings_separates_inline_summary_and_drops(tmp_path: Path) -> None:
