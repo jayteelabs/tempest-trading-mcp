@@ -15,8 +15,10 @@ from review.publish_review import (
     build_review_body,
     format_reported_by,
     humanize_title,
+    severity_style,
 )
 from review.schema import Finding, extract_json_document
+from review.utils import resolve_artifact_path
 from review.validate_findings import classify_findings
 
 
@@ -186,6 +188,7 @@ def test_build_inline_comment_embeds_review_markers() -> None:
             "fingerprint": "abc123",
             "stage": "review/design",
             "stages": ["review/design", "review/logic_audit"],
+            "severity": "medium",
             "title": "Contract drift",
             "body": "Return the structured response here.",
             "path": "src/example.py",
@@ -197,6 +200,7 @@ def test_build_inline_comment_embeds_review_markers() -> None:
 
     assert comment["path"] == "src/example.py"
     assert comment["line"] == 21
+    assert "**🟡 MEDIUM: Contract drift**" in comment["body"]
     assert "Reported by: Shuna / Design, Shion / Logic Audit (Lane B)" in comment["body"]
     assert "tempest-review:fingerprint=abc123" in comment["body"]
     assert "tempest-review:head-sha=deadbeef" in comment["body"]
@@ -242,3 +246,19 @@ def test_build_review_body_uses_brief_summary_and_footer() -> None:
     )
     assert "Validated **1** inline finding(s) were published on the diff." in body
     assert "_Duplicates: 1 | Unverifiable: 0 | Outdated: 1_" in body
+
+
+def test_severity_style_uses_expected_header_metadata() -> None:
+    assert severity_style("critical")[0:2] == ("🔴", "CRITICAL")
+    assert severity_style("high")[0:2] == ("🟠", "HIGH")
+    assert severity_style("medium")[0:2] == ("🟡", "MEDIUM")
+    assert severity_style("low")[0:2] == ("🟢", "LOW")
+
+
+def test_resolve_artifact_path_rejects_non_artifact_paths() -> None:
+    try:
+        resolve_artifact_path("../secrets.txt")
+    except ValueError as exc:
+        assert "Artifact path must stay within" in str(exc)
+    else:
+        raise AssertionError("expected resolve_artifact_path to reject traversal")

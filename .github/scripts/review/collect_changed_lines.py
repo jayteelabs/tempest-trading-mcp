@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path
 
-
-def repo_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+from review.utils import repo_root, validate_git_sha
 
 
 def collect_changed_lines(base_sha: str, head_sha: str) -> dict[str, set[int]]:
+    validate_git_sha("base_sha", base_sha)
+    validate_git_sha("head_sha", head_sha)
     result = subprocess.run(
         ["git", "diff", "--no-ext-diff", "--unified=0", base_sha, head_sha],
         cwd=repo_root(),

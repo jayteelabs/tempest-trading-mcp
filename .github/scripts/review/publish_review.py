@@ -5,17 +5,13 @@ import json
 import os
 import re
 import subprocess
-import sys
-from pathlib import Path
 from typing import Any
-
-if __package__ in {None, ""}:
-    sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from review.collect_changed_lines import collect_changed_lines
 from review.dedupe_findings import merge_duplicate_findings
-from review.github_api import GitHubApi
+from review.github_api import GitHubApi, GitHubApiError
 from review.schema import SEVERITY_ORDER, load_artifact
+from review.utils import repo_root, resolve_artifact_path, validate_git_sha
 from review.validate_findings import classify_findings
 
 CHECK_RUN_NAME = "Review / Publish"
@@ -24,6 +20,33 @@ STAGE_DISPLAY_NAMES = {
     "review/design": "Shuna / Design",
     "review/security_audit": "Shion / Security Audit (Lane A)",
     "review/logic_audit": "Shion / Logic Audit (Lane B)",
+}
+SEVERITY_STYLES = {
+    "critical": (
+        "🔴",
+        "CRITICAL",
+        "This is critical because it can break the review pipeline or produce untrustworthy review output immediately.",
+    ),
+    "high": (
+        "🟠",
+        "HIGH",
+        "This is high severity because it can cause incorrect review behavior, failed automation, or meaningful operational risk.",
+    ),
+    "medium": (
+        "🟡",
+        "MEDIUM",
+        "This is medium severity because it can degrade reliability or correctness and is worth addressing before the workflow spreads further.",
+    ),
+    "low": (
+        "🟢",
+        "LOW",
+        "This is low severity because the impact is limited, but cleaning it up reduces future maintenance and review noise.",
+    ),
+    "info": (
+        "🔵",
+        "INFO",
+        "This is informational because it documents a minor improvement rather than an immediate correctness or security problem.",
+    ),
 }
 
 
@@ -42,12 +65,14 @@ def main() -> int:
     repository = os.environ["GITHUB_REPOSITORY"]
     token = os.environ["GH_TOKEN"]
     api = GitHubApi(token=token, repository=repository)
-    repo_root = Path(__file__).resolve().parents[3]
+    root = repo_root()
+    validate_git_sha("base_sha", args.base_sha)
+    validate_git_sha("head_sha", args.head_sha)
 
     artifacts = [
-        load_artifact(args.design),
-        load_artifact(args.security_audit),
-        load_artifact(args.logic_audit),
+        load_artifact(resolve_artifact_path(args.design)),
+        load_artifact(resolve_artifact_path(args.security_audit)),
+        load_artifact(resolve_artifact_path(args.logic_audit)),
     ]
 
     artifact_errors = [error for artifact in artifacts for error in artifact.get("errors", [])]
@@ -58,11 +83,11 @@ def main() -> int:
     inline_findings, summary_only, validation_drops = classify_findings(
         merged_findings,
         changed_lines=changed_lines,
-        repo_root=repo_root,
+        repo_root=root,
     )
 
-    existing_comments = api.get_review_comments(int(args.pr))
-    existing_reviews = api.get_reviews(int(args.pr))
+    existing_comments = api.list_review_comments(int(args.pr))
+    existing_reviews = api.list_reviews(int(args.pr))
     existing_fingerprints = extract_existing_fingerprints(existing_comments, args.head_sha)
     review_exists_for_head = has_publisher_review(existing_reviews, args.head_sha)
 
@@ -132,7 +157,7 @@ def main() -> int:
                 line=comment["line"],
                 body=build_inline_comment(comment, args.head_sha)["body"],
             )
-        except Exception as exc:  # noqa: BLE001
+        except GitHubApiError as exc:
             publish_errors.append(
                 f"Inline comment publish failed for {comment['path']}:{comment['line']} ({comment['fingerprint']}): {exc}"
             )
@@ -165,7 +190,7 @@ def main() -> int:
             [*published_inline, *summary_only], [*artifact_errors, *publish_errors]
         ),
     )
-    return 0
+    return 1 if publish_errors else 0
 
 
 def extract_existing_fingerprints(comments: list[dict[str, Any]], head_sha: str) -> set[str]:
@@ -199,7 +224,8 @@ def build_inline_comment(finding: dict[str, Any], head_sha: str) -> dict[str, An
         head_sha=head_sha,
     )
     title = finding.get("title") or finding["body"]
-    body_lines = [f"**{title}**", finding["body"]]
+    emoji, label, severity_reason = severity_style(finding.get("severity", "medium"))
+    body_lines = [f"**{emoji} {label}: {title}**", finding["body"], severity_reason]
     reported_by = format_reported_by(finding)
     if reported_by:
         body_lines.append(f"Reported by: {reported_by}")
@@ -387,7 +413,7 @@ def humanize_title(title: str) -> str:
 def summarize_diff(base_sha: str, head_sha: str) -> dict[str, Any]:
     result = subprocess.run(
         ["git", "diff", "--name-only", base_sha, head_sha],
-        cwd=Path(__file__).resolve().parents[3],
+        cwd=repo_root(),
         capture_output=True,
         text=True,
         check=True,
@@ -416,6 +442,10 @@ def classify_area(path: str) -> str:
     if "/" in path:
         return path.split("/", 1)[0]
     return path
+
+
+def severity_style(severity: str) -> tuple[str, str, str]:
+    return SEVERITY_STYLES.get(severity, SEVERITY_STYLES["medium"])
 
 
 if __name__ == "__main__":

@@ -9,10 +9,14 @@ permissions:
   pull-requests: write
   checks: write
 
+env:
+  PYTHONPATH: .github/scripts
+
 jobs:
   review_design:
     name: Design
     runs-on: self-hosted
+    timeout-minutes: 10
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       PR_TITLE: ${{ github.event.pull_request.title }}
@@ -27,7 +31,7 @@ jobs:
 
       - name: Produce design findings
         run: |
-          python3 .github/scripts/review/run_design_review.py \
+          python3 -m review.run_design_review \
             --pr "$PR_NUMBER" \
             --title "$PR_TITLE" \
             --url "$PR_URL" \
@@ -46,6 +50,7 @@ jobs:
   review_security_audit:
     name: Security Audit
     runs-on: self-hosted
+    timeout-minutes: 10
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       PR_TITLE: ${{ github.event.pull_request.title }}
@@ -60,7 +65,7 @@ jobs:
 
       - name: Produce security audit findings
         run: |
-          python3 .github/scripts/review/run_security_audit.py \
+          python3 -m review.run_security_audit \
             --pr "$PR_NUMBER" \
             --title "$PR_TITLE" \
             --url "$PR_URL" \
@@ -79,6 +84,7 @@ jobs:
   review_logic_audit:
     name: Logic Audit
     runs-on: self-hosted
+    timeout-minutes: 10
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       PR_TITLE: ${{ github.event.pull_request.title }}
@@ -93,7 +99,7 @@ jobs:
 
       - name: Produce logic audit findings
         run: |
-          python3 .github/scripts/review/run_logic_audit.py \
+          python3 -m review.run_logic_audit \
             --pr "$PR_NUMBER" \
             --title "$PR_TITLE" \
             --url "$PR_URL" \
@@ -112,6 +118,7 @@ jobs:
   review_publish:
     name: Publish
     runs-on: self-hosted
+    timeout-minutes: 10
     needs: [review_design, review_security_audit, review_logic_audit]
     if: always()
     env:
@@ -139,7 +146,7 @@ jobs:
 
       - name: Publish consolidated review
         run: |
-          python3 .github/scripts/review/publish_review.py \
+          python3 -m review.publish_review \
             --pr "$PR_NUMBER" \
             --title "$PR_TITLE" \
             --url "$PR_URL" \

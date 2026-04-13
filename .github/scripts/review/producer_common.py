@@ -4,13 +4,15 @@ import argparse
 import os
 import re
 import subprocess
-from pathlib import Path
+import traceback
 
 from review.schema import extract_json_document, normalize_findings, write_artifact
+from review.utils import repo_root, validate_git_sha
 
 MODEL = "minimax/MiniMax-M2.7-highspeed"
 MAX_DIFF_CHARS = 60000
 MAX_REFERENCE_CHARS = 12000
+OPENCODE_TIMEOUT_SECONDS = 300
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -24,11 +26,9 @@ def build_argument_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def repo_root() -> Path:
-    return Path(__file__).resolve().parents[3]
-
-
 def collect_diff(base_sha: str, head_sha: str) -> str:
+    validate_git_sha("base_sha", base_sha)
+    validate_git_sha("head_sha", head_sha)
     result = subprocess.run(
         ["git", "diff", "--no-ext-diff", "--unified=3", base_sha, head_sha],
         cwd=repo_root(),
@@ -130,9 +130,12 @@ Required response shape:
 
 Rules:
 - Emit only findings that are supported by the diff.
+- Emit only actionable findings with a concrete correctness, security, or operational impact.
 - Prefer path+line anchors on changed lines. If you cannot anchor safely, set path and line to null.
 - If a claim depends on repo-local docs, include those files in spec_refs and set requires_spec_ref=true.
 - If there are no valid findings, return {{"findings": []}}.
+- Ignore naming-only suggestions, empty package markers, module-size/style opinions, intentional documented auth patterns, and speculative refactors without concrete impact.
+- Do not misclassify `except Exception` as catching `KeyboardInterrupt` or `SystemExit`; in Python those derive from `BaseException` and propagate.
 - Keep body concise and ready to publish as a GitHub review comment.
 
 Focus:
@@ -158,6 +161,7 @@ def run_opencode(agent: str, prompt: str) -> str:
         capture_output=True,
         text=True,
         check=True,
+        timeout=OPENCODE_TIMEOUT_SECONDS,
     )
     return result.stdout.strip()
 
@@ -187,8 +191,10 @@ def execute_review(*, agent: str, stage: str) -> int:
     except subprocess.CalledProcessError as exc:
         message = exc.stderr.strip() or exc.stdout.strip() or str(exc)
         errors.append(f"{stage} subprocess failed: {message}")
-    except Exception as exc:  # noqa: BLE001
-        errors.append(f"{stage} failed: {exc}")
+    except subprocess.TimeoutExpired as exc:
+        errors.append(f"{stage} timed out after {exc.timeout}s")
+    except (OSError, ValueError) as exc:
+        errors.append(f"{stage} failed: {exc}\n{traceback.format_exc().strip()}")
 
     write_artifact(
         args.out,

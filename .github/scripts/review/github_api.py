@@ -7,6 +7,10 @@ from typing import Any
 from urllib.error import HTTPError
 
 
+class GitHubApiError(RuntimeError):
+    """GitHub API request failed."""
+
+
 class GitHubApi:
     def __init__(self, *, token: str, repository: str) -> None:
         owner, repo = repository.split("/", 1)
@@ -15,10 +19,10 @@ class GitHubApi:
         self.base_url = f"https://api.github.com/repos/{owner}/{repo}"
         self.token = token
 
-    def get_review_comments(self, pull_number: int) -> list[dict[str, Any]]:
+    def list_review_comments(self, pull_number: int) -> list[dict[str, Any]]:
         return self._request("GET", f"/pulls/{pull_number}/comments?per_page=100")
 
-    def get_reviews(self, pull_number: int) -> list[dict[str, Any]]:
+    def list_reviews(self, pull_number: int) -> list[dict[str, Any]]:
         return self._request("GET", f"/pulls/{pull_number}/reviews?per_page=100")
 
     def create_review(
@@ -100,6 +104,6 @@ class GitHubApi:
                 return json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(
+            raise GitHubApiError(
                 f"GitHub API {method} {path} failed with {exc.code}: {detail}"
             ) from exc
