@@ -256,6 +256,11 @@ def normalize_to_ccxt_market(symbol: str, exchange: ExchangeName = "binance") ->
     raise ValueError(f"Unable to derive CCXT market symbol from '{symbol}'")
 
 
+def normalize_to_ccxt_exchange(symbol: str, exchange: ExchangeName = "binance") -> str:
+    """Backward-compatible alias for normalize_to_ccxt_market."""
+    return normalize_to_ccxt_market(symbol, exchange=exchange)
+
+
 def normalize_to_tradingview(symbol: str) -> str:
     """Convert a symbol to a legacy TradingView-style alias.
 
@@ -423,7 +428,15 @@ def normalize_to_yf_fallback(symbol: str) -> str:
     if not symbol_normalized:
         raise ValueError("Symbol cannot be empty or whitespace")
 
-    if "/" in symbol_normalized or symbol_normalized.endswith(("USDT", "USD", "USDC")):
+    if "/" in symbol_normalized:
+        base, _, quote = symbol_normalized.partition("/")
+        if not base or not quote:
+            raise ValueError(f"Invalid symbol format: '{symbol}'.")
+        if quote not in {"USD", "USDT", "USDC", "US"}:
+            raise ValueError(f"Unsupported quote currency for yfinance fallback: '{quote}'.")
+        return normalize_to_yf(symbol_normalized)
+
+    if symbol_normalized.endswith(("USDT", "USD", "USDC")):
         return normalize_to_yf(symbol_normalized)
     return symbol_normalized
 
