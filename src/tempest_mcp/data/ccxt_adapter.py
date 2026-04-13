@@ -26,7 +26,7 @@ import structlog
 from tempest_mcp.data._symbols import (
     _validate_limit,
     _validate_timeframe,
-    normalize_to_ccxt,
+    normalize_to_ccxt_market,
     validate_symbol,
 )
 
@@ -139,7 +139,15 @@ class CCXTAdapter:
 
         try:
             # Normalize symbol to CCXT format
-            ccxt_symbol = normalize_to_ccxt(symbol)
+            try:
+                ccxt_symbol = normalize_to_ccxt_market(symbol)
+            except ValueError as e:
+                logger.error(
+                    "invalid_symbol_format",
+                    symbol=symbol,
+                    error=str(e),
+                )
+                return float("nan")
 
             if not validate_symbol(ccxt_symbol):
                 logger.error(
@@ -232,11 +240,11 @@ class CCXTAdapter:
         limit = _validate_limit(limit)
 
         try:
-            # Normalize symbol to CCXT format
-            # Note: normalize_to_ccxt raises ValueError on unknown format
+            # Normalize symbol to CCXT exchange format
+            # Note: normalize_to_ccxt_market raises ValueError on unknown format
             # (not a ccxt exception) — catch it here per D14 (no exception propagation)
             try:
-                ccxt_symbol = normalize_to_ccxt(symbol)
+                ccxt_symbol = normalize_to_ccxt_market(symbol)
             except ValueError as e:
                 logger.error(
                     "invalid_symbol_format",
@@ -316,6 +324,16 @@ class CCXTAdapter:
             )
             return pd.DataFrame(columns=OHLCV_COLUMNS)
 
+        except Exception as e:
+            logger.error(
+                "fetch_ohlcv_unexpected_error",
+                source="ccxt",
+                symbol=symbol,
+                timeframe=timeframe,
+                error=str(e),
+            )
+            return pd.DataFrame(columns=OHLCV_COLUMNS)
+
     def fetch_ohlcv_historical(
         self,
         symbol: str,
@@ -331,7 +349,7 @@ class CCXTAdapter:
         (end timestamp in ms) and automatic pagination via `params`.
 
         Args:
-            symbol: Symbol in CCXT format (e.g. "BTC/USDT")
+            symbol: Symbol in CCXT format (e.g. "BTCUSDT" or "BTC/USDT")
             timeframe: Timeframe string (e.g. "1m", "5m", "1h", "1d")
             since: Unix timestamp in milliseconds for start time.
                    If None, fetches the most recent `limit` candles.
@@ -368,8 +386,16 @@ class CCXTAdapter:
         limit = _validate_limit(limit)
 
         try:
-            # Symbol is expected in CCXT format
-            ccxt_symbol = symbol.upper()
+            # Normalize symbol to CCXT market format
+            try:
+                ccxt_symbol = normalize_to_ccxt_market(symbol)
+            except ValueError as e:
+                logger.error(
+                    "invalid_symbol_format",
+                    symbol=symbol,
+                    error=str(e),
+                )
+                return pd.DataFrame(columns=OHLCV_COLUMNS)
 
             if not validate_symbol(ccxt_symbol):
                 logger.error(
@@ -488,7 +514,19 @@ class CCXTAdapter:
 
         try:
             # Normalize symbol to CCXT format
-            ccxt_symbol = normalize_to_ccxt(symbol)
+            try:
+                ccxt_symbol = normalize_to_ccxt_market(symbol)
+            except ValueError as e:
+                logger.error(
+                    "invalid_symbol_format",
+                    symbol=symbol,
+                    error=str(e),
+                )
+                return {
+                    "bids": [],
+                    "asks": [],
+                    "timestamp": None,
+                }
 
             if not validate_symbol(ccxt_symbol):
                 logger.error(

@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+import pandas as pd
+
 from tempest_mcp.config import get_config
 from tempest_mcp.data.ccxt_adapter import CCXTAdapter
 from tempest_mcp.indicators.momentum import calculate_rsi_result
@@ -54,7 +56,7 @@ class Screener:
     @property
     def adapter(self) -> CCXTAdapter:
         if self._adapter is None:
-            self._adapter = CCXTAdapter(exchange=self.exchange)
+            self._adapter = CCXTAdapter(exchange_name=self.exchange)
         return self._adapter
 
     def scan(self, symbols: list[str] | None = None) -> list[ScanResult]:
@@ -75,11 +77,10 @@ class Screener:
         return results
 
     def _scan_symbol(self, symbol: str) -> ScanResult | None:
-        kline_data = self.adapter.fetch_klines(symbol, timeframe="1h", limit=100)
-        if not kline_data.klines:
+        df = self.adapter.fetch_ohlcv_live(symbol, timeframe="1h", limit=100)
+        if df.empty:
             return None
-        klines = kline_data.klines
-        close = [k.close for k in klines]
+        close = df["close"].tolist()
         indicator_values = {}
         filters_matched = []
         try:
@@ -97,10 +98,13 @@ class Screener:
             indicator_values["ema_20"] = close[-1]
             indicator_values["ema_50"] = close[-1]
         score = self._calculate_score(filters_matched, indicator_values)
+        latest_ts = df.index[-1]
         return ScanResult(
             symbol=symbol,
             exchange=self.exchange,
-            timestamp=klines[-1].timestamp,
+            timestamp=latest_ts.timestamp()
+            if isinstance(latest_ts, pd.Timestamp)
+            else float(latest_ts),
             price=close[-1],
             filters_matched=filters_matched,
             indicator_values=indicator_values,
@@ -128,14 +132,15 @@ class Screener:
         results = []
         for symbol in symbols_to_scan:
             try:
-                kline_data = self.adapter.fetch_klines(symbol, timeframe="1h", limit=48)
-                if not kline_data.klines:
+                df = self.adapter.fetch_ohlcv_live(symbol, timeframe="1h", limit=48)
+                if df.empty:
                     continue
-                klines = kline_data.klines
-                timestamps = [k.timestamp for k in klines]
-                high = [k.high for k in klines]
-                low = [k.low for k in klines]
-                close = [k.close for k in klines]
+                timestamps = [
+                    ts.timestamp() if isinstance(ts, pd.Timestamp) else float(ts) for ts in df.index
+                ]
+                high = df["high"].tolist()
+                low = df["low"].tolist()
+                close = df["close"].tolist()
                 session_result = calculate_session_levels(timestamps, high, low)
                 values = session_result.values
                 current_price = close[-1]
@@ -152,7 +157,7 @@ class Screener:
                     ScanResult(
                         symbol=symbol,
                         exchange=self.exchange,
-                        timestamp=klines[-1].timestamp,
+                        timestamp=timestamps[-1],
                         price=current_price,
                         filters_matched=filters_matched,
                         indicator_values={

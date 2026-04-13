@@ -44,6 +44,29 @@ SUPPORTED_TIMEFRAMES: frozenset[str] = frozenset(
     }
 )
 
+CCXT_TIMEFRAME_MAP: dict[str, str] = {
+    "1m": "1m",
+    "5m": "5m",
+    "15m": "15m",
+    "30m": "30m",
+    "1h": "1h",
+    "4h": "4h",
+    "1d": "1d",
+    "1wk": "1w",
+    "1mo": "1M",
+}
+
+YF_INTERVAL_MAP: dict[str, str] = {
+    "1m": "1m",
+    "5m": "5m",
+    "15m": "15m",
+    "30m": "30m",
+    "1h": "1h",
+    "1d": "1d",
+    "1wk": "1wk",
+    "1mo": "1mo",
+}
+
 # Limit bounds
 MIN_LIMIT: int = 1
 MAX_LIMIT: int = 1000
@@ -121,6 +144,16 @@ def _validate_limit(limit: int) -> int:
     return max(MIN_LIMIT, min(MAX_LIMIT, limit))
 
 
+def normalize_to_ccxt_timeframe(interval: str) -> str:
+    """Convert a generic interval string to a CCXT timeframe string."""
+    return CCXT_TIMEFRAME_MAP.get(interval, "1d")
+
+
+def normalize_to_yf_interval(interval: str) -> str | None:
+    """Convert a generic interval string to a yfinance interval string."""
+    return YF_INTERVAL_MAP.get(interval)
+
+
 def normalize_to_ccxt(symbol: str, exchange: ExchangeName = "binance") -> str:
     """Convert a symbol to the canonical CCXT-style format.
 
@@ -135,7 +168,7 @@ def normalize_to_ccxt(symbol: str, exchange: ExchangeName = "binance") -> str:
             for exchange-specific symbol formats.
 
     Returns:
-        Symbol in CCXT canonical format (e.g., "BTCUSDT")
+        Symbol in CCXT format (e.g., "BTCUSDT" or "BTC/USDT")
 
     Raises:
         ValueError: If symbol is not recognized or is invalid
@@ -158,15 +191,37 @@ def normalize_to_ccxt(symbol: str, exchange: ExchangeName = "binance") -> str:
     if symbol_upper in SYMBOL_MAPPINGS:
         return SYMBOL_MAPPINGS[symbol_upper]["ccxt"]
 
-    # Try to infer format
+    # If already slash-separated, assume CCXT market format
+    if "/" in symbol_upper:
+        base, _, quote = symbol_upper.partition("/")
+        if not base.isalnum() or not quote.isalnum():
+            raise ValueError(
+                f"Invalid symbol format: '{symbol}'. Expected alphanumeric base/quote."
+            )
+        return symbol_upper
+
     # If ends with USDT, already in CCXT format
     if symbol_upper.endswith("USDT"):
         return symbol_upper
+
+    if symbol_upper.endswith("USDC"):
+        return symbol_upper
+
+    # Reject yfinance-style hyphenated symbols here to avoid rewriting USD into USDT.
+    if "-" in symbol_upper:
+        raise ValueError(
+            f"Invalid symbol format: '{symbol}'. Expected TradingView (BTCUSD) or CCXT (BTCUSDT) format."
+        )
 
     # If ends with USD but not USDT, treat it as a legacy alias and normalize
     # into the canonical CCXT-style symbol. This is compatibility behavior,
     # not a statement that USD and USDT instruments are identical.
     if symbol_upper.endswith("USD") and not symbol_upper.endswith("USDT"):
+        # Reject hyphenated USD symbols to avoid rewriting BTC-USD into BTCUSDT.
+        if "-" in symbol_upper:
+            raise ValueError(
+                f"Invalid symbol format: '{symbol}'. Expected TradingView (BTCUSD) or CCXT (BTCUSDT) format."
+            )
         base = symbol_upper[:-3]  # Remove USD
         ccxt_symbol = f"{base}USDT"
         logger.warning(
@@ -183,6 +238,27 @@ def normalize_to_ccxt(symbol: str, exchange: ExchangeName = "binance") -> str:
         f"Unrecognized symbol format: '{safe_symbol}'. "
         f"Expected TradingView (BTCUSD) or CCXT (BTCUSDT) format."
     )
+
+
+def normalize_to_ccxt_market(symbol: str, exchange: ExchangeName = "binance") -> str:
+    """Convert a symbol to the CCXT market pair format used by exchange APIs."""
+    symbol_upper = symbol.strip().upper()
+    if "/" in symbol_upper:
+        return symbol_upper
+    ccxt_symbol = normalize_to_ccxt(symbol, exchange=exchange)
+
+    for quote in ("USDT", "USDC", "USD", "BTC", "ETH", "BUSD"):
+        if ccxt_symbol.endswith(quote):
+            base = ccxt_symbol[: -len(quote)]
+            if base:
+                return f"{base}/{quote}"
+
+    raise ValueError(f"Unable to derive CCXT market symbol from '{symbol}'")
+
+
+def normalize_to_ccxt_exchange(symbol: str, exchange: ExchangeName = "binance") -> str:
+    """Backward-compatible alias for normalize_to_ccxt_market."""
+    return normalize_to_ccxt_market(symbol, exchange=exchange)
 
 
 def normalize_to_tradingview(symbol: str) -> str:
@@ -278,6 +354,20 @@ def normalize_to_yf(symbol: str) -> str:
                 raise ValueError(f"Invalid symbol: cannot determine base currency for '{symbol}'")
             return f"{base}-USD"
         return tv_symbol
+    if "/" in symbol_normalized:
+        base, _, quote = symbol_normalized.partition("/")
+        if not base.isalnum() or not quote.isalnum():
+            raise ValueError(
+                f"Invalid symbol format: '{symbol}'. Expected alphanumeric base/quote."
+            )
+        if quote in ("USDT", "USD", "USDC", "US"):
+            return f"{base}-USD"
+        logger.warning(
+            "normalize_to_yf_non_usd_quote",
+            symbol=symbol_normalized,
+            quote=quote,
+        )
+        return f"{base}-{quote}"
 
     # If ends with USDT, convert: BTCUSDT → BTC-USD
     if symbol_normalized.endswith("USDT"):
@@ -306,7 +396,8 @@ def normalize_to_yf(symbol: str) -> str:
                 )
             return f"{base}-USD"
         # Already hyphenated - validate it's well-formed (e.g., BTC-USD, not BTC--USD)
-        # Accept if base is alphanumeric and quote is USD
+        if symbol_normalized.count("-") != 1:
+            raise ValueError(f"Invalid yfinance format: '{symbol}'. Expected BTC-USD or ETH-USD.")
         base, _, quote = symbol_normalized.partition("-")
         if not base.isalnum() or quote != "USD":
             raise ValueError(f"Invalid yfinance format: '{symbol}'. Expected BTC-USD or ETH-USD.")
@@ -325,6 +416,29 @@ def normalize_to_yf(symbol: str) -> str:
         fallback=f"{safe_symbol}-USD",
     )
     return f"{safe_symbol}-USD"
+
+
+def normalize_to_yf_fallback(symbol: str) -> str:
+    """Convert a symbol into the yfinance fallback format.
+
+    Crypto-style pairs are normalized into yfinance-compatible symbols, while
+    plain symbols such as stock tickers pass through unchanged.
+    """
+    symbol_normalized = symbol.strip().upper()
+    if not symbol_normalized:
+        raise ValueError("Symbol cannot be empty or whitespace")
+
+    if "/" in symbol_normalized:
+        base, _, quote = symbol_normalized.partition("/")
+        if not base or not quote:
+            raise ValueError(f"Invalid symbol format: '{symbol}'.")
+        if quote not in {"USD", "USDT", "USDC", "US"}:
+            raise ValueError(f"Unsupported quote currency for yfinance fallback: '{quote}'.")
+        return normalize_to_yf(symbol_normalized)
+
+    if symbol_normalized.endswith(("USDT", "USD", "USDC")):
+        return normalize_to_yf(symbol_normalized)
+    return symbol_normalized
 
 
 def get_base_currency(symbol: str) -> str:
@@ -382,12 +496,37 @@ def validate_symbol(symbol: str) -> bool:
 
     symbol_upper = symbol.strip().upper()
 
-    # Check direct mapping
     if symbol_upper in SYMBOL_MAPPINGS:
         return True
 
-    # Check inferred formats
-    if symbol_upper.endswith("USDT") or symbol_upper.endswith("USD"):
-        return True
+    if "/" in symbol_upper:
+        base, _, quote = symbol_upper.partition("/")
+        return (
+            bool(base)
+            and bool(quote)
+            and base.isalnum()
+            and quote.isalnum()
+            and quote in {"USDT", "USD", "USDC", "US"}
+        )
+
+    if "-" in symbol_upper:
+        if symbol_upper.count("-") != 1:
+            return False
+        base, _, quote = symbol_upper.partition("-")
+        return (
+            bool(base)
+            and bool(quote)
+            and base.isalnum()
+            and quote.isalnum()
+            and quote in {"USDT", "USD", "USDC", "US"}
+        )
+
+    if symbol_upper.endswith(("USDT", "USDC")):
+        base = symbol_upper[:-4]
+        return bool(base) and base.isalnum()
+
+    if symbol_upper.endswith("USD") and not symbol_upper.endswith("USDT"):
+        base = symbol_upper[:-3]
+        return bool(base) and base.isalnum()
 
     return False
