@@ -1,0 +1,145 @@
+name: Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  review_design:
+    name: Review / Design
+    runs-on: self-hosted
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_TITLE: ${{ github.event.pull_request.title }}
+      PR_URL: ${{ github.event.pull_request.html_url }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Produce design findings
+        run: |
+          python .github/scripts/review/run_design_review.py \
+            --pr "$PR_NUMBER" \
+            --title "$PR_TITLE" \
+            --url "$PR_URL" \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$HEAD_SHA" \
+            --out artifacts/review-design-findings.json
+
+      - name: Upload design findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-findings-design
+          path: artifacts/review-design-findings.json
+          if-no-files-found: warn
+
+  review_security_audit:
+    name: Review / Security Audit
+    runs-on: self-hosted
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_TITLE: ${{ github.event.pull_request.title }}
+      PR_URL: ${{ github.event.pull_request.html_url }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Produce security audit findings
+        run: |
+          python .github/scripts/review/run_security_audit.py \
+            --pr "$PR_NUMBER" \
+            --title "$PR_TITLE" \
+            --url "$PR_URL" \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$HEAD_SHA" \
+            --out artifacts/review-security-audit-findings.json
+
+      - name: Upload security audit findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-findings-security-audit
+          path: artifacts/review-security-audit-findings.json
+          if-no-files-found: warn
+
+  review_logic_audit:
+    name: Review / Logic Audit
+    runs-on: self-hosted
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_TITLE: ${{ github.event.pull_request.title }}
+      PR_URL: ${{ github.event.pull_request.html_url }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Produce logic audit findings
+        run: |
+          python .github/scripts/review/run_logic_audit.py \
+            --pr "$PR_NUMBER" \
+            --title "$PR_TITLE" \
+            --url "$PR_URL" \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$HEAD_SHA" \
+            --out artifacts/review-logic-audit-findings.json
+
+      - name: Upload logic audit findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-findings-logic-audit
+          path: artifacts/review-logic-audit-findings.json
+          if-no-files-found: warn
+
+  review_publish:
+    name: Review / Publish
+    runs-on: self-hosted
+    needs: [review_design, review_security_audit, review_logic_audit]
+    if: always()
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_TITLE: ${{ github.event.pull_request.title }}
+      PR_URL: ${{ github.event.pull_request.html_url }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download review artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Publish consolidated review
+        run: |
+          python .github/scripts/review/publish_review.py \
+            --pr "$PR_NUMBER" \
+            --title "$PR_TITLE" \
+            --url "$PR_URL" \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$HEAD_SHA" \
+            --design artifacts/review-findings-design/review-design-findings.json \
+            --security-audit artifacts/review-findings-security-audit/review-security-audit-findings.json \
+            --logic-audit artifacts/review-findings-logic-audit/review-logic-audit-findings.json
