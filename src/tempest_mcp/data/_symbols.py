@@ -163,25 +163,15 @@ def normalize_to_ccxt(symbol: str, exchange: ExchangeName = "binance") -> str:
     if "/" in symbol_upper:
         return symbol_upper
 
-    # If hyphenated (e.g., BTC-USD), normalize to CCXT-style slash
-    if "-" in symbol_upper:
-        base, quote = symbol_upper.split("-", 1)
-        if not base or not quote:
-            raise ValueError(f"Invalid symbol format: '{symbol}'. Expected BTC-USD or BTCUSDT.")
-        if quote == "USD":
-            ccxt_symbol = f"{base}/USDT"
-            logger.warning(
-                "symbol_converted_yf_to_ccxt",
-                symbol=symbol_upper,
-                ccxt_symbol=ccxt_symbol,
-                warning="BTC-USD and BTC/USDT are different instruments - confirm this is intentional",
-            )
-            return ccxt_symbol
-        return f"{base}/{quote}"
-
     # If ends with USDT, already in CCXT format
     if symbol_upper.endswith("USDT"):
         return symbol_upper
+
+    # Reject yfinance-style hyphenated symbols here to avoid rewriting USD into USDT.
+    if "-" in symbol_upper:
+        raise ValueError(
+            f"Invalid symbol format: '{symbol}'. Expected TradingView (BTCUSD) or CCXT (BTCUSDT) format."
+        )
 
     # If ends with USD but not USDT, treat it as a legacy alias and normalize
     # into the canonical CCXT-style symbol. This is compatibility behavior,
@@ -199,6 +189,49 @@ def normalize_to_ccxt(symbol: str, exchange: ExchangeName = "binance") -> str:
 
     # Unknown format
     safe_symbol = _sanitize_symbol(symbol)
+    raise ValueError(
+        f"Unrecognized symbol format: '{safe_symbol}'. "
+        f"Expected TradingView (BTCUSD) or CCXT (BTCUSDT) format."
+    )
+
+
+def normalize_to_ccxt_exchange(symbol: str) -> str:
+    """Convert a symbol into CCXT exchange format (BASE/QUOTE).
+
+    Accepts canonical CCXT-style symbols (BTCUSDT), legacy TradingView aliases
+    (BTCUSD), or already-slash-separated inputs (BTC/USDT). Returns the format
+    expected by ccxt exchange methods.
+
+    Args:
+        symbol: Symbol in any supported format
+
+    Returns:
+        Symbol in CCXT exchange format (e.g., "BTC/USDT")
+
+    Raises:
+        ValueError: If symbol is not recognized or is invalid
+    """
+    if not symbol or not symbol.strip():
+        raise ValueError("Symbol cannot be empty or whitespace")
+
+    symbol_upper = symbol.strip().upper()
+    if "/" in symbol_upper:
+        return symbol_upper
+
+    canonical = normalize_to_ccxt(symbol_upper)
+    if canonical.endswith("USDT"):
+        base = canonical[:-4]
+        if not base:
+            raise ValueError(f"Invalid symbol format: '{symbol}'.")
+        return f"{base}/USDT"
+
+    if canonical.endswith("USD"):
+        base = canonical[:-3]
+        if not base:
+            raise ValueError(f"Invalid symbol format: '{symbol}'.")
+        return f"{base}/USD"
+
+    safe_symbol = _sanitize_symbol(symbol_upper)
     raise ValueError(
         f"Unrecognized symbol format: '{safe_symbol}'. "
         f"Expected TradingView (BTCUSD) or CCXT (BTCUSDT) format."

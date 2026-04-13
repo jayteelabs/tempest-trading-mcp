@@ -26,7 +26,7 @@ import structlog
 from tempest_mcp.data._symbols import (
     _validate_limit,
     _validate_timeframe,
-    normalize_to_ccxt,
+    normalize_to_ccxt_exchange,
     validate_symbol,
 )
 
@@ -138,8 +138,16 @@ class CCXTAdapter:
             )
 
         try:
-            # Normalize symbol to CCXT format
-            ccxt_symbol = normalize_to_ccxt(symbol)
+            # Normalize symbol to CCXT exchange format
+            try:
+                ccxt_symbol = normalize_to_ccxt_exchange(symbol)
+            except ValueError as e:
+                logger.error(
+                    "invalid_symbol_format",
+                    symbol=symbol,
+                    error=str(e),
+                )
+                return float("nan")
 
             if not validate_symbol(ccxt_symbol):
                 logger.error(
@@ -232,11 +240,11 @@ class CCXTAdapter:
         limit = _validate_limit(limit)
 
         try:
-            # Normalize symbol to CCXT format
-            # Note: normalize_to_ccxt raises ValueError on unknown format
+            # Normalize symbol to CCXT exchange format
+            # Note: normalize_to_ccxt_exchange raises ValueError on unknown format
             # (not a ccxt exception) — catch it here per D14 (no exception propagation)
             try:
-                ccxt_symbol = normalize_to_ccxt(symbol)
+                ccxt_symbol = normalize_to_ccxt_exchange(symbol)
             except ValueError as e:
                 logger.error(
                     "invalid_symbol_format",
@@ -368,8 +376,16 @@ class CCXTAdapter:
         limit = _validate_limit(limit)
 
         try:
-            # Symbol is expected in CCXT format
-            ccxt_symbol = symbol.upper()
+            # Normalize symbol to CCXT exchange format
+            try:
+                ccxt_symbol = normalize_to_ccxt_exchange(symbol)
+            except ValueError as e:
+                logger.error(
+                    "invalid_symbol_format",
+                    symbol=symbol,
+                    error=str(e),
+                )
+                return pd.DataFrame(columns=OHLCV_COLUMNS)
 
             if not validate_symbol(ccxt_symbol):
                 logger.error(
@@ -487,8 +503,20 @@ class CCXTAdapter:
         limit = _validate_limit(limit)
 
         try:
-            # Normalize symbol to CCXT format
-            ccxt_symbol = normalize_to_ccxt(symbol)
+            # Normalize symbol to CCXT exchange format
+            try:
+                ccxt_symbol = normalize_to_ccxt_exchange(symbol)
+            except ValueError as e:
+                logger.error(
+                    "invalid_symbol_format",
+                    symbol=symbol,
+                    error=str(e),
+                )
+                return {
+                    "bids": [],
+                    "asks": [],
+                    "timestamp": None,
+                }
 
             if not validate_symbol(ccxt_symbol):
                 logger.error(

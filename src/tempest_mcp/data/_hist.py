@@ -188,6 +188,31 @@ class HistoricalDataSource:
         start_utc = self._ensure_utc(start, "start")
         end_utc = self._ensure_utc(end, "end")
 
+        # If caller supplied yfinance-style USD symbol, skip CCXT to avoid
+        # rewriting USD-priced instruments into USDT markets.
+        if isinstance(symbol, str) and symbol.strip().upper().endswith("-USD"):
+            try:
+                yf_symbol = normalize_to_yf(symbol)
+            except ValueError as exc:
+                logger.error(
+                    "invalid_yfinance_symbol",
+                    symbol=symbol,
+                    error=str(exc),
+                )
+                return _empty_ohlcv()
+            logger.info(
+                "historical_fetch_yfinance_direct",
+                symbol=yf_symbol,
+                reason="yfinance_symbol_input",
+            )
+            return _yf_fetch_ohlcv(
+                symbol=yf_symbol,
+                interval=interval,
+                start=start_utc,
+                end=end_utc,
+                auto_adjust=auto_adjust,
+            )
+
         # Normalize to CCXT symbol format
         try:
             ccxt_symbol = normalize_to_ccxt(symbol)
