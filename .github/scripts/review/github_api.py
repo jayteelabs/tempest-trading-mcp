@@ -13,7 +13,11 @@ class GitHubApiError(RuntimeError):
 
 class GitHubApi:
     def __init__(self, *, token: str, repository: str) -> None:
+        if repository.count("/") != 1:
+            raise ValueError("Invalid repository: expected 'owner/repo'")
         owner, repo = repository.split("/", 1)
+        if not owner or not repo:
+            raise ValueError("Invalid repository: expected non-empty 'owner/repo'")
         self.owner = owner
         self.repo = repo
         self.base_url = f"https://api.github.com/repos/{owner}/{repo}"

@@ -320,3 +320,14 @@ def test_create_summary_review_falls_back_to_comment() -> None:
 
     assert event == "COMMENT"
     assert api.events == ["REQUEST_CHANGES", "COMMENT"]
+
+
+def test_github_api_rejects_malformed_repository() -> None:
+    from review.github_api import GitHubApi
+
+    try:
+        GitHubApi(token="token", repository="tempest-tradingview-mcp")
+    except ValueError as exc:
+        assert "owner/repo" in str(exc)
+    else:
+        raise AssertionError("expected malformed repository to be rejected")
