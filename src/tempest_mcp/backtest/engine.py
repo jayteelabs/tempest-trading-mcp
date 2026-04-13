@@ -2,13 +2,11 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from tempest_mcp.backtest.commission import apply_slippage
-
 
 # ---------------------------------------------------------------------------
 # Enums for bidirectional signal and position state (ENG-58)
@@ -34,6 +32,9 @@ class SignalAction(Enum):
     @classmethod
     def from_int(cls, value: int) -> "SignalAction":
         """Convert legacy int signal to SignalAction (backwards compatibility)."""
+        if isinstance(value, bool):
+            raise TypeError("Boolean signals are not supported. Use SignalAction explicitly.")
+
         mapping = {
             1: cls.LONG_ENTRY,
             -1: cls.LONG_EXIT,
@@ -105,7 +106,7 @@ class BacktestEngine:
         self.slippage_bps = slippage_bps
         self._cash = initial_capital
         # Internal position state: {entry_price, size, entry_time, entry_idx, direction}
-        self._position: dict[str, Any] | None = None
+        self._position: dict[str, object] | None = None
         self._position_direction: PositionDirection = PositionDirection.FLAT
         self._trades: list[Trade] = []
         self._equity_curve: list[float] = []
@@ -120,6 +121,12 @@ class BacktestEngine:
         """
         if len(ohlcv_df) < 2:
             raise ValueError(f"Backtest requires at least 2 rows, got {len(ohlcv_df)}")
+
+        required_columns = {"open", "high", "low", "close", "volume"}
+        missing_columns = required_columns.difference(ohlcv_df.columns)
+        if missing_columns:
+            missing_list = ", ".join(sorted(missing_columns))
+            raise ValueError(f"OHLCV DataFrame missing required columns: {missing_list}")
 
         # Normalize signals to SignalAction enum
         normalized = self._normalize_signals(signals, ohlcv_df.index)
@@ -165,17 +172,19 @@ class BacktestEngine:
 
     def _normalize_signals(self, signals: pd.Series, index: pd.Index) -> pd.Series:
         """Normalize integer or SignalAction signals to SignalAction enum series."""
-        normalized = signals.reindex(index).fillna(SignalAction.HOLD.value if signals.dtype == object else 0)
+        if pd.api.types.is_bool_dtype(signals.dtype):
+            raise TypeError("Boolean signals are not supported. Use SignalAction explicitly.")
+
+        normalized = signals.reindex(index)
+
         if normalized.dtype == object:
-            # Already SignalAction or string values
+            normalized = normalized.where(~normalized.isna(), SignalAction.HOLD.value)
             return normalized.apply(
                 lambda x: x if isinstance(x, SignalAction) else SignalAction(x)
             )
-        else:
-            # Legacy int signals
-            return normalized.apply(
-                lambda x: SignalAction.from_int(int(x))
-            )
+
+        numeric = pd.to_numeric(normalized, errors="coerce").fillna(0)
+        return numeric.astype(int).apply(SignalAction.from_int)
 
     def _process_signal(self, signal: SignalAction, df: pd.DataFrame, idx: int) -> None:
         """Process a single signal against current position state."""
@@ -320,8 +329,10 @@ class BacktestEngine:
             # Short: (entry - current) * size
             if direction == PositionDirection.LONG:
                 unrealized = (current_price - entry_price) * size
-            else:  # SHORT
+            elif direction == PositionDirection.SHORT:
                 unrealized = (entry_price - current_price) * size
+            else:
+                raise ValueError(f"Unknown position direction: {direction}")
             equity += unrealized
         return equity
 

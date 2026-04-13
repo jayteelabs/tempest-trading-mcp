@@ -1,6 +1,7 @@
 """Tests for backtest engine (ENG-16)."""
 from datetime import datetime, timedelta
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -342,6 +343,10 @@ class TestSignalActionEnum:
         with pytest.raises(ValueError, match="Invalid signal int value"):
             SignalAction.from_int(99)
 
+    def test_signal_action_from_int_bool_rejected(self):
+        with pytest.raises(TypeError, match="Boolean signals are not supported"):
+            SignalAction.from_int(True)
+
 
 class TestPositionDirectionEnum:
     """Tests for PositionDirection enum (ENG-58)."""
@@ -407,8 +412,8 @@ class TestBidirectionalEngine:
         assert result.trades[0].direction == PositionDirection.SHORT
         assert result.open_position is False
 
-    def test_short_profit_when_price_falls(self):
-        """Verify short PnL formula: profit when entry_price > exit_price."""
+    def test_short_loss_when_price_rises(self):
+        """Verify short PnL formula: loss when exit_price > entry_price."""
         n = 4
         # entry at bar 1 open = 100 (start_price=99, step=1)
         ohlcv = self._make_ohlcv(n, start_price=99.0, step=1.0)  # bar 1 open = 100, bar 2 open = 101
@@ -421,10 +426,10 @@ class TestBidirectionalEngine:
         # gross_pnl = (entry - exit) * size = (100 - 101) * 1000 = -1000 (loss)
         assert trade.gross_pnl < 0
 
-    def test_short_loss_when_price_rises(self):
-        """Verify short PnL formula: loss when entry_price < exit_price."""
+    def test_short_profit_when_price_falls(self):
+        """Verify short PnL formula: profit when entry_price > exit_price."""
         n = 4
-        # price rises: start=99, step=-1 so bar 1 open = 98 (entry), bar 2 open = 97
+        # price falls: start=99, step=-1 so bar 1 open = 98 (entry), bar 2 open = 97
         ohlcv = self._make_ohlcv(n, start_price=99.0, step=-1.0)  # bar 1 open = 98, bar 2 open = 97
         signals = self._make_signal_series(n, {0: SignalAction.SHORT_ENTRY, 1: SignalAction.SHORT_EXIT})
         engine = BacktestEngine(initial_capital=100000.0, commission_pct=0.0, slippage_bps=0.0)
@@ -614,3 +619,44 @@ class TestBidirectionalEngine:
 
         assert len(result.trades) == 1
         assert result.trades[0].direction == PositionDirection.LONG
+
+    def test_float_signal_series_with_nan_is_normalized(self):
+        """Float signals containing NaN should normalize to HOLD instead of crashing."""
+        n = 5
+        ohlcv = self._make_ohlcv(n, start_price=100.0, step=1.0)
+        times = [datetime(2024, 1, 1) + timedelta(hours=i) for i in range(n)]
+        signals = pd.Series([1.0, np.nan, -1.0], index=pd.DatetimeIndex(times[:3]), dtype=float)
+        engine = BacktestEngine(initial_capital=100000.0, commission_pct=0.0, slippage_bps=0.0)
+        result = engine.run(ohlcv, signals)
+
+        assert len(result.trades) == 1
+        assert result.trades[0].direction == PositionDirection.LONG
+        assert result.open_position is False
+
+    def test_bool_signal_series_is_rejected(self):
+        """Boolean legacy signals should be rejected explicitly instead of coercing True/False."""
+        n = 4
+        ohlcv = self._make_ohlcv(n)
+        times = [datetime(2024, 1, 1) + timedelta(hours=i) for i in range(n)]
+        signals = pd.Series([True, False], index=pd.DatetimeIndex(times[:2]), dtype=bool)
+        engine = BacktestEngine(initial_capital=100000.0)
+
+        with pytest.raises(TypeError, match="Boolean signals are not supported"):
+            engine.run(ohlcv, signals)
+
+    def test_missing_required_ohlcv_columns_raise(self):
+        """Missing OHLCV columns should fail fast with ValueError."""
+        ohlcv = pd.DataFrame(
+            {
+                "open": [100.0, 101.0],
+                "high": [101.0, 102.0],
+                "close": [100.5, 101.5],
+                "volume": [1000.0, 1000.0],
+            },
+            index=pd.date_range("2024-01-01", periods=2, freq="h"),
+        )
+        signals = pd.Series([SignalAction.HOLD, SignalAction.HOLD], index=ohlcv.index)
+        engine = BacktestEngine(initial_capital=100000.0)
+
+        with pytest.raises(ValueError, match="missing required columns: low"):
+            engine.run(ohlcv, signals)
