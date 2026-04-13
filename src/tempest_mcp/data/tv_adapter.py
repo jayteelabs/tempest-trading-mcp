@@ -1,23 +1,22 @@
-"""
-[DEPRECATED] TradingView Data Adapter — DO NOT USE IN NEW CODE.
+"""Deprecated TradingView compatibility shim.
 
-IMPORTANT (2026-04-05): There is NO official TradingView data API that accepts
-a key and returns OHLCV. The TRADINGVIEW_API_KEY environment variable is not used.
-This adapter is a stub that always falls back to CCXT.
+This module is intentionally not part of the active data architecture.
 
-This file is retained for backward compatibility and will be removed in v2.0.
-All new code should use CCXTAdapter (real-time) and YFAdapter (historical).
+Important:
+- There is no official TradingView OHLCV data API in use by this project
+- ``TRADINGVIEW_API_KEY`` does not activate a real TradingView market-data path
+- New code must use ``CCXTAdapter`` for live/exchange data and ``YFAdapter`` or
+  ``HistoricalDataSource`` for historical fallback behavior
 
-Current data source priority (D3):
-- All data (crypto + stocks): CCXT via Binance/Bybit public REST (primary)
-- Historical fallback: yfinance (for stocks and data gaps CCXT doesn't cover)
-- Orderbook: CCXT (TradingView has no orderbook endpoint)
+Why this file still exists:
+- Backward compatibility for older imports and legacy call sites
+- Explicit migration surface while the project transitions away from
+  TradingView-first assumptions
 
-Design Decisions preserved for reference:
-- D12: TV uses BTCUSD, CCXT uses BTCUSDT - adapter normalizes
-- D14: Empty DataFrame on error - NO exception propagation
-- D15: TradingViewError in 3001-3005 range
-- D16: fetch_orderbook_snapshot() delegates to CCXT internally (TV→CCXT hybrid)
+Active source priority (D3):
+- Primary market/live data: CCXT via Binance/Bybit public REST
+- Historical fallback: yfinance
+- Orderbook: CCXT only
 """
 
 from __future__ import annotations
@@ -56,17 +55,18 @@ _rate_limit_lock = threading.Lock()
 
 
 class TradingViewAdapter:
-    """TradingView-based data adapter for real-time market data.
+    """Deprecated compatibility adapter that forwards behavior to CCXT.
 
-    Provides real-time price and OHLCV data via TradingView's v1-data API.
-    Orderbook data is delegated to CCXT internally (D16 - TV→CCXT hybrid).
+    This class remains import-compatible for legacy callers but should not be
+    treated as a real TradingView integration. In practice, successful paths in
+    this shim degrade to CCXT-backed behavior.
 
     Attributes:
-        api_key: TradingView API key
-        rate_limit: Requests per minute limit
+        api_key: Legacy TradingView API key field retained for compatibility
+        rate_limit: Legacy per-minute limit retained for compatibility behavior
 
     Example:
-        >>> adapter = TradingViewAdapter(api_key="your-api-key")
+        >>> adapter = TradingViewAdapter(api_key="unused-legacy-key")
         >>> price = adapter.fetch_live_price("BTCUSD")
         >>> df = adapter.fetch_ohlcv_live("BTCUSD", "1m", 100)
         >>> orderbook = adapter.fetch_orderbook_snapshot("BTCUSD", 20)
@@ -77,11 +77,12 @@ class TradingViewAdapter:
         api_key: str | None = None,
         rate_limit: int = 60,
     ) -> None:
-        """Initialize TradingView adapter.
+        """Initialize the deprecated compatibility adapter.
 
         Args:
-            api_key: TradingView API key (required for real data)
-            rate_limit: Requests per minute limit (default: 60)
+            api_key: Legacy field retained for compatibility; not required for
+                any active market-data source
+            rate_limit: Compatibility-only per-minute throttle value
         """
         self.api_key = api_key or os.environ.get("TRADINGVIEW_API_KEY")
         self.rate_limit = max(1, rate_limit)
@@ -93,11 +94,13 @@ class TradingViewAdapter:
             "tradingview_adapter_initialized",
             has_api_key=bool(self.api_key),
             rate_limit=self.rate_limit,
+            deprecated=True,
+            behavior="compatibility_shim",
         )
 
     @property
     def ccxt_adapter(self) -> LiveDataAdapter:
-        """Get or create CCXT adapter for orderbook delegation (D16)."""
+        """Get or create the underlying CCXT adapter used by this shim."""
         if self._ccxt_adapter is None:
             # Lazy import to avoid circular dependency
             from tempest_mcp.data.ccxt_adapter import CCXTAdapter
@@ -121,25 +124,24 @@ class TradingViewAdapter:
         endpoint: str,
         params: dict,
     ) -> dict | None:
-        """Make authenticated API request to TradingView.
+        """Placeholder for legacy TradingView request behavior.
 
-        This is a placeholder for the actual TradingView API integration.
-        The real implementation would use aiohttp or httpx to call
-        TradingView's v1-data endpoints.
+        No real TradingView API integration is implemented. Returning ``None``
+        keeps this shim on the documented fallback path to CCXT.
 
         Args:
             endpoint: API endpoint path
             params: Request parameters
 
         Returns:
-            API response dict or None on error
+            Always ``None`` so callers fall back to CCXT-backed behavior.
         """
-        # Placeholder - actual implementation would call TradingView API
-        # For now, this returns None to trigger fallback behavior
+        # Intentionally unimplemented: this project does not use TradingView as
+        # an active data provider.
         logger.warning(
             "tradingview_api_not_implemented",
             endpoint=endpoint,
-            message="TradingView API integration pending - returning None",
+            message="TradingView integration is deprecated; using CCXT fallback path",
         )
         return None
 
@@ -155,15 +157,15 @@ class TradingViewAdapter:
         """Fetch the latest trade price for a symbol.
 
         Args:
-            symbol: Symbol in any format (e.g., "BTCUSD", "BTCUSDT")
+            symbol: Symbol in any compatible format (e.g., "BTCUSD", "BTCUSDT")
             exchange: Target exchange (validated against allowed values)
 
         Returns:
-            Latest trade price as float. Returns float('nan') on error.
+            Latest trade price as float via compatibility fallback.
+            Returns ``float('nan')`` on error.
 
         Note:
-            Per D14, this function NEVER raises exceptions to callers.
-            On failure, logs ERROR and returns NaN.
+            New code should call ``CCXTAdapter.fetch_live_price()`` directly.
         """
         # Validate exchange param
         safe_exchange = self._sanitize_for_log(exchange)
@@ -176,7 +178,7 @@ class TradingViewAdapter:
             return float("nan")
 
         try:
-            # Normalize symbol to CCXT format for CCXT fallback
+            # Normalize symbol into the active CCXT canonical format first.
             ccxt_symbol = normalize_to_ccxt(symbol)
 
             if not validate_symbol(symbol):
@@ -192,12 +194,11 @@ class TradingViewAdapter:
             if not self.api_key:
                 logger.warning(
                     "tradingview_no_api_key",
-                    message="No TradingView API key - falling back to CCXT",
+                    message="Deprecated TradingView shim using CCXT fallback",
                 )
-                # Use CCXT format for CCXT adapter
                 return self.ccxt_adapter.fetch_live_price(ccxt_symbol, exchange)
 
-            # Normalize to TV format for TV API
+            # Legacy alias normalization retained only for compatibility logs.
             tv_symbol = normalize_to_tradingview(symbol)
 
             # TradingView API: v1-data Multiple symbols real-time bars
@@ -262,7 +263,7 @@ class TradingViewAdapter:
         """Fetch OHLCV candlestick data for a symbol.
 
         Args:
-            symbol: Symbol in any format (e.g., "BTCUSD", "BTCUSDT")
+            symbol: Symbol in any compatible format (e.g., "BTCUSD", "BTCUSDT")
             timeframe: Timeframe string (e.g., "1m", "5m", "1h", "1d")
             limit: Number of candles to fetch (default: 100, max: 1000)
 
@@ -271,8 +272,7 @@ class TradingViewAdapter:
             UTC-aware DatetimeIndex. Returns empty DataFrame on error.
 
         Note:
-            Per D14, this function NEVER raises exceptions to callers.
-            On failure, logs ERROR and returns empty DataFrame with correct columns.
+            New code should call ``CCXTAdapter.fetch_ohlcv_live()`` directly.
         """
         # Validate timeframe
         if not _validate_timeframe(timeframe):
@@ -304,7 +304,7 @@ class TradingViewAdapter:
             if not self.api_key:
                 logger.warning(
                     "tradingview_no_api_key",
-                    message="No TradingView API key - falling back to CCXT",
+                    message="Deprecated TradingView shim using CCXT fallback",
                 )
                 return self.ccxt_adapter.fetch_ohlcv_live(ccxt_symbol, timeframe, limit)
 
@@ -372,8 +372,8 @@ class TradingViewAdapter:
     ) -> dict:
         """Fetch order book snapshot for a symbol.
 
-        Per D16, this method delegates to CCXT internally because TradingView
-        has no orderbook snapshot endpoint.
+        TradingView is not an active order book source. This compatibility shim
+        delegates directly to CCXT.
 
         Args:
             symbol: Symbol in any format (e.g., "BTCUSD", "BTCUSDT")

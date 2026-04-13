@@ -6,7 +6,7 @@
 
 ## Features
 
-- **Market Data** — Real-time quotes (CCXT: Binance/Bybit public endpoints) and historical OHLCV (Yahoo Finance)
+- **Market Data** — CCXT is the primary source for live crypto market data; Yahoo Finance is historical fallback for coverage gaps
 - **Technical Indicators** — 30+ indicators via ta-lib C extension: EMA, RSI, MACD, ATR, VWAP, Supertrend, Bollinger, Stochastic, and more
 - **Backtesting** — Commission/slippage model with 6 built-in strategies
 - **Screening** — Multi-factor crypto screener with session breakout detection
@@ -51,7 +51,11 @@ Copy `.env.example` to `.env` and adjust as needed:
 cp .env.example .env
 ```
 
-**No API keys required** — all data sources use public endpoints.
+**No API keys required** — the active data sources use public endpoints.
+
+> Note: despite the repository name, TradingView is not an active market-data
+> provider in the current architecture. Legacy TradingView compatibility code is
+> retained only to avoid breaking older imports.
 
 ## Deployment
 
@@ -77,7 +81,7 @@ services:
 ## Architecture
 
 ```
-Kurisu → tempest-mesh → MCP Server (stdio) → [Yahoo Finance / CCXT]
+Kurisu → tempest-mesh → MCP Server → [CCXT primary / Yahoo Finance fallback]
 ```
 
 ### Directory Structure

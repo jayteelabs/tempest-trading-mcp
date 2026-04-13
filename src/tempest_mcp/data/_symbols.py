@@ -1,18 +1,20 @@
-"""
-Symbol conversion utilities for cross-exchange compatibility.
+"""Symbol normalization utilities for the data layer.
 
-This module is load-bearing - it provides the canonical symbol format conversion
-between TradingView (BTCUSD) and CCXT/Binance (BTCUSDT) formats.
+This module defines the active canonical symbol handling used by the data
+adapters:
+- CCXT-style symbols are the internal canonical format for live/exchange data
+- yfinance symbols are derived from the canonical format for historical fallback
+- TradingView-era conversions are retained only for backward compatibility and
+  migration of legacy callers; they are not the preferred path for new code
 
-Design Decisions (D11, D12):
-- D11: Symbol conversion via _symbols.py - canonical format is CCXT/Binance (BTCUSDT)
-- D12: TV uses BTCUSD, CCXT uses BTCUSDT - adapter normalizes
+Design decisions (D11, D12):
+- D11: Symbol conversion is centralized in _symbols.py
+- D12: Legacy callers may still provide TradingView-style BTCUSD while the
+  active exchange-backed path uses CCXT-style BTCUSDT
 
-WARNING: BTCUSD and BTCUSDT are DIFFERENT instruments on some exchanges.
-Never silently convert between them without being explicit about the intent.
-
-The `exchange` param on `fetch_live_price` is a future extension point for
-multi-exchange support.
+WARNING: BTCUSD and BTCUSDT are different instruments on some venues. Any
+conversion between them should be treated as an explicit compatibility choice,
+not as proof of instrument equivalence.
 """
 
 from typing import Literal, TypedDict
@@ -48,7 +50,7 @@ MAX_LIMIT: int = 1000
 
 
 class SymbolMapping(TypedDict):
-    """Mapping between TradingView and CCXT symbol formats."""
+    """Mapping between legacy input aliases and canonical data-layer formats."""
 
     tradingview: str
     ccxt: str
@@ -56,9 +58,10 @@ class SymbolMapping(TypedDict):
     quote: str
 
 
-# Canonical symbol mappings for v1 crypto scope
-# Design: TV uses BTCUSD, CCXT/Binance uses BTCUSDT
-# WARNING: BTCUSD ≠ BTCUSDT — they are different instruments
+# Canonical symbol mappings for v1 crypto scope.
+# CCXT-style symbols are the active canonical representation; TradingView-style
+# symbols remain as compatibility aliases only.
+# WARNING: BTCUSD ≠ BTCUSDT — they are different instruments.
 SYMBOL_MAPPINGS: dict[str, SymbolMapping] = {
     "BTCUSDT": {
         "tradingview": "BTCUSD",
@@ -119,11 +122,12 @@ def _validate_limit(limit: int) -> int:
 
 
 def normalize_to_ccxt(symbol: str, exchange: ExchangeName = "binance") -> str:
-    """Convert a symbol to CCXT canonical format.
+    """Convert a symbol to the canonical CCXT-style format.
 
-    CCXT format is the canonical format (D11). This function accepts either
-    TradingView format (BTCUSD) or CCXT format (BTCUSDT) and returns the
-    CCXT format suitable for exchange API calls.
+    CCXT format is the active internal representation for exchange-backed data.
+    This function accepts canonical CCXT-style symbols and a small set of
+    legacy aliases, then returns the normalized CCXT-style symbol suitable for
+    adapter calls.
 
     Args:
         symbol: Symbol in any supported format (e.g., "BTCUSD", "BTCUSDT")
@@ -159,8 +163,9 @@ def normalize_to_ccxt(symbol: str, exchange: ExchangeName = "binance") -> str:
     if symbol_upper.endswith("USDT"):
         return symbol_upper
 
-    # If ends with USD but not USDT, likely TradingView format
-    # WARNING: BTCUSD and BTCUSDT are DIFFERENT instruments
+    # If ends with USD but not USDT, treat it as a legacy alias and normalize
+    # into the canonical CCXT-style symbol. This is compatibility behavior,
+    # not a statement that USD and USDT instruments are identical.
     if symbol_upper.endswith("USD") and not symbol_upper.endswith("USDT"):
         base = symbol_upper[:-3]  # Remove USD
         ccxt_symbol = f"{base}USDT"
@@ -181,9 +186,10 @@ def normalize_to_ccxt(symbol: str, exchange: ExchangeName = "binance") -> str:
 
 
 def normalize_to_tradingview(symbol: str) -> str:
-    """Convert a symbol to TradingView format.
+    """Convert a symbol to a legacy TradingView-style alias.
 
-    TradingView uses the format without T (e.g., BTCUSD instead of BTCUSDT).
+    This helper is retained for backward compatibility only. New data-layer
+    code should prefer canonical CCXT-style symbols internally.
 
     Args:
         symbol: Symbol in any supported format
@@ -233,10 +239,11 @@ def normalize_to_tradingview(symbol: str) -> str:
 
 
 def normalize_to_yf(symbol: str) -> str:
-    """Convert a CCXT/Binance symbol to yfinance format.
+    """Convert a canonical/live symbol into yfinance fallback format.
 
-    yfinance uses format BTC-USD (with hyphen), while CCXT uses BTCUSDT.
-    This function converts from CCXT format to yfinance format.
+    yfinance uses BTC-USD style symbols while the active internal format is
+    CCXT-style (for example, BTCUSDT). This helper translates canonical or
+    legacy-compatible inputs into the historical fallback format.
 
     Args:
         symbol: Symbol in CCXT format (e.g., "BTCUSDT", "ETHUSDT")
@@ -258,10 +265,10 @@ def normalize_to_yf(symbol: str) -> str:
     if not symbol_normalized:
         raise ValueError("Symbol cannot be empty or whitespace")
 
-    # Direct lookup in mappings for known pairs
+    # Direct lookup in mappings for known pairs/aliases.
     if symbol_normalized in SYMBOL_MAPPINGS:
         mapping = SYMBOL_MAPPINGS[symbol_normalized]
-        # Use tradingview format as intermediate, then convert hyphen
+        # Use the legacy USD alias as an intermediate, then convert hyphen.
         tv_symbol = mapping["tradingview"]
         # tradingview is BTCUSD, yfinance is BTC-USD
         # Insert hyphen before USD

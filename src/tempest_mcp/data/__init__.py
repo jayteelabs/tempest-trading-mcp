@@ -1,19 +1,18 @@
-"""
-Data layer for Tempest MCP.
+"""Data layer for Tempest MCP.
 
-This module provides adapters for fetching market data from various sources:
-- CCXT: Real-time + historical data for crypto via Binance/Bybit public REST APIs (primary)
-- Yahoo Finance: Historical data for stocks and data gaps CCXT doesn't cover (fallback)
+Architecture summary:
+- CCXT is the active primary market-data source for live crypto data and raw
+  exchange-backed historical retrieval.
+- yfinance is historical fallback only, used when CCXT returns no usable
+  historical data or when symbol coverage differs.
+- TradingView is not an active data source. ``tv_adapter.py`` is retained only
+  as a deprecated compatibility shim and must not be used for new work.
 
-Data Source Priority (D3):
-- Primary: CCXT via Binance/Bybit public REST (all crypto + stocks, no API keys)
-- Fallback: yfinance (for stocks and data gaps CCXT doesn't cover)
+Data source priority (D3):
+- Primary: CCXT via Binance/Bybit public REST (no API keys required)
+- Historical fallback: yfinance (stocks and CCXT historical gaps)
 
-IMPORTANT (2026-04-05): TradingView is NOT used for data. There is no official
-TradingView data API that accepts a key and returns OHLCV. tv_adapter.py is a
-deprecated stub. TRADINGVIEW_API_KEY is not used.
-
-Design Decisions:
+Design decisions:
 - D3: CCXT primary + yfinance fallback (TradingView deprecated)
 - D11: Symbol conversion via _symbols.py
 - D19: Historical data abstraction layer (HistoricalDataSource)
@@ -120,13 +119,14 @@ class LiveDataAdapter(Protocol):
 
 
 def get_live_adapter() -> LiveDataAdapter:
-    """Get the live data adapter.
+    """Get the active live-market-data adapter.
 
-    Always returns CCXTAdapter — TradingView has no OHLCV data API.
-    tv_adapter.py is a deprecated stub, retained for backward compatibility.
+    The live path is intentionally simple: new code should always use
+    ``CCXTAdapter`` for live price, OHLCV, and order book retrieval. TradingView
+    is not part of the active data architecture.
 
     Returns:
-        CCXTAdapter instance (real-time crypto data via Binance/Bybit public REST)
+        CCXTAdapter instance for exchange-backed live market data.
 
     Example:
         >>> adapter = get_live_adapter()
@@ -158,13 +158,17 @@ def __getattr__(name: str):
     ):
         if name in ("HistoricalDataSource", "HistoricalDataAdapter"):
             import tempest_mcp.data._hist as _hist
+
             return getattr(_hist, name)
         if name == "get_historical_adapter":
             import tempest_mcp.data._factory as _factory
+
             return getattr(_factory, name)
         if name == "DataSourceRouter":
             import tempest_mcp.data._router as _router
+
             return getattr(_router, name)
         import tempest_mcp.data._symbols as _symbols
+
         return getattr(_symbols, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
