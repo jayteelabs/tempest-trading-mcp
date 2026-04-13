@@ -8,6 +8,7 @@ import pandas as pd
 import yfinance as yf
 
 from tempest_mcp.config import ErrorCodes, get_config
+from tempest_mcp.data._symbols import normalize_to_yf
 from tempest_mcp.logging_config import get_logger
 from tempest_mcp.models.market import Kline, KlineData, Ticker
 
@@ -279,12 +280,7 @@ class YFAdapter:
             self.cache_ttl = config.yf_cache_ttl
 
     def _convert_symbol(self, symbol: str) -> str:
-        if "/" in symbol:
-            base, quote = symbol.split("/")
-            if quote.upper() in ("USDT", "USD", "USDC"):
-                return f"{base.upper()}-USD"
-            return f"{base.upper()}-{quote.upper()}"
-        return symbol.upper()
+        return normalize_to_yf(symbol)
 
     def _convert_timeframe(self, timeframe: str) -> str:
         mapping = {

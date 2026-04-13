@@ -135,7 +135,7 @@ def normalize_to_ccxt(symbol: str, exchange: ExchangeName = "binance") -> str:
             for exchange-specific symbol formats.
 
     Returns:
-        Symbol in CCXT canonical format (e.g., "BTCUSDT")
+        Symbol in CCXT format (e.g., "BTCUSDT" or "BTC/USDT")
 
     Raises:
         ValueError: If symbol is not recognized or is invalid
@@ -159,6 +159,26 @@ def normalize_to_ccxt(symbol: str, exchange: ExchangeName = "binance") -> str:
         return SYMBOL_MAPPINGS[symbol_upper]["ccxt"]
 
     # Try to infer format
+    # If already slash-separated, assume CCXT format
+    if "/" in symbol_upper:
+        return symbol_upper
+
+    # If hyphenated (e.g., BTC-USD), normalize to CCXT-style slash
+    if "-" in symbol_upper:
+        base, quote = symbol_upper.split("-", 1)
+        if not base or not quote:
+            raise ValueError(f"Invalid symbol format: '{symbol}'. Expected BTC-USD or BTCUSDT.")
+        if quote == "USD":
+            ccxt_symbol = f"{base}/USDT"
+            logger.warning(
+                "symbol_converted_yf_to_ccxt",
+                symbol=symbol_upper,
+                ccxt_symbol=ccxt_symbol,
+                warning="BTC-USD and BTC/USDT are different instruments - confirm this is intentional",
+            )
+            return ccxt_symbol
+        return f"{base}/{quote}"
+
     # If ends with USDT, already in CCXT format
     if symbol_upper.endswith("USDT"):
         return symbol_upper

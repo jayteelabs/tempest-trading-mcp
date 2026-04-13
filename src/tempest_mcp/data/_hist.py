@@ -13,14 +13,19 @@ client-side, or use CCXT directly for 4h data.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
+import pandas as pd
 import structlog
 
-if TYPE_CHECKING:
-    import pandas as pd
+from tempest_mcp.data._symbols import normalize_to_ccxt, normalize_to_yf
 
 logger = structlog.get_logger()
+
+
+def _empty_ohlcv() -> pd.DataFrame:
+    """Return empty OHLCV DataFrame with canonical columns."""
+    return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
 
 @runtime_checkable
@@ -110,39 +115,6 @@ class HistoricalDataSource:
             return "1d"
         return mapped
 
-    def _symbol_to_ccxt(self, symbol: str) -> str:
-        """Normalize symbol to CCXT format (e.g. BTC-USD -> BTC/USDT)."""
-        if "/" in symbol:
-            return symbol.upper()
-        if "-" in symbol and symbol.endswith("-USD"):
-            base = symbol.replace("-USD", "")
-            return f"{base.upper()}/USDT"
-        if "-" in symbol:
-            parts = symbol.split("-")
-            return f"{parts[0].upper()}/{parts[1].upper()}"
-        return symbol.upper()
-
-    def _symbol_to_yf(self, symbol: str) -> str:
-        """Convert CCXT symbol format to yfinance format for fallback.
-
-        Logs a warning for exotic/non-USD quote currencies that yfinance
-        may not support.
-        """
-        if "/" in symbol:
-            base, quote = symbol.split("/")
-            quote_upper = quote.upper()
-            if quote_upper in ("USDT", "USD", "USDC", "US"):
-                return f"{base.upper()}-USD"
-            # Non-USD quote: yfinance likely doesn't support it
-            logger.warning(
-                "yfinance_exotic_quote_symbol",
-                symbol=symbol,
-                yf_symbol=f"{base.upper()}-{quote_upper}",
-                note="yfinance may not support this symbol",
-            )
-            return f"{base.upper()}-{quote_upper}"
-        return symbol
-
     def _ensure_utc(self, dt: datetime | None, name: str) -> datetime | None:
         """Normalize datetime to UTC-aware. Naive datetimes are interpreted as UTC."""
         if dt is None:
@@ -202,7 +174,7 @@ class HistoricalDataSource:
         """
         from tempest_mcp.data.yf_adapter import fetch_ohlcv as _yf_fetch_ohlcv
 
-        # Validate interval
+        # Normalize/validate interval
         if interval not in self._CCXT_INTERVALS:
             logger.warning(
                 "invalid_interval_defaulting",
@@ -210,13 +182,22 @@ class HistoricalDataSource:
                 supported=sorted(self._CCXT_INTERVALS),
                 default="1d",
             )
+            interval = "1d"
 
         # Normalize timezones to UTC
         start_utc = self._ensure_utc(start, "start")
         end_utc = self._ensure_utc(end, "end")
 
         # Normalize to CCXT symbol format
-        ccxt_symbol = self._symbol_to_ccxt(symbol)
+        try:
+            ccxt_symbol = normalize_to_ccxt(symbol)
+        except ValueError as exc:
+            logger.error(
+                "invalid_symbol",
+                symbol=symbol,
+                error=str(exc),
+            )
+            return _empty_ohlcv()
         timeframe = self._ccxt_timeframe(interval)
 
         # Compute since/until timestamps for CCXT
@@ -277,7 +258,15 @@ class HistoricalDataSource:
             return ccxt_result
 
         # CCXT failed or empty — fallback to yfinance (pass UTC-normalized datetimes)
-        yf_symbol = self._symbol_to_yf(ccxt_symbol)
+        try:
+            yf_symbol = normalize_to_yf(ccxt_symbol)
+        except ValueError as exc:
+            logger.error(
+                "invalid_yfinance_symbol",
+                symbol=ccxt_symbol,
+                error=str(exc),
+            )
+            return _empty_ohlcv()
         logger.info(
             "historical_fetch_fallback_yfinance",
             symbol=yf_symbol,

@@ -331,7 +331,7 @@ class CCXTAdapter:
         (end timestamp in ms) and automatic pagination via `params`.
 
         Args:
-            symbol: Symbol in CCXT format (e.g. "BTC/USDT")
+            symbol: Symbol in CCXT format (e.g. "BTCUSDT" or "BTC/USDT")
             timeframe: Timeframe string (e.g. "1m", "5m", "1h", "1d")
             since: Unix timestamp in milliseconds for start time.
                    If None, fetches the most recent `limit` candles.
