@@ -40,8 +40,8 @@ RATE_LIMIT_WINDOW_SECONDS = 60
 # SSE connection limiting: max concurrent SSE connections per IP
 SSE_MAX_CONNECTIONS_PER_IP = 10
 
-# Symbol format: uppercase alphanumeric, 2-20 chars
-SYMBOL_PATTERN = re.compile(r"^[A-Z0-9]{2,20}$")
+# Symbol format: alphanumeric with optional single separator (/, -)
+SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9]+([/-][A-Za-z0-9]+)?$")
 
 logger = get_logger(__name__)
 
@@ -300,8 +300,14 @@ def validate_symbol(symbol: str, field_name: str = "symbol") -> str | None:
         return f"{field_name} must be a string"
     if not symbol:
         return f"{field_name} cannot be empty"
+    if len(symbol) < 2 or len(symbol) > 20:
+        return f"Invalid {field_name} length: {symbol!r} — must be 2-20 characters"
     if not SYMBOL_PATTERN.match(symbol):
-        return f"Invalid {field_name} format: {symbol!r} — must be 2-20 uppercase alphanumeric characters"
+        return f"Invalid {field_name} format: {symbol!r} — expected alphanumeric symbols with an optional single '/' or '-'"
+    if symbol.startswith(("/", "-")) or symbol.endswith(("/", "-")):
+        return f"Invalid {field_name} format: {symbol!r} — separator cannot be leading or trailing"
+    if "//" in symbol or "--" in symbol or "/-" in symbol or "-/" in symbol:
+        return f"Invalid {field_name} format: {symbol!r} — malformed separators"
     return None
 
 

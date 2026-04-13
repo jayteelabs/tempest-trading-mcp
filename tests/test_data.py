@@ -534,6 +534,12 @@ class TestNormalizeToYF:
 
         assert normalize_to_yf("btcusdt") == "BTC-USD"
 
+    def test_normalize_ccxt_market_format(self):
+        """CCXT market format should convert to yfinance format."""
+        from tempest_mcp.data._symbols import normalize_to_yf
+
+        assert normalize_to_yf("BTC/USDT") == "BTC-USD"
+
     def test_normalize_already_yf_format(self):
         """Already yfinance format should pass through."""
         from tempest_mcp.data._symbols import normalize_to_yf
@@ -559,9 +565,9 @@ class TestNormalizeToYF:
         "symbol",
         [
             "BTC-USDT",  # hyphenated base
-            "BTC/USDT",  # slash-separated
             "BTC\\USDT",  # backslash-separated
             "BTC:USDT",  # colon-separated
+            "BTC--USDT",  # double hyphen
         ],
     )
     def test_normalize_malformed_usdt_raises(self, symbol):

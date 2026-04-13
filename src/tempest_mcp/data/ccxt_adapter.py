@@ -26,7 +26,7 @@ import structlog
 from tempest_mcp.data._symbols import (
     _validate_limit,
     _validate_timeframe,
-    normalize_to_ccxt_exchange,
+    normalize_to_ccxt_market,
     validate_symbol,
 )
 
@@ -138,9 +138,9 @@ class CCXTAdapter:
             )
 
         try:
-            # Normalize symbol to CCXT exchange format
+            # Normalize symbol to CCXT format
             try:
-                ccxt_symbol = normalize_to_ccxt_exchange(symbol)
+                ccxt_symbol = normalize_to_ccxt_market(symbol)
             except ValueError as e:
                 logger.error(
                     "invalid_symbol_format",
@@ -241,10 +241,10 @@ class CCXTAdapter:
 
         try:
             # Normalize symbol to CCXT exchange format
-            # Note: normalize_to_ccxt_exchange raises ValueError on unknown format
+            # Note: normalize_to_ccxt_market raises ValueError on unknown format
             # (not a ccxt exception) — catch it here per D14 (no exception propagation)
             try:
-                ccxt_symbol = normalize_to_ccxt_exchange(symbol)
+                ccxt_symbol = normalize_to_ccxt_market(symbol)
             except ValueError as e:
                 logger.error(
                     "invalid_symbol_format",
@@ -324,6 +324,16 @@ class CCXTAdapter:
             )
             return pd.DataFrame(columns=OHLCV_COLUMNS)
 
+        except Exception as e:
+            logger.error(
+                "fetch_ohlcv_unexpected_error",
+                source="ccxt",
+                symbol=symbol,
+                timeframe=timeframe,
+                error=str(e),
+            )
+            return pd.DataFrame(columns=OHLCV_COLUMNS)
+
     def fetch_ohlcv_historical(
         self,
         symbol: str,
@@ -376,9 +386,9 @@ class CCXTAdapter:
         limit = _validate_limit(limit)
 
         try:
-            # Normalize symbol to CCXT exchange format
+            # Normalize symbol to CCXT market format
             try:
-                ccxt_symbol = normalize_to_ccxt_exchange(symbol)
+                ccxt_symbol = normalize_to_ccxt_market(symbol)
             except ValueError as e:
                 logger.error(
                     "invalid_symbol_format",
@@ -503,9 +513,9 @@ class CCXTAdapter:
         limit = _validate_limit(limit)
 
         try:
-            # Normalize symbol to CCXT exchange format
+            # Normalize symbol to CCXT format
             try:
-                ccxt_symbol = normalize_to_ccxt_exchange(symbol)
+                ccxt_symbol = normalize_to_ccxt_market(symbol)
             except ValueError as e:
                 logger.error(
                     "invalid_symbol_format",

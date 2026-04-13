@@ -18,14 +18,15 @@ from typing import Protocol, runtime_checkable
 import pandas as pd
 import structlog
 
-from tempest_mcp.data._symbols import normalize_to_ccxt, normalize_to_yf
+from tempest_mcp.data._contracts import empty_ohlcv_frame
+from tempest_mcp.data._symbols import normalize_to_ccxt_market, normalize_to_yf
 
 logger = structlog.get_logger()
 
 
 def _empty_ohlcv() -> pd.DataFrame:
     """Return empty OHLCV DataFrame with canonical columns."""
-    return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+    return empty_ohlcv_frame()
 
 
 @runtime_checkable
@@ -215,7 +216,7 @@ class HistoricalDataSource:
 
         # Normalize to CCXT symbol format
         try:
-            ccxt_symbol = normalize_to_ccxt(symbol)
+            ccxt_symbol = normalize_to_ccxt_market(symbol)
         except ValueError as exc:
             logger.error(
                 "invalid_symbol",
