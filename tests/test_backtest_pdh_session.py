@@ -363,3 +363,64 @@ class TestRealDataScenarios:
         # Asia-only data → no eligible session → always HOLD
         non_hold = signals[signals != SignalAction.HOLD]
         assert len(non_hold) == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 contract tests
+# ---------------------------------------------------------------------------
+
+class TestPhase2Contract:
+    """Phase 2 shared contract: strategy consumes resolved OHLCV from caller.
+
+    It does not own date-range planning or data fetching. Preset/plan
+    parameters are informational — they do not change signal logic.
+    """
+
+    def test_initial_capital_passed_to_engine(self):
+        """initial_capital is forwarded to BacktestEngine."""
+        df = _hourly_range(_ts(2023, 12, 31), 50, start_price=100.0)
+        _, engine = run_pdh_session_backtest(df, initial_capital=50_000.0)
+        assert engine.initial_capital == 50_000.0
+
+    def test_trade_style_parameter_accepted(self):
+        """trade_style is accepted without error (informational only)."""
+        df = _hourly_range(_ts(2023, 12, 31), 50, start_price=100.0)
+        for style in ("day_trade", "swing_trade", "custom"):
+            _, engine = run_pdh_session_backtest(df, trade_style=style)
+            assert engine is not None  # No error raised
+
+    def test_timeframe_parameter_accepted(self):
+        """timeframe hint is accepted without error (informational only)."""
+        df = _hourly_range(_ts(2023, 12, 31), 50, start_price=100.0)
+        _, engine = run_pdh_session_backtest(df, timeframe="1h")
+        assert engine is not None
+
+    def test_start_at_end_at_parameters_accepted(self):
+        """start_at and end_at are accepted without error (informational only)."""
+        df = _hourly_range(_ts(2023, 12, 31), 50, start_price=100.0)
+        _, engine = run_pdh_session_backtest(
+            df,
+            start_at=_ts(2023, 12, 31),
+            end_at=_ts(2024, 1, 4),
+        )
+        assert engine is not None
+
+    def test_exchange_parameter_accepted(self):
+        """exchange name is accepted without error (informational only)."""
+        df = _hourly_range(_ts(2023, 12, 31), 50, start_price=100.0)
+        _, engine = run_pdh_session_backtest(df, exchange="binance")
+        assert engine is not None
+
+    def test_all_phase2_parameters_combined(self):
+        """All Phase 2 preset/plan parameters work together."""
+        df = _hourly_range(_ts(2023, 12, 31), 50, start_price=100.0)
+        _, engine = run_pdh_session_backtest(
+            df,
+            trade_style="day_trade",
+            timeframe="1h",
+            start_at=_ts(2023, 12, 31),
+            end_at=_ts(2024, 1, 4),
+            exchange="binance",
+            initial_capital=75_000.0,
+        )
+        assert engine.initial_capital == 75_000.0
