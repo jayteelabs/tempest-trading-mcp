@@ -235,14 +235,6 @@ class TestRSIExitSignals:
         long_entries = signals[signals == SignalAction.LONG_ENTRY]
         # With declining price and RSI oversold, should enter long
         assert len(long_entries) >= 1, "Strategy should generate LONG_ENTRY on oversold condition"
-        # Verify stop is below entry price (swing-based or ATR-based)
-        entry_idx = long_entries.index[0]
-        entry_loc = df.index.get_loc(entry_idx)
-        entry_price = float(df["close"].iloc[entry_loc])
-        # Find the next LONG_EXIT to verify stop placement
-        exit_after_entry = signals[entry_loc + 1:]
-        long_exits = exit_after_entry[exit_after_entry == SignalAction.LONG_EXIT]
-        # At minimum, the strategy should generate an entry signal
 
 
 class TestRSIDeterministicOutputs:
@@ -293,7 +285,9 @@ class TestRSIDeterministicOutputs:
         assert long_exits >= 0
         assert short_exits >= 0
         assert holds >= 0
-        assert total == len(df), f"Signal counts should sum to DataFrame length: {total} vs {len(df)}"
+        assert total == len(df), (
+            f"Signal counts should sum to DataFrame length: {total} vs {len(df)}"
+        )
 
 
 class TestRSIMissingInsufficientData:
@@ -340,8 +334,8 @@ class TestRSIMissingInsufficientData:
             "volume": [1000.0] * 30,
         }
         df = pd.DataFrame(data, index=pd.DatetimeIndex(times))
-        # Should handle NaN gracefully
-        signals = generate_rsi_signals(df)
+        # Should handle NaN gracefully — strategy runs without error
+        generate_rsi_signals(df)
 
 
 class TestRSIDivergenceWindow:

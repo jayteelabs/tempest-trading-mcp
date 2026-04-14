@@ -31,7 +31,6 @@ from tempest_mcp.indicators.momentum.rsi import (
 )
 from tempest_mcp.indicators.volatility.atr import ATR_DEFAULT_PERIOD, calculate_atr
 
-
 # ---------------------------------------------------------------------------
 # Local swing detection helpers
 # ---------------------------------------------------------------------------
@@ -242,8 +241,12 @@ def generate_rsi_signals(
     # Divergence detection
     divergence = detect_rsi_divergence(close_prices, rsi, window=divergence_window)
     # Build sets of dates with bullish/bearish divergence for fast lookup
-    bullish_div_dates = set(divergence[divergence["type"] == "bullish"]["date"]) if not divergence.empty else set()
-    bearish_div_dates = set(divergence[divergence["type"] == "bearish"]["date"]) if not divergence.empty else set()
+    bullish_div_dates = (
+        set(divergence[divergence["type"] == "bullish"]["date"]) if not divergence.empty else set()
+    )
+    bearish_div_dates = (
+        set(divergence[divergence["type"] == "bearish"]["date"]) if not divergence.empty else set()
+    )
 
     # RSI crosses of centerline (for mean reversion exit)
     centerline_crosses = detect_rsi_cross(rsi, threshold=CENTERLINE)
@@ -268,7 +271,11 @@ def generate_rsi_signals(
         # ---- Entry logic ----
         if position is None:
             # Check for LONG entry
-            if rsi_oversold.iloc[i] if i < len(rsi_oversold) and not pd.isna(rsi_oversold.iloc[i]) else False:
+            if (
+                rsi_oversold.iloc[i]
+                if i < len(rsi_oversold) and not pd.isna(rsi_oversold.iloc[i])
+                else False
+            ):
                 # RSI in oversold zone
                 entry_confirmed = False
                 if not confirmation_enabled:
@@ -291,7 +298,11 @@ def generate_rsi_signals(
                         stop_price = swing_low - atr_stop_multiplier * current_atr
                     else:
                         # Fallback: use close - ATR if no swing low found
-                        stop_price = entry_price - atr_stop_multiplier * current_atr if current_atr > 0 else entry_price * 0.95
+                        stop_price = (
+                            entry_price - atr_stop_multiplier * current_atr
+                            if current_atr > 0
+                            else entry_price * 0.95
+                        )
 
                     risk = entry_price - stop_price
                     target_price = entry_price + risk_reward_ratio * risk
@@ -305,7 +316,11 @@ def generate_rsi_signals(
                     }
 
             # Check for SHORT entry
-            elif rsi_overbought.iloc[i] if i < len(rsi_overbought) and not pd.isna(rsi_overbought.iloc[i]) else False:
+            elif (
+                rsi_overbought.iloc[i]
+                if i < len(rsi_overbought) and not pd.isna(rsi_overbought.iloc[i])
+                else False
+            ):
                 # RSI in overbought zone
                 entry_confirmed = False
                 if not confirmation_enabled:
@@ -328,7 +343,11 @@ def generate_rsi_signals(
                         stop_price = swing_high + atr_stop_multiplier * current_atr
                     else:
                         # Fallback: use close + ATR if no swing high found
-                        stop_price = entry_price + atr_stop_multiplier * current_atr if current_atr > 0 else entry_price * 1.05
+                        stop_price = (
+                            entry_price + atr_stop_multiplier * current_atr
+                            if current_atr > 0
+                            else entry_price * 1.05
+                        )
 
                     risk = stop_price - entry_price
                     target_price = entry_price - risk_reward_ratio * risk
@@ -345,7 +364,6 @@ def generate_rsi_signals(
         else:
             current_high = float(ohlcv_df["high"].iloc[i])
             current_low = float(ohlcv_df["low"].iloc[i])
-            current_close = float(ohlcv_df["close"].iloc[i])
 
             if position["direction"] == "long":
                 # Check stop hit ( price touches stop on bar N -> signal exit for bar N+1 )
@@ -361,11 +379,18 @@ def generate_rsi_signals(
                 # Check mean reversion: RSI crosses centerline from below (bearish cross)
                 else:
                     # Use detect_rsi_cross for centerline crossover detection
-                    crosses_bearish = any(
-                        centerline_crosses["date"] == idx
-                        and centerline_crosses.loc[centerline_crosses["date"] == idx, "direction"].values[0] == "bearish"
-                        for _ in [1]
-                    ) if not centerline_crosses.empty else False
+                    crosses_bearish = (
+                        any(
+                            centerline_crosses["date"] == idx
+                            and centerline_crosses.loc[
+                                centerline_crosses["date"] == idx, "direction"
+                            ].values[0]
+                            == "bearish"
+                            for _ in [1]
+                        )
+                        if not centerline_crosses.empty
+                        else False
+                    )
                     if crosses_bearish:
                         current_signal = SignalAction.LONG_EXIT
                         position = None
@@ -383,11 +408,18 @@ def generate_rsi_signals(
 
                 # Check mean reversion: RSI crosses centerline from above (bullish cross)
                 else:
-                    crosses_bullish = any(
-                        centerline_crosses["date"] == idx
-                        and centerline_crosses.loc[centerline_crosses["date"] == idx, "direction"].values[0] == "bullish"
-                        for _ in [1]
-                    ) if not centerline_crosses.empty else False
+                    crosses_bullish = (
+                        any(
+                            centerline_crosses["date"] == idx
+                            and centerline_crosses.loc[
+                                centerline_crosses["date"] == idx, "direction"
+                            ].values[0]
+                            == "bullish"
+                            for _ in [1]
+                        )
+                        if not centerline_crosses.empty
+                        else False
+                    )
                     if crosses_bullish:
                         current_signal = SignalAction.SHORT_EXIT
                         position = None
