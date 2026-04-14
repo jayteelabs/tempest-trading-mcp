@@ -1,4 +1,5 @@
-"""Strategies package."""
-from tempest_mcp.strategies.backtest_pdh_session import run_pdh_session_backtest
+"""Backtesting strategies package."""
 
-__all__ = ["run_pdh_session_backtest"]
+from tempest_mcp.backtest.engine import SignalAction
+
+__all__ = ["SignalAction"]
