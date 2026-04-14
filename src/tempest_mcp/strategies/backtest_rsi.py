@@ -37,7 +37,7 @@ from tempest_mcp.indicators.volatility.atr import ATR_DEFAULT_PERIOD, calculate_
 # ---------------------------------------------------------------------------
 
 
-def _detect_swing_low(prices: pd.Series, window: int = 10) -> pd.Series:
+def _detect_swing_low(prices: pd.Series) -> pd.Series:
     """Detect local swing lows using strict local minimum definition.
 
     A swing low at index i is lower than BOTH neighbors:
@@ -45,7 +45,6 @@ def _detect_swing_low(prices: pd.Series, window: int = 10) -> pd.Series:
 
     Args:
         prices: Series of price values (typically close).
-        window: Lookback window for recent swing low detection.
 
     Returns:
         pd.Series of boolean, True where a swing low is detected.
@@ -53,7 +52,7 @@ def _detect_swing_low(prices: pd.Series, window: int = 10) -> pd.Series:
     if len(prices) < 3:
         return pd.Series(False, index=prices.index)
 
-    # Need at least window bars before and after for valid swing
+    # Strict local minimum: lower than BOTH neighbors
     result = pd.Series(False, index=prices.index, dtype=bool)
 
     for i in range(1, len(prices) - 1):
@@ -67,7 +66,7 @@ def _detect_swing_low(prices: pd.Series, window: int = 10) -> pd.Series:
     return result
 
 
-def _detect_swing_high(prices: pd.Series, window: int = 10) -> pd.Series:
+def _detect_swing_high(prices: pd.Series) -> pd.Series:
     """Detect local swing highs using strict local maximum definition.
 
     A swing high at index i is higher than BOTH neighbors:
@@ -75,7 +74,6 @@ def _detect_swing_high(prices: pd.Series, window: int = 10) -> pd.Series:
 
     Args:
         prices: Series of price values (typically close).
-        window: Lookback window for recent swing high detection.
 
     Returns:
         pd.Series of boolean, True where a swing high is detected.
@@ -362,20 +360,13 @@ def generate_rsi_signals(
 
                 # Check mean reversion: RSI crosses centerline from below (bearish cross)
                 else:
-                    # Look for bearish centerline cross at this bar
+                    # Use detect_rsi_cross for centerline crossover detection
                     crosses_bearish = any(
                         centerline_crosses["date"] == idx
                         and centerline_crosses.loc[centerline_crosses["date"] == idx, "direction"].values[0] == "bearish"
                         for _ in [1]
                     ) if not centerline_crosses.empty else False
-                    if not crosses_bearish and i < len(rsi) - 1:
-                        # Check if RSI crossed below 50 between previous bar and current bar
-                        prev_rsi = float(rsi.iloc[i - 1]) if i > 0 and not pd.isna(rsi.iloc[i - 1]) else CENTERLINE + 1
-                        curr_rsi = float(rsi.iloc[i]) if not pd.isna(rsi.iloc[i]) else CENTERLINE + 1
-                        if prev_rsi >= CENTERLINE and curr_rsi < CENTERLINE:
-                            current_signal = SignalAction.LONG_EXIT
-                            position = None
-                    elif crosses_bearish:
+                    if crosses_bearish:
                         current_signal = SignalAction.LONG_EXIT
                         position = None
 
@@ -397,14 +388,7 @@ def generate_rsi_signals(
                         and centerline_crosses.loc[centerline_crosses["date"] == idx, "direction"].values[0] == "bullish"
                         for _ in [1]
                     ) if not centerline_crosses.empty else False
-                    if not crosses_bullish and i < len(rsi) - 1:
-                        # Check if RSI crossed above 50 between previous bar and current bar
-                        prev_rsi = float(rsi.iloc[i - 1]) if i > 0 and not pd.isna(rsi.iloc[i - 1]) else CENTERLINE - 1
-                        curr_rsi = float(rsi.iloc[i]) if not pd.isna(rsi.iloc[i]) else CENTERLINE - 1
-                        if prev_rsi <= CENTERLINE and curr_rsi > CENTERLINE:
-                            current_signal = SignalAction.SHORT_EXIT
-                            position = None
-                    elif crosses_bullish:
+                    if crosses_bullish:
                         current_signal = SignalAction.SHORT_EXIT
                         position = None
 
