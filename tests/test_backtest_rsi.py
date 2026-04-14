@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import tempest_mcp.strategies.backtest_rsi as backtest_rsi_module
 from tempest_mcp.backtest.engine import SignalAction
 from tempest_mcp.strategies.backtest_rsi import (
     _detect_swing_high,
@@ -361,21 +362,41 @@ class TestRSIDivergenceWindow:
         }
         return pd.DataFrame(data, index=pd.DatetimeIndex(times))
 
-    def test_divergence_window_affects_detection(self):
-        """Different divergence_window values should produce different signal sequences."""
+    def test_divergence_window_affects_detection(self, monkeypatch: pytest.MonkeyPatch):
+        """Strategy passes divergence_window through to detect_rsi_divergence."""
         df = self._make_divergence_data()
-        signals_small = generate_rsi_signals(df, divergence_window=5, confirmation_enabled=True)
-        signals_large = generate_rsi_signals(df, divergence_window=20, confirmation_enabled=True)
-        # Different windows may produce different divergence detection
-        # At minimum, both should return a Series of the same length
-        assert len(signals_small) == len(signals_large) == len(df)
-        # Both should produce deterministic results
-        assert signals_small is not None
-        assert signals_large is not None
+        captured_windows: list[int] = []
 
-    def test_divergence_window_default(self):
-        """Default divergence_window should be 20 per ENG-20 scope."""
+        def _fake_detect_rsi_divergence(prices, rsi, window=20):  # noqa: ANN001
+            captured_windows.append(window)
+            return pd.DataFrame(columns=["date", "type", "price", "rsi_value"])
+
+        monkeypatch.setattr(
+            backtest_rsi_module,
+            "detect_rsi_divergence",
+            _fake_detect_rsi_divergence,
+        )
+
+        generate_rsi_signals(df, divergence_window=5, confirmation_enabled=True)
+        generate_rsi_signals(df, divergence_window=20, confirmation_enabled=True)
+
+        assert captured_windows == [5, 20]
+
+    def test_divergence_window_default(self, monkeypatch: pytest.MonkeyPatch):
+        """Default divergence_window is 20 when omitted."""
         df = self._make_divergence_data()
-        # Should not raise and should use default divergence_window=20
-        signals = generate_rsi_signals(df)
-        assert signals is not None
+        captured_windows: list[int] = []
+
+        def _fake_detect_rsi_divergence(prices, rsi, window=20):  # noqa: ANN001
+            captured_windows.append(window)
+            return pd.DataFrame(columns=["date", "type", "price", "rsi_value"])
+
+        monkeypatch.setattr(
+            backtest_rsi_module,
+            "detect_rsi_divergence",
+            _fake_detect_rsi_divergence,
+        )
+
+        generate_rsi_signals(df)
+
+        assert captured_windows == [20]

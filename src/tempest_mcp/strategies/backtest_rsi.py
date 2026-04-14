@@ -163,10 +163,10 @@ def generate_rsi_signals(
                     AND (confirmation_enabled=False OR bearish_divergence_detected)
 
     Exit logic (signal triggers):
-        LONG_EXIT:  RSI crosses centerline (50) from below (mean reversion)
+        LONG_EXIT:  RSI crosses centerline (50) upward from below (bullish cross)
                     OR price hits 2:1 reward-to-risk target
                     OR price hits ATR-adjusted swing-based stop
-        SHORT_EXIT: RSI crosses centerline (50) from above (mean reversion)
+        SHORT_EXIT: RSI crosses centerline (50) downward from above (bearish cross)
                     OR price hits 2:1 reward-to-risk target
                     OR price hits ATR-adjusted swing-based stop
 
@@ -176,7 +176,7 @@ def generate_rsi_signals(
 
     Args:
         ohlcv_df: DataFrame with columns [open, high, low, close, volume] and
-                  UTC-aware DatetimeIndex.
+                  DatetimeIndex.
         rsi_period: Period for RSI calculation (default 14).
         confirmation_enabled: If True, require divergence confirmation for entries
                              (default True).
@@ -238,18 +238,44 @@ def generate_rsi_signals(
     atr_period = ATR_DEFAULT_PERIOD
     atr = calculate_atr(high_prices, low_prices, close_prices, period=atr_period)
 
+    def _normalize_timestamp(value: object) -> object:
+        """Normalize timestamp keys for robust index/date comparisons.
+
+        - Preserve non-datetime values as-is
+        - Convert timezone-aware timestamps to UTC-naive for stable set/dict lookups
+        """
+        if not isinstance(value, pd.Timestamp):
+            converted = pd.to_datetime(value, errors="coerce")
+            if pd.isna(converted):
+                return value
+            value = converted
+
+        if value.tz is not None:
+            return value.tz_convert("UTC").tz_localize(None)
+        return value
+
     # Divergence detection
     divergence = detect_rsi_divergence(close_prices, rsi, window=divergence_window)
-    # Build sets of dates with bullish/bearish divergence for fast lookup
-    bullish_div_dates = (
-        set(divergence[divergence["type"] == "bullish"]["date"]) if not divergence.empty else set()
-    )
-    bearish_div_dates = (
-        set(divergence[divergence["type"] == "bearish"]["date"]) if not divergence.empty else set()
-    )
 
-    # RSI crosses of centerline (for mean reversion exit)
+    # Build sets of normalized dates with bullish/bearish divergence for O(1) lookup
+    bullish_div_dates: set[object] = set()
+    bearish_div_dates: set[object] = set()
+    if not divergence.empty:
+        bullish_div_dates = {
+            _normalize_timestamp(date)
+            for date in divergence.loc[divergence["type"] == "bullish", "date"]
+        }
+        bearish_div_dates = {
+            _normalize_timestamp(date)
+            for date in divergence.loc[divergence["type"] == "bearish", "date"]
+        }
+
+    # RSI centerline crosses (for mean reversion exits), normalized for O(1) lookup
     centerline_crosses = detect_rsi_cross(rsi, threshold=CENTERLINE)
+    cross_direction_by_date: dict[object, str] = {}
+    if not centerline_crosses.empty:
+        for row in centerline_crosses.itertuples(index=False):
+            cross_direction_by_date[_normalize_timestamp(row.date)] = row.direction
 
     # ---- Initialize signals ----
     n = len(ohlcv_df)
@@ -266,6 +292,7 @@ def generate_rsi_signals(
 
     for i in range(n):
         idx = ohlcv_df.index[i]
+        idx_normalized = _normalize_timestamp(idx)
         current_signal = SignalAction.HOLD
 
         # ---- Entry logic ----
@@ -280,7 +307,7 @@ def generate_rsi_signals(
                 entry_confirmed = False
                 if not confirmation_enabled:
                     entry_confirmed = True
-                elif idx in bullish_div_dates:
+                elif idx_normalized in bullish_div_dates:
                     entry_confirmed = True
 
                 if entry_confirmed:
@@ -297,7 +324,7 @@ def generate_rsi_signals(
                     if swing_low is not None and current_atr > 0:
                         stop_price = swing_low - atr_stop_multiplier * current_atr
                     else:
-                        # Fallback: use close - ATR if no swing low found
+                        # Fallback: ATR-adjusted entry offset; 5% buffer if ATR unavailable
                         stop_price = (
                             entry_price - atr_stop_multiplier * current_atr
                             if current_atr > 0
@@ -325,7 +352,7 @@ def generate_rsi_signals(
                 entry_confirmed = False
                 if not confirmation_enabled:
                     entry_confirmed = True
-                elif idx in bearish_div_dates:
+                elif idx_normalized in bearish_div_dates:
                     entry_confirmed = True
 
                 if entry_confirmed:
@@ -342,7 +369,7 @@ def generate_rsi_signals(
                     if swing_high is not None and current_atr > 0:
                         stop_price = swing_high + atr_stop_multiplier * current_atr
                     else:
-                        # Fallback: use close + ATR if no swing high found
+                        # Fallback: ATR-adjusted entry offset; 5% buffer if ATR unavailable
                         stop_price = (
                             entry_price + atr_stop_multiplier * current_atr
                             if current_atr > 0
@@ -376,22 +403,10 @@ def generate_rsi_signals(
                     current_signal = SignalAction.LONG_EXIT
                     position = None
 
-                # Check mean reversion: RSI crosses centerline from below (bearish cross)
+                # Check mean reversion: RSI crosses centerline upward from below
                 else:
-                    # Use detect_rsi_cross for centerline crossover detection
-                    crosses_bearish = (
-                        any(
-                            centerline_crosses["date"] == idx
-                            and centerline_crosses.loc[
-                                centerline_crosses["date"] == idx, "direction"
-                            ].values[0]
-                            == "bearish"
-                            for _ in [1]
-                        )
-                        if not centerline_crosses.empty
-                        else False
-                    )
-                    if crosses_bearish:
+                    cross_direction = cross_direction_by_date.get(idx_normalized)
+                    if cross_direction == "bullish":
                         current_signal = SignalAction.LONG_EXIT
                         position = None
 
@@ -406,21 +421,10 @@ def generate_rsi_signals(
                     current_signal = SignalAction.SHORT_EXIT
                     position = None
 
-                # Check mean reversion: RSI crosses centerline from above (bullish cross)
+                # Check mean reversion: RSI crosses centerline downward from above
                 else:
-                    crosses_bullish = (
-                        any(
-                            centerline_crosses["date"] == idx
-                            and centerline_crosses.loc[
-                                centerline_crosses["date"] == idx, "direction"
-                            ].values[0]
-                            == "bullish"
-                            for _ in [1]
-                        )
-                        if not centerline_crosses.empty
-                        else False
-                    )
-                    if crosses_bullish:
+                    cross_direction = cross_direction_by_date.get(idx_normalized)
+                    if cross_direction == "bearish":
                         current_signal = SignalAction.SHORT_EXIT
                         position = None
 
