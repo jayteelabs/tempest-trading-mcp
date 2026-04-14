@@ -1,8 +1,13 @@
+#
+# Generated from /home/tempest/.opencode/templates/review-framework/workflows/review.yml.tpl
+# Repo-specific behavior should live in .opencode/review-config.yml.
+#
 name: Review
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -10,7 +15,13 @@ permissions:
   checks: write
 
 env:
-  PYTHONPATH: .github/scripts
+  REVIEW_FRAMEWORK_ROOT: /home/tempest/.opencode/templates/review-framework
+  REVIEW_REPO_ROOT: ${{ github.workspace }}
+  REVIEW_BLOCKING_SEVERITIES: high,critical
+  REVIEW_ENABLE_DESIGN: "true"
+  REVIEW_ENABLE_SECURITY_AUDIT: "true"
+  REVIEW_ENABLE_LOGIC_AUDIT: "true"
+  PYTHONPATH: /home/tempest/.opencode/templates/review-framework/scripts
 
 jobs:
   review_design:
@@ -23,6 +34,7 @@ jobs:
       PR_URL: ${{ github.event.pull_request.html_url }}
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -57,6 +69,7 @@ jobs:
       PR_URL: ${{ github.event.pull_request.html_url }}
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -91,6 +104,7 @@ jobs:
       PR_URL: ${{ github.event.pull_request.html_url }}
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -127,6 +141,8 @@ jobs:
       PR_URL: ${{ github.event.pull_request.html_url }}
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
