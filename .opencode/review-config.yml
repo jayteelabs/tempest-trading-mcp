@@ -1,0 +1,22 @@
+review:
+  framework_version: v1
+
+  lanes:
+    - design
+    - logic_audit
+    - security_audit
+
+  source_roots:
+    - src
+  test_roots:
+    - tests
+  docs_roots:
+    - docs
+  languages:
+    - python
+
+  blocking_severities:
+    - critical
+    - high
+
+  suppressions: []
