@@ -379,9 +379,6 @@ def generate_elliot_wave_signals(
                 if bar_high >= entry_level:
                     pending_short_setup = None
 
-        if entered_now:
-            continue
-
         # Look for new setups if we're flat
         if position is None and pending_long_setup is None and pending_short_setup is None:
             # Find recent swing points
