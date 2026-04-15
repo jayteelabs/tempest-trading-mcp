@@ -33,9 +33,9 @@ _WAVEC_RETRACE_MIN = 0.382
 _WAVEC_RETRACE_MAX = 0.886
 
 # Minimum bars needed for swing detection (swing_window on each side + confirmation)
-_MIN_BARS_FOR_SWING = 3  # swing_window * 2 + 1 minimum for a single swing point
+# _MIN_BARS_FOR_SWING = 3  # swing_window * 2 + 1 minimum for a single swing point
 _MIN_BARS_WAVE3 = 6  # Need L0, H1, L2 for wave 3 long (minimum)
-_MIN_BARS_WAVEC = 5  # Need A, B, C for wave C
+# _MIN_BARS_WAVEC = 5  # Need A, B, C for wave C
 
 
 def _bps_to_price(price: float, bps: float) -> float:
@@ -418,6 +418,9 @@ def generate_elliot_wave_signals(
 
                 # Breakout level: above H1 + buffer
                 breakout_level = h1_price + _bps_to_price(h1_price, breakout_buffer_bps)
+
+                if entered_now is not None:
+                    continue
 
                 # Check if price is breaking out
                 if bar_close > breakout_level:

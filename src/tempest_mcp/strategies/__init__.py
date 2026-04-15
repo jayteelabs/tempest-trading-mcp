@@ -16,9 +16,9 @@ __all__ = [
 ]
 
 if TYPE_CHECKING:
+    from tempest_mcp.strategies.backtest_elliot_wave import run_elliot_wave_backtest
     from tempest_mcp.strategies.backtest_pdh_session import run_pdh_session_backtest
     from tempest_mcp.strategies.backtest_vwap import run_vwap_anchored_backtest
-    from tempest_mcp.strategies.backtest_elliot_wave import run_elliot_wave_backtest
 
 
 def __getattr__(name: str) -> Any:

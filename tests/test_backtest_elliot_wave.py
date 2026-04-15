@@ -8,15 +8,6 @@ import pytest
 
 import tempest_mcp.strategies.backtest_elliot_wave as elliot_wave
 from tempest_mcp.backtest.engine import SignalAction
-from tempest_mcp.strategies.backtest_elliot_wave import (
-    STRATEGY_ID,
-    _bps_to_price,
-    _detect_swing_highs_lows,
-    _find_swing_points,
-    _retrace_in_band,
-    generate_elliot_wave_signals,
-    run_elliot_wave_backtest,
-)
 
 
 def _make_ohlcv(
@@ -65,40 +56,40 @@ def _make_simple_ohlcv(closes: list[float], volumes: list[float] | None = None) 
 
 class TestElliotWaveStrategyId:
     def test_strategy_id_is_elliot_wave(self):
-        assert STRATEGY_ID == "elliot_wave"
+        assert elliot_wave.STRATEGY_ID == "elliot_wave"
 
 
 class TestElliotWaveValidation:
     def test_empty_dataframe_raises(self):
         df = _make_ohlcv([], [], [], [])
         with pytest.raises(ValueError, match="must not be empty"):
-            generate_elliot_wave_signals(df)
+            elliot_wave.generate_elliot_wave_signals(df)
 
     def test_missing_required_columns_raises(self):
         df = _make_simple_ohlcv([100, 101, 102])
         df = df.drop(columns=["volume"])
         with pytest.raises(ValueError, match="missing required columns"):
-            generate_elliot_wave_signals(df)
+            elliot_wave.generate_elliot_wave_signals(df)
 
     def test_invalid_swing_window_raises(self):
         df = _make_simple_ohlcv([100, 101, 102, 103, 104, 105, 106, 107, 108])
         with pytest.raises(ValueError, match="swing_window must be >= 1"):
-            generate_elliot_wave_signals(df, swing_window=0)
+            elliot_wave.generate_elliot_wave_signals(df, swing_window=0)
 
     def test_invalid_wave3_retrace_band_raises(self):
         df = _make_simple_ohlcv([100, 101, 102, 103, 104, 105, 106, 107, 108])
         with pytest.raises(ValueError, match="wave3_retrace_min"):
-            generate_elliot_wave_signals(df, wave3_retrace_min=0.8, wave3_retrace_max=0.3)
+            elliot_wave.generate_elliot_wave_signals(df, wave3_retrace_min=0.8, wave3_retrace_max=0.3)
 
     def test_invalid_wavec_retrace_band_raises(self):
         df = _make_simple_ohlcv([100, 101, 102, 103, 104, 105, 106, 107, 108])
         with pytest.raises(ValueError, match="wavec_retrace_min"):
-            generate_elliot_wave_signals(df, wavec_retrace_min=0.9, wavec_retrace_max=0.3)
+            elliot_wave.generate_elliot_wave_signals(df, wavec_retrace_min=0.9, wavec_retrace_max=0.3)
 
     def test_invalid_risk_reward_ratio_raises(self):
         df = _make_simple_ohlcv([100, 101, 102, 103, 104, 105, 106, 107, 108])
         with pytest.raises(ValueError, match="risk_reward_ratio must be > 0"):
-            generate_elliot_wave_signals(df, risk_reward_ratio=0)
+            elliot_wave.generate_elliot_wave_signals(df, risk_reward_ratio=0)
 
 
 class TestElliotWaveShortWindow:
@@ -107,14 +98,14 @@ class TestElliotWaveShortWindow:
     def test_very_short_window_returns_hold(self):
         # Window too short for swing detection
         df = _make_simple_ohlcv([100.0, 101.0, 102.0])
-        signals = generate_elliot_wave_signals(df)
+        signals = elliot_wave.generate_elliot_wave_signals(df)
         assert len(signals) == len(df)
         assert (signals == SignalAction.HOLD).all()
 
     def test_insufficient_for_wave3_returns_hold(self):
         # Not enough bars for Wave 3 pattern (need at least swing_window*2 + 6)
         df = _make_simple_ohlcv([100.0, 101.0, 102.0, 103.0, 104.0])
-        signals = generate_elliot_wave_signals(df, swing_window=2)
+        signals = elliot_wave.generate_elliot_wave_signals(df, swing_window=2)
         assert len(signals) == len(df)
         assert (signals == SignalAction.HOLD).all()
 
@@ -123,33 +114,33 @@ class TestElliotWaveHelpers:
     """Test helper functions used internally."""
 
     def test_bps_to_price_conversion(self):
-        assert abs(_bps_to_price(100.0, 10) - 0.1) < 1e-9
-        assert abs(_bps_to_price(100.0, 5) - 0.05) < 1e-9
-        assert abs(_bps_to_price(200.0, 50) - 1.0) < 1e-9
+        assert abs(elliot_wave._bps_to_price(100.0, 10) - 0.1) < 1e-9
+        assert abs(elliot_wave._bps_to_price(100.0, 5) - 0.05) < 1e-9
+        assert abs(elliot_wave._bps_to_price(200.0, 50) - 1.0) < 1e-9
 
     def test_retrace_in_band_bullish(self):
         # L0=100, H1=110, L2=105 -> retrace = (110-105)/(110-100) = 0.5
-        assert _retrace_in_band(100.0, 110.0, 105.0, 0.382, 0.786) is True
+        assert elliot_wave._retrace_in_band(100.0, 110.0, 105.0, 0.382, 0.786) is True
         # Above max: L2=108 -> retrace = (110-108)/10 = 0.2 < 0.382 (below min)
-        assert _retrace_in_band(100.0, 110.0, 108.0, 0.382, 0.786) is False
+        assert elliot_wave._retrace_in_band(100.0, 110.0, 108.0, 0.382, 0.786) is False
         # Below min: L2=107 -> retrace = (110-107)/10 = 0.3 < 0.382
-        assert _retrace_in_band(100.0, 110.0, 107.0, 0.382, 0.786) is False
+        assert elliot_wave._retrace_in_band(100.0, 110.0, 107.0, 0.382, 0.786) is False
         # Within band: L2=103 -> retrace = (110-103)/10 = 0.7 (within [0.382, 0.786])
-        assert _retrace_in_band(100.0, 110.0, 103.0, 0.382, 0.786) is True
+        assert elliot_wave._retrace_in_band(100.0, 110.0, 103.0, 0.382, 0.786) is True
 
     def test_retrace_in_band_bearish(self):
         # H0=110, L1=100, H2=105 -> retrace = (105-100)/(110-100) = 0.5
-        assert _retrace_in_band(110.0, 100.0, 105.0, 0.382, 0.786) is True
+        assert elliot_wave._retrace_in_band(110.0, 100.0, 105.0, 0.382, 0.786) is True
 
     def test_retrace_rejects_extension_beyond_origin(self):
         # C beyond A (extension, not retrace)
-        assert _retrace_in_band(100.0, 110.0, 99.0, 0.382, 0.786) is False
+        assert elliot_wave._retrace_in_band(100.0, 110.0, 99.0, 0.382, 0.786) is False
 
     def test_detect_swing_highs_lows(self):
         # Clear swing high at index 2 and clear swing low at index 3.
         highs = pd.Series([5.0, 3.0, 7.0, 2.0, 6.0])
         lows = pd.Series([1.0, 2.0, 3.0, 1.0, 2.0])
-        is_high, is_low = _detect_swing_highs_lows(highs, lows, swing_window=1)
+        is_high, is_low = elliot_wave._detect_swing_highs_lows(highs, lows, swing_window=1)
         assert is_high.iloc[2]
         assert is_low.iloc[3]
         assert not is_high.iloc[3]
@@ -158,17 +149,17 @@ class TestElliotWaveHelpers:
     def test_detect_swing_highs_lows_ignores_same_bar_tie(self):
         highs = pd.Series([5.0, 7.0, 5.0])
         lows = pd.Series([2.0, 1.0, 3.0])
-        is_high, is_low = _detect_swing_highs_lows(highs, lows, swing_window=1)
+        is_high, is_low = elliot_wave._detect_swing_highs_lows(highs, lows, swing_window=1)
 
         assert not is_high.iloc[1]
         assert not is_low.iloc[1]
-        assert _find_swing_points(is_high, is_low, highs, lows) == []
+        assert elliot_wave._find_swing_points(is_high, is_low, highs, lows) == []
 
     def test_find_swing_points(self):
         highs = pd.Series([5.0, 3.0, 7.0, 2.0, 6.0])
         lows = pd.Series([1.0, 2.0, 3.0, 1.0, 2.0])
-        is_high, is_low = _detect_swing_highs_lows(highs, lows, swing_window=1)
-        points = _find_swing_points(is_high, is_low, highs, lows)
+        is_high, is_low = elliot_wave._detect_swing_highs_lows(highs, lows, swing_window=1)
+        points = elliot_wave._find_swing_points(is_high, is_low, highs, lows)
         assert points == [
             {"type": "high", "idx": 2, "price": 7.0},
             {"type": "low", "idx": 3, "price": 1.0},
@@ -182,7 +173,7 @@ class TestElliotWaveSignals:
         """Strong trend without proper retrace should not trigger entries."""
         closes = [100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0, 108.0, 109.0, 110.0]
         df = _make_simple_ohlcv(closes)
-        signals = generate_elliot_wave_signals(df, swing_window=2)
+        signals = elliot_wave.generate_elliot_wave_signals(df, swing_window=2)
         assert (signals == SignalAction.HOLD).all()
 
     def test_engine_compatible_output(self):
@@ -190,7 +181,7 @@ class TestElliotWaveSignals:
         closes = [100.0 + i * 0.5 for i in range(20)]
         df = _make_simple_ohlcv(closes)
 
-        signals, engine = run_elliot_wave_backtest(df, initial_capital=50_000.0)
+        signals, engine = elliot_wave.run_elliot_wave_backtest(df, initial_capital=50_000.0)
 
         assert len(signals) == len(df)
         assert isinstance(signals.index, pd.DatetimeIndex)
@@ -202,7 +193,7 @@ class TestElliotWaveSignals:
         """Signals must be object dtype with SignalAction values."""
         closes = [100.0 + i * 0.5 for i in range(15)]
         df = _make_simple_ohlcv(closes)
-        signals = generate_elliot_wave_signals(df)
+        signals = elliot_wave.generate_elliot_wave_signals(df)
         assert signals.dtype == object
         assert all(isinstance(s, SignalAction) for s in signals)
 
@@ -211,8 +202,8 @@ class TestElliotWaveSignals:
         closes = [100.0 + i * 0.5 for i in range(15)]
         df = _make_simple_ohlcv(closes)
 
-        signals1, _ = run_elliot_wave_backtest(df, trade_style="day_trade")
-        signals2, _ = run_elliot_wave_backtest(df, trade_style="swing_trade")
+        signals1, _ = elliot_wave.run_elliot_wave_backtest(df, trade_style="day_trade")
+        signals2, _ = elliot_wave.run_elliot_wave_backtest(df, trade_style="swing_trade")
 
         assert signals1.equals(signals2)
 
@@ -222,7 +213,7 @@ class TestElliotWaveSignals:
         df = _make_simple_ohlcv(closes)
         assert df.index.tz is not None
 
-        signals = generate_elliot_wave_signals(df)
+        signals = elliot_wave.generate_elliot_wave_signals(df)
         assert signals.index.tz is not None
 
 
@@ -247,7 +238,7 @@ class TestElliotWaveWaveC:
             ],
         )
 
-        signals = generate_elliot_wave_signals(
+        signals = elliot_wave.generate_elliot_wave_signals(
             df,
             swing_window=1,
             confirmation_bars=0,
@@ -280,7 +271,7 @@ class TestElliotWaveWaveC:
             ],
         )
 
-        signals, engine = run_elliot_wave_backtest(
+        signals, engine = elliot_wave.run_elliot_wave_backtest(
             df,
             swing_window=1,
             confirmation_bars=0,
@@ -318,7 +309,7 @@ class TestElliotWaveExitLogic:
             ],
         )
 
-        signals = generate_elliot_wave_signals(
+        signals = elliot_wave.generate_elliot_wave_signals(
             df,
             swing_window=1,
             confirmation_bars=0,
@@ -355,7 +346,7 @@ class TestElliotWaveExitLogic:
             lambda high, low, close, period=14: pd.Series([4.0] * len(close), index=close.index),
         )
 
-        signals_no_atr = generate_elliot_wave_signals(
+        signals_no_atr = elliot_wave.generate_elliot_wave_signals(
             df,
             swing_window=1,
             confirmation_bars=0,
@@ -364,7 +355,7 @@ class TestElliotWaveExitLogic:
             atr_stop_multiplier=0,
             risk_reward_ratio=1,
         )
-        signals_with_atr = generate_elliot_wave_signals(
+        signals_with_atr = elliot_wave.generate_elliot_wave_signals(
             df,
             swing_window=1,
             confirmation_bars=0,
@@ -388,7 +379,7 @@ class TestElliotWaveEngineResult:
         closes = [100.0 + i * 0.3 + np.sin(i / 3) * 2 for i in range(30)]
         df = _make_simple_ohlcv(closes)
 
-        signals, engine = run_elliot_wave_backtest(df)
+        signals, engine = elliot_wave.run_elliot_wave_backtest(df)
 
         # Engine should complete
         assert engine is not None
@@ -400,7 +391,7 @@ class TestElliotWaveEngineResult:
         closes = [100.0 + i * 0.3 for i in range(25)]
         df = _make_simple_ohlcv(closes)
 
-        signals, engine = run_elliot_wave_backtest(df)
+        signals, engine = elliot_wave.run_elliot_wave_backtest(df)
 
         # Verify engine attributes
         assert hasattr(engine, "initial_capital")
