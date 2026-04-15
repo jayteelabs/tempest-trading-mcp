@@ -38,6 +38,22 @@ TRADE_STYLE_PRESETS = {
 }
 
 
+def _bar_is_within_session(
+    bar_time: pd.Timestamp,
+    session_result: dict,
+) -> bool:
+    """Return True only when the current bar itself sits inside the session window."""
+    session_start = session_result.get("session_start_utc")
+    session_end = session_result.get("session_end_utc")
+
+    return (
+        session_result.get("bars", 0) > 0
+        and pd.notna(session_start)
+        and pd.notna(session_end)
+        and session_start <= bar_time <= session_end
+    )
+
+
 def run_pdh_session_backtest(
     ohlcv_df: pd.DataFrame,
     atr_period: int = 14,
@@ -143,18 +159,23 @@ def run_pdh_session_backtest(
     # the order on bar i+1's open — the BacktestEngine handles this offset).
     signals = pd.Series(SignalAction.HOLD, index=ohlcv_df.index, dtype=object)
 
-    # pdh_pdl_cache: first_bar_date -> (pdh, pdl) to avoid O(n²) detect_pdh_pdl calls
+    # pdh_pdl_cache: evaluated_bar_date -> (pdh, pdl) to avoid O(n²)
+    # detect_pdh_pdl calls while still recalculating when the evaluation day changes.
     pdh_pdl_cache: dict = {}
 
     # Track pending entry: cleared when engine processes the corresponding bar
     # pending_entry keys: direction, entry_bar, stop_price, tp_price
     pending_entry: dict | None = None
+    prior_long_breakout = False
+    prior_short_breakout = False
 
     for i in range(1, len(ohlcv_df)):
+        bar_time = ohlcv_df.index[i]
         bar_open = float(ohlcv_df["open"].iloc[i])
         bar_high = float(ohlcv_df["high"].iloc[i])
         bar_low = float(ohlcv_df["low"].iloc[i])
         bar_close = float(ohlcv_df["close"].iloc[i])
+        exited_this_bar = False
 
         # ---- SL/TP check for pending entry from prior bar --------------------
         if pending_entry is not None:
@@ -179,42 +200,52 @@ def run_pdh_session_backtest(
                     SignalAction.LONG_EXIT if direction == "long" else SignalAction.SHORT_EXIT
                 )
                 pending_entry = None
-                continue  # Don't also check for new entry on same bar
+                exited_this_bar = True
+
+        # ---- PDH/PDL (cached per calendar day) -----------------------------
+        window = ohlcv_df.iloc[: i + 1]
+        bar_date = bar_time.date()
+        if bar_date not in pdh_pdl_cache:
+            result = detect_pdh_pdl(window)
+            if result["position"] == "insufficient_data":
+                pdh_pdl_cache[bar_date] = (float("nan"), float("nan"))
+            else:
+                pdh_pdl_cache[bar_date] = (
+                    result["previous_day_high"],
+                    result["previous_day_low"],
+                )
+        pdh, pdl = pdh_pdl_cache[bar_date]
+        if pdh != pdh:  # NaN — insufficient_data
+            prior_long_breakout = False
+            prior_short_breakout = False
+            continue
+
+        current_long_breakout = bar_close > pdh
+        current_short_breakout = bar_close < pdl
 
         # ---- Session eligibility check ---------------------------------------
         session_ok = False
         for st in session_types:
-            res = detect_session_levels(ohlcv_df.iloc[: i + 1], st)
-            if res.get("bars", 0) > 0:
+            res = detect_session_levels(window, st)
+            if _bar_is_within_session(bar_time, res):
                 session_ok = True
                 break
-        if not session_ok:
-            continue
 
-        # ---- PDH/PDL (cached per calendar day) -----------------------------
-        window = ohlcv_df.iloc[: i + 1]
-        first_date = window.index[0].date()
-        if first_date not in pdh_pdl_cache:
-            result = detect_pdh_pdl(window)
-            if result["position"] == "insufficient_data":
-                pdh_pdl_cache[first_date] = (float("nan"), float("nan"))
-            else:
-                pdh_pdl_cache[first_date] = (
-                    result["previous_day_high"],
-                    result["previous_day_low"],
-                )
-        pdh, pdl = pdh_pdl_cache[first_date]
-        if pdh != pdh:  # NaN — insufficient_data
+        if pending_entry is not None or exited_this_bar or not session_ok:
+            prior_long_breakout = current_long_breakout
+            prior_short_breakout = current_short_breakout
             continue
 
         # ---- ATR value for stop construction --------------------------------
         atr_val = float(atr_series.iloc[i - 1]) if i - 1 < len(atr_series) else float("nan")
         if atr_val != atr_val:  # NaN
+            prior_long_breakout = current_long_breakout
+            prior_short_breakout = current_short_breakout
             continue
         stop_distance = atr_multiplier * atr_val
 
         # ---- Entry signals --------------------------------------------------
-        if bar_close > pdh:
+        if current_long_breakout and not prior_long_breakout:
             signals.iloc[i] = SignalAction.LONG_ENTRY
             pending_entry = {
                 "direction": "long",
@@ -222,7 +253,7 @@ def run_pdh_session_backtest(
                 "stop_price": bar_close - stop_distance,
                 "tp_price": bar_close + 2.0 * stop_distance,
             }
-        elif bar_close < pdl:
+        elif current_short_breakout and not prior_short_breakout:
             signals.iloc[i] = SignalAction.SHORT_ENTRY
             pending_entry = {
                 "direction": "short",
@@ -230,6 +261,9 @@ def run_pdh_session_backtest(
                 "stop_price": bar_close + stop_distance,
                 "tp_price": bar_close - 2.0 * stop_distance,
             }
+
+        prior_long_breakout = current_long_breakout
+        prior_short_breakout = current_short_breakout
 
     # ---- Run engine -------------------------------------------------------
     engine = BacktestEngine(initial_capital=initial_capital)

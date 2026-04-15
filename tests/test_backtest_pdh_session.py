@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -15,6 +15,7 @@ from tempest_mcp.strategies.backtest_pdh_session import run_pdh_session_backtest
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _ts(
     year: int,
@@ -74,6 +75,29 @@ def _hourly_range(
     return _ohlcv(dates, opens, highs, lows, closes, vols)
 
 
+def _intraday_hours_range(
+    start: pd.Timestamp,
+    day_count: int,
+    *,
+    hours: range,
+    price: float = 100.0,
+) -> pd.DataFrame:
+    """Build flat OHLCV bars for selected hours on consecutive UTC dates."""
+    timestamps = [
+        start + pd.Timedelta(days=day_offset, hours=hour)
+        for day_offset in range(day_count)
+        for hour in hours
+    ]
+    bar_count = len(timestamps)
+    return _ohlcv(
+        timestamps,
+        [price] * bar_count,
+        [price + 1.0] * bar_count,
+        [price - 1.0] * bar_count,
+        [price] * bar_count,
+    )
+
+
 def _patch_at(module_qualified_name: str, attr: str, mock: MagicMock):
     """Patch ``attr`` in ``module_qualified_name`` using patch.object on the imported name."""
     module = __import__(module_qualified_name, fromlist=[attr])
@@ -83,6 +107,7 @@ def _patch_at(module_qualified_name: str, attr: str, mock: MagicMock):
 # ---------------------------------------------------------------------------
 # Input validation tests
 # ---------------------------------------------------------------------------
+
 
 class TestInputValidation:
     def test_empty_dataframe_raises(self):
@@ -113,27 +138,18 @@ class TestInputValidation:
 # Session gating tests
 # ---------------------------------------------------------------------------
 
+
 class TestSessionGating:
     def test_no_entry_during_asia_only_hours(self):
-        """Asia session (00:00-09:00 UTC) must not produce entry signals.
-
-        Use Dec 31 + Jan 1 so detect_pdh_pdl has enough lookback for later bars.
-        All bars are Asia hours (00:00-08:00 UTC); no London/NY bars.
-        """
-        df = _hourly_range(_ts(2023, 12, 31), 96, start_price=100.0)  # 4 days of Asia bars
+        """Data containing only Asia-session hours must not produce entry signals."""
+        df = _intraday_hours_range(_ts(2023, 12, 31), 4, hours=range(9))
         signals, _ = run_pdh_session_backtest(df)
         non_hold = signals[signals != SignalAction.HOLD]
         assert len(non_hold) == 0, f"Expected no signals, got indices {list(non_hold.index)}"
 
     def test_asia_only_data_produces_no_signals(self):
-        """Asia-only data (all bars 00:00-08:00 UTC) → no entry signals.
-
-        Note: detect_pdh_pdl lookback requires warmup data before the first bar's
-        date. With Asia-only data starting Dec 31 00:00, the lookback (Dec 30)
-        is not in the dataset, so detect_pdh_pdl returns insufficient_data for
-        all bars. This test verifies that insufficient_data produces no signals.
-        """
-        df = _hourly_range(_ts(2023, 12, 31), 96, start_price=100.0, seed=42)
+        """Asia-only data (all bars 00:00-08:00 UTC) produces no signals."""
+        df = _intraday_hours_range(_ts(2023, 12, 31), 4, hours=range(9), price=101.0)
         signals, _ = run_pdh_session_backtest(df)
         non_hold = signals[signals != SignalAction.HOLD]
         assert len(non_hold) == 0
@@ -142,6 +158,7 @@ class TestSessionGating:
 # ---------------------------------------------------------------------------
 # Breakout entry tests  (mock-based)
 # ---------------------------------------------------------------------------
+
 
 class TestBreakoutEntries:
     def _mock_pdh(self, pdh=105.0, pdl=97.0, position="above_pdh"):
@@ -155,7 +172,13 @@ class TestBreakoutEntries:
 
     def _mock_session(self, bars=8):
         m = MagicMock()
-        m.return_value = {"bars": bars, "high": 106.0, "low": 100.0}
+        m.return_value = {
+            "bars": bars,
+            "high": 106.0,
+            "low": 100.0,
+            "session_start_utc": _ts(2024, 1, 2, 8),
+            "session_end_utc": _ts(2024, 1, 2, 16),
+        }
         return m
 
     def _df_london_bar(self, bar_idx: int, close: float, high: float, low: float):
@@ -170,7 +193,9 @@ class TestBreakoutEntries:
         mock_p = self._mock_pdh()
         mock_s = self._mock_session()
         with _patch_at("tempest_mcp.strategies.backtest_pdh_session", "detect_pdh_pdl", mock_p):
-            with _patch_at("tempest_mcp.strategies.backtest_pdh_session", "detect_session_levels", mock_s):
+            with _patch_at(
+                "tempest_mcp.strategies.backtest_pdh_session", "detect_session_levels", mock_s
+            ):
                 signals, _ = run_pdh_session_backtest(df)
         assert signals.iloc[57] == SignalAction.LONG_ENTRY
 
@@ -179,7 +204,9 @@ class TestBreakoutEntries:
         mock_p = self._mock_pdh(pdh=103.0, pdl=97.0, position="inside_range")
         mock_s = self._mock_session()
         with _patch_at("tempest_mcp.strategies.backtest_pdh_session", "detect_pdh_pdl", mock_p):
-            with _patch_at("tempest_mcp.strategies.backtest_pdh_session", "detect_session_levels", mock_s):
+            with _patch_at(
+                "tempest_mcp.strategies.backtest_pdh_session", "detect_session_levels", mock_s
+            ):
                 signals, _ = run_pdh_session_backtest(df)
         assert signals.iloc[57] == SignalAction.SHORT_ENTRY
 
@@ -188,7 +215,9 @@ class TestBreakoutEntries:
         mock_p = self._mock_pdh(pdh=103.0, pdl=97.0, position="inside_range")
         mock_s = self._mock_session()
         with _patch_at("tempest_mcp.strategies.backtest_pdh_session", "detect_pdh_pdl", mock_p):
-            with _patch_at("tempest_mcp.strategies.backtest_pdh_session", "detect_session_levels", mock_s):
+            with _patch_at(
+                "tempest_mcp.strategies.backtest_pdh_session", "detect_session_levels", mock_s
+            ):
                 signals, _ = run_pdh_session_backtest(df)
         assert signals.iloc[57] == SignalAction.HOLD
 
@@ -198,14 +227,38 @@ class TestBreakoutEntries:
         mock_p = self._mock_pdh()
         mock_s = MagicMock(return_value={"bars": 0, "high": float("nan"), "low": float("nan")})
         with _patch_at("tempest_mcp.strategies.backtest_pdh_session", "detect_pdh_pdl", mock_p):
-            with _patch_at("tempest_mcp.strategies.backtest_pdh_session", "detect_session_levels", mock_s):
+            with _patch_at(
+                "tempest_mcp.strategies.backtest_pdh_session", "detect_session_levels", mock_s
+            ):
                 signals, _ = run_pdh_session_backtest(df)
         assert signals.iloc[3] == SignalAction.HOLD
+
+    def test_no_entry_when_current_bar_is_outside_session_window(self):
+        """Prior London bars in the window must not qualify a non-session breakout bar."""
+        df = self._df_london_bar(20, close=106.0, high=106.5, low=100.0)
+        bar_time = df.index[20]
+        mock_p = self._mock_pdh()
+        mock_s = MagicMock(
+            return_value={
+                "bars": 9,
+                "high": 106.0,
+                "low": 100.0,
+                "session_start_utc": bar_time.normalize() + pd.Timedelta(hours=8),
+                "session_end_utc": bar_time.normalize() + pd.Timedelta(hours=16),
+            }
+        )
+        with _patch_at("tempest_mcp.strategies.backtest_pdh_session", "detect_pdh_pdl", mock_p):
+            with _patch_at(
+                "tempest_mcp.strategies.backtest_pdh_session", "detect_session_levels", mock_s
+            ):
+                signals, _ = run_pdh_session_backtest(df)
+        assert signals.iloc[20] == SignalAction.HOLD
 
 
 # ---------------------------------------------------------------------------
 # SL / TP tests
 # ---------------------------------------------------------------------------
+
 
 class TestStopLossTakeProfit:
     def _mock_pdh_session(self, pdh=105.0, pdl=97.0):
@@ -216,7 +269,13 @@ class TestStopLossTakeProfit:
             "position": "above_pdh",
         }
         mock_s = MagicMock()
-        mock_s.return_value = {"bars": 8, "high": 107.0, "low": 100.0}
+        mock_s.return_value = {
+            "bars": 8,
+            "high": 107.0,
+            "low": 100.0,
+            "session_start_utc": _ts(2024, 1, 2, 8),
+            "session_end_utc": _ts(2024, 1, 2, 16),
+        }
         return mock_p, mock_s
 
     def _df_with_atr_seed(self, bar_idx: int, close: float, next_bar: tuple) -> pd.DataFrame:
@@ -244,7 +303,9 @@ class TestStopLossTakeProfit:
         df = self._df_with_atr_seed(57, close=106.0, next_bar=(107.0, 108.0, 100.0, 105.0))
         mock_p, mock_s = self._mock_pdh_session()
         with _patch_at("tempest_mcp.strategies.backtest_pdh_session", "detect_pdh_pdl", mock_p):
-            with _patch_at("tempest_mcp.strategies.backtest_pdh_session", "detect_session_levels", mock_s):
+            with _patch_at(
+                "tempest_mcp.strategies.backtest_pdh_session", "detect_session_levels", mock_s
+            ):
                 signals, _ = run_pdh_session_backtest(df, atr_multiplier=1.5)
         assert signals.iloc[57] == SignalAction.LONG_ENTRY
 
@@ -254,7 +315,9 @@ class TestStopLossTakeProfit:
         df = self._df_with_atr_seed(57, close=106.0, next_bar=(107.0, 120.0, 103.0, 115.0))
         mock_p, mock_s = self._mock_pdh_session()
         with _patch_at("tempest_mcp.strategies.backtest_pdh_session", "detect_pdh_pdl", mock_p):
-            with _patch_at("tempest_mcp.strategies.backtest_pdh_session", "detect_session_levels", mock_s):
+            with _patch_at(
+                "tempest_mcp.strategies.backtest_pdh_session", "detect_session_levels", mock_s
+            ):
                 signals, _ = run_pdh_session_backtest(df)
         assert signals.iloc[57] == SignalAction.LONG_ENTRY
         assert signals.iloc[58] == SignalAction.LONG_EXIT
@@ -265,7 +328,9 @@ class TestStopLossTakeProfit:
         df = self._df_with_atr_seed(57, close=106.0, next_bar=(103.0, 110.0, 99.0, 100.5))
         mock_p, mock_s = self._mock_pdh_session()
         with _patch_at("tempest_mcp.strategies.backtest_pdh_session", "detect_pdh_pdl", mock_p):
-            with _patch_at("tempest_mcp.strategies.backtest_pdh_session", "detect_session_levels", mock_s):
+            with _patch_at(
+                "tempest_mcp.strategies.backtest_pdh_session", "detect_session_levels", mock_s
+            ):
                 signals, _ = run_pdh_session_backtest(df)
         assert signals.iloc[57] == SignalAction.LONG_ENTRY
         assert signals.iloc[58] == SignalAction.LONG_EXIT
@@ -274,6 +339,7 @@ class TestStopLossTakeProfit:
 # ---------------------------------------------------------------------------
 # Engine integration tests
 # ---------------------------------------------------------------------------
+
 
 class TestEngineIntegration:
     def test_engine_run_called_once(self):
@@ -303,13 +369,16 @@ class TestEngineIntegration:
 # Edge cases
 # ---------------------------------------------------------------------------
 
+
 class TestEdgeCases:
     def test_insufficient_data_no_signals(self):
         df = _hourly_range(_ts(2023, 12, 31), 50, start_price=100.0)
         mock_p = MagicMock(return_value={"position": "insufficient_data"})
         mock_s = MagicMock(return_value={"bars": 8, "high": 106.0, "low": 100.0})
         with _patch_at("tempest_mcp.strategies.backtest_pdh_session", "detect_pdh_pdl", mock_p):
-            with _patch_at("tempest_mcp.strategies.backtest_pdh_session", "detect_session_levels", mock_s):
+            with _patch_at(
+                "tempest_mcp.strategies.backtest_pdh_session", "detect_session_levels", mock_s
+            ):
                 signals, _ = run_pdh_session_backtest(df)
         non_hold = signals[signals != SignalAction.HOLD]
         assert len(non_hold) == 0
@@ -319,17 +388,140 @@ class TestEdgeCases:
         df.iloc[57, df.columns.get_loc("high")] = 106.0
         df.iloc[57, df.columns.get_loc("low")] = 100.0
         df.iloc[57, df.columns.get_loc("close")] = 106.0
-        mock_p = MagicMock(return_value={"previous_day_high": 105.0, "previous_day_low": 97.0, "position": "above_pdh"})
+        mock_p = MagicMock(
+            return_value={
+                "previous_day_high": 105.0,
+                "previous_day_low": 97.0,
+                "position": "above_pdh",
+            }
+        )
         mock_s = MagicMock(return_value={"bars": 0, "high": float("nan"), "low": float("nan")})
         with _patch_at("tempest_mcp.strategies.backtest_pdh_session", "detect_pdh_pdl", mock_p):
-            with _patch_at("tempest_mcp.strategies.backtest_pdh_session", "detect_session_levels", mock_s):
+            with _patch_at(
+                "tempest_mcp.strategies.backtest_pdh_session", "detect_session_levels", mock_s
+            ):
                 signals, _ = run_pdh_session_backtest(df)
         assert signals.iloc[57] == SignalAction.HOLD
+
+    def test_pdh_pdl_cache_recomputes_when_evaluated_bar_date_changes(self):
+        timestamps = [_ts(2024, 1, 1) + pd.Timedelta(hours=i) for i in range(48)]
+        opens = [95.0] * 48
+        highs = [96.0] * 48
+        lows = [94.0] * 48
+        closes = [95.0] * 48
+
+        breakout_idx = 34
+        highs[breakout_idx] = 107.0
+        closes[breakout_idx] = 106.0
+        opens[breakout_idx + 1] = 106.0
+        highs[breakout_idx + 1] = 110.0
+        lows[breakout_idx + 1] = 104.0
+        closes[breakout_idx + 1] = 108.0
+
+        df = _ohlcv(timestamps, opens, highs, lows, closes)
+
+        evaluated_dates: list[date] = []
+
+        def mock_detect_pdh_pdl(window: pd.DataFrame) -> dict:
+            bar_date = window.index[-1].date()
+            evaluated_dates.append(bar_date)
+            if bar_date == timestamps[0].date():
+                return {"position": "insufficient_data"}
+            return {
+                "previous_day_high": 100.0,
+                "previous_day_low": 90.0,
+                "position": "above_pdh",
+            }
+
+        mock_session = MagicMock(
+            return_value={
+                "bars": 8,
+                "high": 107.0,
+                "low": 94.0,
+                "session_start_utc": _ts(2024, 1, 2, 8),
+                "session_end_utc": _ts(2024, 1, 2, 16),
+            }
+        )
+
+        with _patch_at(
+            "tempest_mcp.strategies.backtest_pdh_session",
+            "detect_pdh_pdl",
+            MagicMock(side_effect=mock_detect_pdh_pdl),
+        ):
+            with _patch_at(
+                "tempest_mcp.strategies.backtest_pdh_session", "detect_session_levels", mock_session
+            ):
+                signals, _ = run_pdh_session_backtest(df)
+
+        assert evaluated_dates == [timestamps[0].date(), timestamps[24].date()]
+        assert signals.iloc[breakout_idx] == SignalAction.LONG_ENTRY
+
+    def test_same_direction_entry_requires_breakout_reset_before_reentry(self):
+        df = _hourly_range(_ts(2023, 12, 31), 120, start_price=100.0, seed=42)
+
+        for i in range(14):
+            df.iloc[i, df.columns.get_loc("high")] = 104.0
+            df.iloc[i, df.columns.get_loc("low")] = 100.0
+            df.iloc[i, df.columns.get_loc("close")] = 102.0
+
+        df.iloc[57, df.columns.get_loc("high")] = 106.5
+        df.iloc[57, df.columns.get_loc("low")] = 100.5
+        df.iloc[57, df.columns.get_loc("close")] = 106.0
+
+        df.iloc[58, df.columns.get_loc("open")] = 106.0
+        df.iloc[58, df.columns.get_loc("high")] = 107.5
+        df.iloc[58, df.columns.get_loc("low")] = 105.2
+        df.iloc[58, df.columns.get_loc("close")] = 107.0
+
+        df.iloc[59, df.columns.get_loc("open")] = 103.0
+        df.iloc[59, df.columns.get_loc("high")] = 104.0
+        df.iloc[59, df.columns.get_loc("low")] = 99.0
+        df.iloc[59, df.columns.get_loc("close")] = 100.0
+
+        df.iloc[60, df.columns.get_loc("open")] = 100.0
+        df.iloc[60, df.columns.get_loc("high")] = 104.5
+        df.iloc[60, df.columns.get_loc("low")] = 99.5
+        df.iloc[60, df.columns.get_loc("close")] = 104.0
+
+        df.iloc[61, df.columns.get_loc("open")] = 104.0
+        df.iloc[61, df.columns.get_loc("high")] = 107.0
+        df.iloc[61, df.columns.get_loc("low")] = 103.5
+        df.iloc[61, df.columns.get_loc("close")] = 106.0
+
+        mock_p = MagicMock(
+            return_value={
+                "previous_day_high": 105.0,
+                "previous_day_low": 97.0,
+                "position": "above_pdh",
+            }
+        )
+        mock_s = MagicMock(
+            return_value={
+                "bars": 8,
+                "high": 107.0,
+                "low": 94.0,
+                "session_start_utc": _ts(2024, 1, 2, 8),
+                "session_end_utc": _ts(2024, 1, 2, 16),
+            }
+        )
+
+        with _patch_at("tempest_mcp.strategies.backtest_pdh_session", "detect_pdh_pdl", mock_p):
+            with _patch_at(
+                "tempest_mcp.strategies.backtest_pdh_session", "detect_session_levels", mock_s
+            ):
+                signals, _ = run_pdh_session_backtest(df)
+
+        assert signals.iloc[57] == SignalAction.LONG_ENTRY
+        assert signals.iloc[58] == SignalAction.HOLD
+        assert signals.iloc[59] == SignalAction.LONG_EXIT
+        assert signals.iloc[60] == SignalAction.HOLD
+        assert signals.iloc[61] == SignalAction.LONG_ENTRY
 
 
 # ---------------------------------------------------------------------------
 # Determinism test
 # ---------------------------------------------------------------------------
+
 
 class TestDeterminism:
     def test_deterministic_output(self):
@@ -344,6 +536,7 @@ class TestDeterminism:
 # Additional tests for full-coverage real-data scenarios
 # ---------------------------------------------------------------------------
 
+
 class TestRealDataScenarios:
     """Tests using real detect_pdh_pdl / detect_session_levels on constructed data.
 
@@ -355,10 +548,7 @@ class TestRealDataScenarios:
 
     def test_no_false_signals_before_pdh_pdl_is_valid(self):
         """Before PDH/PDL is valid (insufficient_data), no breakout signals fire."""
-        # Start Dec 31 00:00. Bars 0-23 (Dec 31) have lookback → Dec 30 (not in data).
-        # Bar 24+ (Jan 1 00:00+) have lookback → Dec 31 (in data for Jan 1+).
-        # Use Asia-only data so no false entries occur during warmup.
-        df = _hourly_range(_ts(2023, 12, 31), 96, start_price=100.0, seed=99)
+        df = _intraday_hours_range(_ts(2023, 12, 31), 4, hours=range(9), price=102.0)
         signals, _ = run_pdh_session_backtest(df)
         # Asia-only data → no eligible session → always HOLD
         non_hold = signals[signals != SignalAction.HOLD]
@@ -368,6 +558,7 @@ class TestRealDataScenarios:
 # ---------------------------------------------------------------------------
 # Phase 2 contract tests
 # ---------------------------------------------------------------------------
+
 
 class TestPhase2Contract:
     """Phase 2 shared contract: strategy consumes resolved OHLCV from caller.

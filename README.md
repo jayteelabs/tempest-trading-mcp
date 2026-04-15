@@ -137,6 +137,15 @@ uv run ruff check src/
 uv run ruff format src/
 ```
 
+### Live-Data Integration Tests
+
+```bash
+# Run Phase 2 backtest live-data integration suite (ENG-64)
+# This fetches real BTCUSDT OHLCV via CCXT and validates strategy contracts
+# across both 1h and 4h timeframes
+uv run pytest --run-integration tests/test_phase2_backtest_live_integration.py -v
+```
+
 ### Error Codes
 
 | Range | Category |
