@@ -17,19 +17,22 @@ from __future__ import annotations
 
 import math
 import warnings
+from collections.abc import Callable
+from datetime import timedelta, timezone
 
 import ccxt
 import numpy as np
 import pandas as pd
 import pytest
 
-from tempest_mcp.backtest.engine import BacktestEngine, SignalAction
-from tempest_mcp.data import get_live_adapter
-from tempest_mcp.strategies import (
-    run_ema_stack_backtest,
-    run_pdh_session_backtest,
-    run_vwap_anchored_backtest,
+from tempest_mcp import strategies
+from tempest_mcp.backtest.engine import (
+    BacktestEngine,
+    PositionDirection,
+    SignalAction,
+    Trade,
 )
+from tempest_mcp.data import get_live_adapter
 
 # =============================================================================
 # Constants
@@ -125,6 +128,13 @@ def _assert_ohlcv_contract(df: pd.DataFrame, timeframe: str) -> None:
         f"[{timeframe}] DatetimeIndex must be UTC-aware (tz is None). "
         f"Localize or convert the index to UTC."
     )
+    tz_name = (
+        getattr(df.index.tz, "key", None) or getattr(df.index.tz, "zone", None) or str(df.index.tz)
+    )
+    assert tz_name == "UTC", (
+        f"[{timeframe}] DatetimeIndex must be UTC, got {tz_name!r}. "
+        "Convert the index to UTC before running the validation gate."
+    )
     assert df.index.is_monotonic_increasing, (
         f"[{timeframe}] DatetimeIndex must be monotonic increasing. "
         f"First 5: {df.index[:5].tolist()}"
@@ -139,10 +149,10 @@ def _assert_ohlcv_contract(df: pd.DataFrame, timeframe: str) -> None:
         assert pd.api.types.is_numeric_dtype(df[col]), (
             f"[{timeframe}] Column '{col}' must be numeric, got {df[col].dtype}"
         )
-        assert df[col].notna().any(), (
-            f"[{timeframe}] Column '{col}' must have at least one non-NA value"
+        assert df[col].notna().all(), (
+            f"[{timeframe}] Column '{col}' must not contain missing values"
         )
-        assert np.isfinite(df[col].dropna().to_numpy()).all(), (
+        assert np.isfinite(df[col].to_numpy()).all(), (
             f"[{timeframe}] Column '{col}' must have only finite values. Non-finite values found."
         )
 
@@ -160,6 +170,7 @@ def _assert_ohlcv_contract(df: pd.DataFrame, timeframe: str) -> None:
 def _assert_strategy_result_contract(
     signals: pd.Series,
     engine: BacktestEngine,
+    expected_index: pd.Index,
     timeframe: str,
 ) -> None:
     """Validate strategy/backtest result meets the output contract.
@@ -171,6 +182,13 @@ def _assert_strategy_result_contract(
         f"[{timeframe}] signals must be a pd.Series, got {type(signals).__name__}"
     )
     assert len(signals) > 0, f"[{timeframe}] signals must be non-empty"
+    assert len(signals) == len(expected_index), (
+        f"[{timeframe}] signals length must match OHLCV length. "
+        f"Expected {len(expected_index)}, got {len(signals)}"
+    )
+    assert signals.index.equals(expected_index), (
+        f"[{timeframe}] signals index must align exactly to the input OHLCV index"
+    )
 
     # All signal values must be SignalAction members
     invalid_signals = [(i, s) for i, s in enumerate(signals) if not isinstance(s, SignalAction)]
@@ -206,7 +224,10 @@ def _assert_strategy_result_contract(
         assert math.isfinite(trade.net_pnl), (
             f"[{timeframe}] Trade {i}: net_pnl must be finite, got {trade.net_pnl}"
         )
-        assert trade.direction in (SignalAction.LONG_ENTRY, SignalAction.SHORT_ENTRY), (
+        assert isinstance(trade.direction, PositionDirection), (
+            f"[{timeframe}] Trade {i}: direction must be PositionDirection, got {type(trade.direction).__name__}"
+        )
+        assert trade.direction in (PositionDirection.LONG, PositionDirection.SHORT), (
             f"[{timeframe}] Trade {i}: direction must be LONG or SHORT"
         )
         assert trade.entry_time < trade.exit_time, (
@@ -237,22 +258,35 @@ def _assert_strategy_result_contract(
         )
 
 
-def _iter_phase2_strategy_entrypoints() -> list[tuple[str, callable]]:
+def _iter_phase2_strategy_entrypoints() -> list[tuple[str, Callable[..., object]]]:
     """Return list of (name, callable) for all Phase 2 backtest entrypoints.
 
-    Enforces minimum required set from ENG-64 design.
+    Pulls from the exported strategies surface so coverage cannot drift.
+    Enforces the minimum required set from ENG-64 design.
     """
-    required = {
-        "run_pdh_session_backtest": run_pdh_session_backtest,
-        "run_ema_stack_backtest": run_ema_stack_backtest,
-        "run_vwap_anchored_backtest": run_vwap_anchored_backtest,
+    exported_backtest_names = sorted(
+        name
+        for name in getattr(strategies, "__all__", [])
+        if name.startswith("run_") and name.endswith("_backtest")
+    )
+    entrypoints = [(name, getattr(strategies, name)) for name in exported_backtest_names]
+
+    required_names = {
+        "run_pdh_session_backtest",
+        "run_ema_stack_backtest",
+        "run_vwap_anchored_backtest",
     }
+    found_names = {name for name, _ in entrypoints}
+    missing = required_names.difference(found_names)
+    assert not missing, (
+        f"[ENG-64] Required Phase 2 entrypoints missing from strategies export surface: {sorted(missing)}. "
+        f"Found: {sorted(found_names)}"
+    )
 
-    # Verify required entrypoints are available
-    for name, fn in required.items():
-        assert fn is not None, f"[ENG-64] Required entrypoint '{name}' must be importable"
+    for name, fn in entrypoints:
+        assert callable(fn), f"[ENG-64] Exported entrypoint '{name}' must be callable"
 
-    return list(required.items())
+    return entrypoints
 
 
 def _make_valid_ohlcv_frame(rows: int = WARMUP_LIMIT) -> pd.DataFrame:
@@ -269,6 +303,27 @@ def _make_valid_ohlcv_frame(rows: int = WARMUP_LIMIT) -> pd.DataFrame:
         },
         index=index,
     )
+
+
+def _make_engine_with_trade(index: pd.DatetimeIndex) -> BacktestEngine:
+    engine = BacktestEngine()
+    engine._equity_curve = [100_000.0] * max(len(index) - 1, 1)
+    engine._trades = [
+        Trade(
+            entry_time=index[0],
+            exit_time=index[1],
+            entry_price=100.0,
+            exit_price=101.0,
+            size=1.0,
+            direction=PositionDirection.LONG,
+            gross_pnl=1.0,
+            net_pnl=0.8,
+            commission=0.1,
+            slippage_cost=0.1,
+            bars_held=1,
+        )
+    ]
+    return engine
 
 
 # =============================================================================
@@ -358,13 +413,58 @@ def test_phase2_all_exported_backtest_entrypoints_run_on_live_data_by_timeframe(
 
     for name, run_fn in entrypoints:
         signals, engine = run_fn(ohlcv_df=df)
-        _assert_strategy_result_contract(signals, engine, f"{timeframe}/{name}")
+        _assert_strategy_result_contract(signals, engine, df.index, f"{timeframe}/{name}")
 
 
 def test_assert_ohlcv_contract_accepts_valid_numeric_series():
     df = _make_valid_ohlcv_frame()
 
     _assert_ohlcv_contract(df, "1h")
+
+
+def test_assert_ohlcv_contract_requires_utc_timezone():
+    df = _make_valid_ohlcv_frame()
+    df.index = df.index.tz_convert(timezone(-timedelta(hours=5)))
+
+    with pytest.raises(AssertionError, match="must be UTC"):
+        _assert_ohlcv_contract(df, "1h")
+
+
+def test_assert_ohlcv_contract_rejects_missing_values():
+    df = _make_valid_ohlcv_frame()
+    df.loc[df.index[0], "close"] = np.nan
+
+    with pytest.raises(AssertionError, match="must not contain missing values"):
+        _assert_ohlcv_contract(df, "1h")
+
+
+def test_iter_phase2_strategy_entrypoints_matches_export_surface():
+    entrypoints = _iter_phase2_strategy_entrypoints()
+
+    assert [name for name, _ in entrypoints] == [
+        name
+        for name in sorted(strategies.__all__)
+        if name.startswith("run_") and name.endswith("_backtest")
+    ]
+    assert "run_elliot_wave_backtest" in [name for name, _ in entrypoints]
+
+
+def test_assert_strategy_result_contract_accepts_aligned_signals_and_trade_direction():
+    df = _make_valid_ohlcv_frame()
+    signals = pd.Series(SignalAction.HOLD, index=df.index, dtype=object)
+    engine = _make_engine_with_trade(df.index)
+
+    _assert_strategy_result_contract(signals, engine, df.index, "1h/run_ema_stack_backtest")
+
+
+def test_assert_strategy_result_contract_rejects_misaligned_signals():
+    df = _make_valid_ohlcv_frame()
+    shifted_index = df.index.shift(1, freq="h")
+    signals = pd.Series(SignalAction.HOLD, index=shifted_index, dtype=object)
+    engine = _make_engine_with_trade(df.index)
+
+    with pytest.raises(AssertionError, match="align exactly"):
+        _assert_strategy_result_contract(signals, engine, df.index, "1h/run_ema_stack_backtest")
 
 
 def test_fetch_live_ohlcv_with_retry_re_raises_contract_violations(monkeypatch):
