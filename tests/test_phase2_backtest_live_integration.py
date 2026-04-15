@@ -18,6 +18,8 @@ from __future__ import annotations
 import math
 import warnings
 
+import ccxt
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -36,6 +38,7 @@ from tempest_mcp.strategies import (
 CANONICAL_SYMBOL = "BTCUSDT"
 WARMUP_LIMIT = 200  # minimum bars for EMA stack warmup
 MAX_RETRIES = 3
+TRANSIENT_FETCH_EXCEPTIONS = (ccxt.NetworkError, ConnectionError, TimeoutError)
 
 
 # =============================================================================
@@ -64,7 +67,12 @@ def _fetch_live_ohlcv_with_retry(
             # Validate contract immediately — hard fail on violation
             _assert_ohlcv_contract(df, timeframe)
             return df
+        except AssertionError:
+            raise
         except Exception as exc:  # noqa: BLE001
+            if not isinstance(exc, TRANSIENT_FETCH_EXCEPTIONS):
+                raise
+
             last_exception = exc
             if attempt < max_retries:
                 warnings.warn(
@@ -134,7 +142,7 @@ def _assert_ohlcv_contract(df: pd.DataFrame, timeframe: str) -> None:
         assert df[col].notna().any(), (
             f"[{timeframe}] Column '{col}' must have at least one non-NA value"
         )
-        assert math.isfinite(df[col].dropna()).all(), (
+        assert np.isfinite(df[col].dropna().to_numpy()).all(), (
             f"[{timeframe}] Column '{col}' must have only finite values. Non-finite values found."
         )
 
@@ -247,6 +255,22 @@ def _iter_phase2_strategy_entrypoints() -> list[tuple[str, callable]]:
     return list(required.items())
 
 
+def _make_valid_ohlcv_frame(rows: int = WARMUP_LIMIT) -> pd.DataFrame:
+    index = pd.date_range("2026-01-01", periods=rows, freq="h", tz="UTC")
+    base = np.linspace(100.0, 100.0 + rows - 1, rows)
+
+    return pd.DataFrame(
+        {
+            "open": base,
+            "high": base + 2.0,
+            "low": base - 2.0,
+            "close": base + 1.0,
+            "volume": np.full(rows, 10.0),
+        },
+        index=index,
+    )
+
+
 # =============================================================================
 # Tests — data contract by timeframe
 # =============================================================================
@@ -335,3 +359,63 @@ def test_phase2_all_exported_backtest_entrypoints_run_on_live_data_by_timeframe(
     for name, run_fn in entrypoints:
         signals, engine = run_fn(ohlcv_df=df)
         _assert_strategy_result_contract(signals, engine, f"{timeframe}/{name}")
+
+
+def test_assert_ohlcv_contract_accepts_valid_numeric_series():
+    df = _make_valid_ohlcv_frame()
+
+    _assert_ohlcv_contract(df, "1h")
+
+
+def test_fetch_live_ohlcv_with_retry_re_raises_contract_violations(monkeypatch):
+    class DummyAdapter:
+        def fetch_ohlcv_live(self, symbol, timeframe, limit):
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+    monkeypatch.setattr(
+        "tests.test_phase2_backtest_live_integration.get_live_adapter",
+        lambda: DummyAdapter(),
+    )
+
+    with pytest.raises(AssertionError):
+        _fetch_live_ohlcv_with_retry(CANONICAL_SYMBOL, "1h", max_retries=3)
+
+
+def test_fetch_live_ohlcv_with_retry_re_raises_non_transient_errors(monkeypatch):
+    attempts = 0
+
+    class DummyAdapter:
+        def fetch_ohlcv_live(self, symbol, timeframe, limit):
+            nonlocal attempts
+            attempts += 1
+            raise RuntimeError("bad auth")
+
+    monkeypatch.setattr(
+        "tests.test_phase2_backtest_live_integration.get_live_adapter",
+        lambda: DummyAdapter(),
+    )
+
+    with pytest.raises(RuntimeError, match="bad auth"):
+        _fetch_live_ohlcv_with_retry(CANONICAL_SYMBOL, "1h", max_retries=3)
+
+    assert attempts == 1
+
+
+def test_fetch_live_ohlcv_with_retry_skips_only_after_transient_retries(monkeypatch):
+    attempts = 0
+
+    class DummyAdapter:
+        def fetch_ohlcv_live(self, symbol, timeframe, limit):
+            nonlocal attempts
+            attempts += 1
+            raise ccxt.NetworkError("temporary outage")
+
+    monkeypatch.setattr(
+        "tests.test_phase2_backtest_live_integration.get_live_adapter",
+        lambda: DummyAdapter(),
+    )
+
+    with pytest.raises(pytest.skip.Exception, match="temporary outage"):
+        _fetch_live_ohlcv_with_retry(CANONICAL_SYMBOL, "1h", max_retries=3)
+
+    assert attempts == 3
