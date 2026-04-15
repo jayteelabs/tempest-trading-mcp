@@ -24,7 +24,8 @@ import pandas as pd
 from tempest_mcp.backtest.engine import BacktestEngine, SignalAction
 from tempest_mcp.indicators.trend.ema import calculate_ema_stack, death_cross, golden_cross
 
-# Shared Phase 2 defaults
+# Shared Phase 2 defaults (informational — strategy does not consume these;
+# the caller owns date-range planning; these are kept for contract alignment)
 TRADE_STYLE_PRESETS = {
     "day_trade": {"timeframe": "1h", "duration_days": 1},
     "swing_trade": {"timeframe": "4h", "duration_days": 7},
@@ -35,7 +36,7 @@ DEFAULT_EMA_PERIODS = [7, 25, 50, 200]
 
 
 def _ensure_utc_index(df: pd.DataFrame) -> pd.DataFrame:
-    """Return a copy with a UTC-aware DatetimeIndex."""
+    """Return a UTC-aware DataFrame, copying only if necessary."""
     if df.index.tz is None:
         df = df.copy()
         df.index = df.index.tz_localize("UTC")
@@ -167,8 +168,8 @@ def run_ema_stack_backtest(
                 # Target check
                 elif bar_high >= tp_price:
                     exit_signal = SignalAction.LONG_EXIT
-                # Trend failure: bearish stack
-                elif is_bearish:
+                # Trend failure: stack no longer bullish (neutral or bearish)
+                elif not is_bullish:
                     exit_signal = SignalAction.LONG_EXIT
             else:  # short
                 # Stop check: open or intrabar extreme
@@ -177,8 +178,8 @@ def run_ema_stack_backtest(
                 # Target check
                 elif bar_low <= tp_price:
                     exit_signal = SignalAction.SHORT_EXIT
-                # Trend failure: bullish stack
-                elif is_bullish:
+                # Trend failure: stack no longer bearish (neutral or bullish)
+                elif not is_bearish:
                     exit_signal = SignalAction.SHORT_EXIT
 
             if exit_signal is not None:

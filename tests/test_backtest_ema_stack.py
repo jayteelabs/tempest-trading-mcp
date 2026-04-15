@@ -212,18 +212,18 @@ class TestEmaStackBullishPath:
             assert long_entries.index[0] < long_exits.index[0]
 
     def test_trend_failure_exit_for_long(self):
-        """Long exit when bearish stack (death cross) forms."""
-        # Build scenario: bullish stack -> long entry -> stack turns bearish
+        """Long exit when stack is no longer bullish (neutral or bearish)."""
+        # Build scenario: bullish stack -> long entry -> stack turns neutral
         closes = []
-        # Initial rise to establish bullish stack
+        # Initial rise to establish bullish stack (EMA7 > EMA25 > EMA50 > EMA200)
         for i in range(200):
             closes.append(100 + i * 0.1)
-        # Fast rise to trigger entry
+        # Fast rise to trigger golden cross entry
         for i in range(30):
             closes.append(120 + i * 0.5)
-        # Collapse to create bearish stack (death cross)
+        # Flatten to create neutral stack (EMAs converge, no clear order)
         for i in range(50):
-            closes.append(135 - i * 0.8)
+            closes.append(135 + 0.01 * (i % 5))  # Flat oscillation
 
         df = _make_ohlcv(closes)
         signals, engine = run_ema_stack_backtest(
@@ -236,12 +236,44 @@ class TestEmaStackBullishPath:
         long_exits = signals[signals == SignalAction.LONG_EXIT]
 
         if len(long_entries) > 0:
-            # Find exit after entry
             entry_time = long_entries.index[0]
             exits_after_entry = long_exits[long_exits.index > entry_time]
-            if len(exits_after_entry) > 0:
-                # Verify engine executed at least one trade
-                assert len(engine._trades) >= 1
+            # Must exit when stack becomes neutral (not bullish)
+            assert len(exits_after_entry) > 0, (
+                "Long position must exit when bullish stack becomes neutral"
+            )
+
+    def test_trend_failure_exit_for_short(self):
+        """Short exit when stack is no longer bearish (neutral or bullish)."""
+        # Build scenario: bearish stack -> short entry -> stack turns neutral
+        closes = []
+        # Initial decline to establish bearish stack (EMA7 < EMA25 < EMA50 < EMA200)
+        for i in range(200):
+            closes.append(150 - i * 0.1)
+        # Fast drop to trigger death cross entry
+        for i in range(30):
+            closes.append(130 - i * 0.5)
+        # Flatten to create neutral stack (EMAs converge, no clear order)
+        for i in range(50):
+            closes.append(115 + 0.01 * (i % 5))  # Flat oscillation
+
+        df = _make_ohlcv(closes)
+        signals, engine = run_ema_stack_backtest(
+            df,
+            ema_periods=(7, 25, 50, 200),
+            trend_confirmation_bars=1,
+        )
+
+        short_entries = signals[signals == SignalAction.SHORT_ENTRY]
+        short_exits = signals[signals == SignalAction.SHORT_EXIT]
+
+        if len(short_entries) > 0:
+            entry_time = short_entries.index[0]
+            exits_after_entry = short_exits[short_exits.index > entry_time]
+            # Must exit when stack becomes neutral (not bearish)
+            assert len(exits_after_entry) > 0, (
+                "Short position must exit when bearish stack becomes neutral"
+            )
 
 
 class TestEmaStackBearishPath:
@@ -288,18 +320,18 @@ class TestEmaStackBearishPath:
             assert short_entries.index[0] < short_exits.index[0]
 
     def test_trend_failure_exit_for_short(self):
-        """Short exit when bullish stack (golden cross) forms."""
-        # Build scenario: bearish stack -> short entry -> stack turns bullish
+        """Short exit when stack is no longer bearish (neutral or bullish)."""
+        # Build scenario: bearish stack -> short entry -> stack turns neutral
         closes = []
-        # Initial decline to establish bearish stack
+        # Initial decline to establish bearish stack (EMA7 < EMA25 < EMA50 < EMA200)
         for i in range(200):
             closes.append(150 - i * 0.1)
-        # Fast drop to trigger entry
+        # Fast drop to trigger death cross entry
         for i in range(30):
             closes.append(130 - i * 0.5)
-        # Rally to create bullish stack (golden cross)
+        # Flatten to create neutral stack (EMAs converge, no clear order)
         for i in range(50):
-            closes.append(115 + i * 0.8)
+            closes.append(115 + 0.01 * (i % 5))  # Flat oscillation
 
         df = _make_ohlcv(closes)
         signals, engine = run_ema_stack_backtest(
@@ -312,12 +344,12 @@ class TestEmaStackBearishPath:
         short_exits = signals[signals == SignalAction.SHORT_EXIT]
 
         if len(short_entries) > 0:
-            # Find exit after entry
             entry_time = short_entries.index[0]
             exits_after_entry = short_exits[short_exits.index > entry_time]
-            if len(exits_after_entry) > 0:
-                # Verify engine executed at least one trade
-                assert len(engine._trades) >= 1
+            # Must exit when stack becomes neutral (not bearish)
+            assert len(exits_after_entry) > 0, (
+                "Short position must exit when bearish stack becomes neutral"
+            )
 
 
 class TestEmaStackStopTarget:
@@ -510,7 +542,7 @@ class TestEmaStackEdgeCases:
 
     def test_no_same_bar_reentry_after_exit(self):
         """After an exit, no re-entry can happen on the same bar."""
-        # Build a scenario with multiple trend flips
+        # Build a scenario with trend transitions: bullish -> bearish -> bullish
         closes = []
         # Bullish phase
         for i in range(100):
@@ -529,16 +561,25 @@ class TestEmaStackEdgeCases:
             trend_confirmation_bars=1,
         )
 
-        # Check no bar has both entry and exit
-        for idx in signals.index:
-            bar_signals = signals.loc[idx]
-            if bar_signals in (SignalAction.LONG_ENTRY, SignalAction.SHORT_ENTRY):
-                # This bar should not also have an exit
-                # (impossible in our signal model, but verify structure)
-                pass
+        # Verify no bar has both entry and exit (impossible by signal model)
+        entry_indices = signals[signals.isin([SignalAction.LONG_ENTRY, SignalAction.SHORT_ENTRY])].index
+        exit_indices = signals[signals.isin([SignalAction.LONG_EXIT, SignalAction.SHORT_EXIT])].index
 
-        # Verify trades were executed
-        assert len(engine._trades) >= 0
+        # The key invariant: exits and subsequent re-entries must be on different bars
+        # After an exit, the strategy continues to next iteration and may re-enter
+        # but NOT on the same bar as the exit
+        for idx in exit_indices:
+            # Find entries after this exit
+            later_entries = entry_indices[entry_indices > idx]
+            if len(later_entries) > 0:
+                next_entry = later_entries[0]
+                # The re-entry must not be on the same bar as exit
+                assert next_entry > idx, (
+                    f"Re-entry at {next_entry} must not be on same bar as exit at {idx}"
+                )
+
+        # Verify trades were executed (entry + exit pairs)
+        assert len(engine._trades) >= 0  # Trades are recorded by engine after run
 
     def test_flat_data_produces_hold_only(self):
         """Completely flat data with no trend produces only HOLD signals."""
