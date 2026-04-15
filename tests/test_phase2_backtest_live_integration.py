@@ -87,7 +87,7 @@ def _fetch_live_ohlcv_with_retry(
     # All retries exhausted — skip with loud diagnostic
     exc_class = type(last_exception).__name__ if last_exception else "Unknown"
     exc_msg = str(last_exception) if last_exception else "no exception details"
-    pytest.skip(
+    raise pytest.skip.Exception(
         f"[{symbol} {timeframe}] Bounded retries ({max_retries}) exhausted. "
         f"Skipping due to transient upstream CCXT instability: {exc_class}: {exc_msg}"
     )
