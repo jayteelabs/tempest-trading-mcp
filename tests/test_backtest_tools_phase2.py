@@ -16,6 +16,7 @@ from tempest_mcp.tools.backtest_tools import (
     _run_direct_runner,
     _serialize_result,
     _validate_initial_capital,
+    _validate_strategy_ids,
     _validation_error,
     backtest_strategy,
 )
@@ -34,6 +35,7 @@ class TestBacktestToolsRegistry:
             "backtest_ema_stack",
             "backtest_order_blocks",
             "backtest_elliot_wave",
+            "compare_strategies",
         }
         assert set(BACKTEST_TOOLS.keys()) == expected
 
@@ -497,3 +499,94 @@ class TestBacktestHandlerValidation:
 
         assert result["success"] is True
         assert captured["initial_capital"] == 54321.0
+
+
+class TestValidateStrategyIds:
+    """Tests for _validate_strategy_ids (ENG-25 Shion hardening)."""
+
+    def test_none_input_returns_error(self):
+        """None strategy_ids returns clean error."""
+        ids, error = _validate_strategy_ids(None)
+        assert ids == []
+        assert error == "strategy_ids is required"
+
+    def test_non_array_input_returns_error(self):
+        """Non-array strategy_ids returns clean error."""
+        ids, error = _validate_strategy_ids("pdh_session")
+        assert ids == []
+        assert error == "strategy_ids must be an array"
+
+        ids, error = _validate_strategy_ids({"pdh_session": True})
+        assert ids == []
+        assert error == "strategy_ids must be an array"
+
+    def test_too_few_strategy_ids(self):
+        """Less than 2 strategy IDs returns error."""
+        ids, error = _validate_strategy_ids([])
+        assert ids == []
+        assert error == "strategy_ids must contain at least 2 strategy IDs"
+
+        ids, error = _validate_strategy_ids(["pdh_session"])
+        assert ids == []
+        assert error == "strategy_ids must contain at least 2 strategy IDs"
+
+    def test_none_element_returns_error(self):
+        """None element in array returns clean error with index."""
+        ids, error = _validate_strategy_ids(["pdh_session", None, "rsi"])
+        assert ids == []
+        assert error == "strategy_ids[1] cannot be None"
+
+    def test_dict_element_returns_error(self):
+        """Dict element in array returns clean error."""
+        ids, error = _validate_strategy_ids(["pdh_session", {"key": "value"}])
+        assert ids == []
+        assert error == "strategy_ids[1] must be a string, got dict"
+
+    def test_list_element_returns_error(self):
+        """List element in array returns clean error."""
+        ids, error = _validate_strategy_ids(["pdh_session", ["nested"]])
+        assert ids == []
+        assert error == "strategy_ids[1] must be a string, got array"
+
+    def test_unknown_strategy_ids(self):
+        """Unknown strategy IDs return clean error with allowed list."""
+        ids, error = _validate_strategy_ids(["pdh_session", "unknown_strategy"])
+        assert ids == []
+        assert "Unknown strategy_ids: unknown_strategy" in error
+        assert "Allowed:" in error
+
+    def test_duplicate_strategy_ids(self):
+        """Duplicate strategy IDs return clean error."""
+        ids, error = _validate_strategy_ids(["pdh_session", "rsi", "pdh_session"])
+        assert ids == []
+        assert error == "Duplicate strategy_id: pdh_session"
+
+    def test_valid_strategy_ids(self):
+        """Valid strategy IDs return correctly."""
+        ids, error = _validate_strategy_ids(["pdh_session", "rsi", "vwap"])
+        assert error is None
+        assert ids == ["pdh_session", "rsi", "vwap"]
+
+    def test_string_enum_coerced_to_str(self):
+        """StringEnum and other compat types are coerced to string."""
+        class FakeStringEnum:
+            def __init__(self, value):
+                self._value = value
+            def __str__(self):
+                return self._value
+
+        ids, error = _validate_strategy_ids([FakeStringEnum("pdh_session"), "rsi"])
+        assert error is None
+        assert ids == ["pdh_session", "rsi"]
+
+    def test_duplicate_after_coercion(self):
+        """Duplicates after string coercion are detected."""
+        class FakeId:
+            def __init__(self, value):
+                self._value = value
+            def __str__(self):
+                return self._value
+
+        ids, error = _validate_strategy_ids([FakeId("pdh_session"), "pdh_session"])
+        assert ids == []
+        assert error == "Duplicate strategy_id: pdh_session"
