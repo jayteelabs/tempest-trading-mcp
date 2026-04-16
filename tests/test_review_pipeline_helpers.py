@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".github" / "scripts"))
 
+from review import producer_common
 from review.collect_changed_lines import parse_unified_diff
 from review.dedupe_findings import fingerprint_for, merge_duplicate_findings
 from review.producer_common import design_reference_paths
@@ -251,6 +253,40 @@ def test_build_review_body_uses_brief_summary_and_footer() -> None:
     assert "_Duplicates: 1 | Unverifiable: 0 | Outdated: 1_" in body
 
 
+def test_build_review_body_calls_out_setup_transport_failures() -> None:
+    body = build_review_body(
+        title="bug(ci): fix oversized review prompt transport [ENG-65]",
+        head_sha="deadbeef",
+        diff_summary={"file_count": 2, "areas": [".github/workflows", "tests"]},
+        published_inline=[],
+        summary_only=[],
+        drops=[],
+        artifact_errors=[
+            "SETUP/TRANSPORT ERROR: review/design - opencode exited non-zero before findings were parsed"
+        ],
+        publish_errors=[],
+    )
+
+    assert (
+        "No publishable review findings were produced because one or more lanes failed before findings could be generated."
+        in body
+    )
+    assert "### Lane setup/transport errors" in body
+    assert "SETUP/TRANSPORT ERROR: review/design" in body
+
+
+def test_review_workflow_uses_trusted_runtime_for_publish() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "review.yml").read_text(encoding="utf-8")
+    publish_section = workflow.split("  review_publish:\n", 1)[1]
+
+    assert "ref: ${{ github.event.pull_request.base.sha }}" in publish_section
+    assert "path: trusted-review-runtime" in publish_section
+    assert "trusted-review-runtime/artifacts" in publish_section
+    assert "working-directory: ${{ env.TRUSTED_REVIEW_ROOT }}" in publish_section
+    assert "PYTHONPATH: ${{ env.TRUSTED_REVIEW_ROOT }}/.github/scripts" in publish_section
+    assert "${{ github.workspace }}/.github/scripts" not in publish_section
+
+
 def test_severity_style_uses_expected_header_metadata() -> None:
     assert severity_style("critical")[0:2] == ("🔴", "CRITICAL")
     assert severity_style("high")[0:2] == ("🟠", "HIGH")
@@ -331,3 +367,30 @@ def test_github_api_rejects_malformed_repository() -> None:
         assert "owner/repo" in str(exc)
     else:
         raise AssertionError("expected malformed repository to be rejected")
+
+
+def test_run_opencode_uses_stdin_for_oversized_prompts(monkeypatch) -> None:
+    prompt = "bundle:" + ("x" * 200000)
+    captured: dict[str, object] = {}
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(command, 0, stdout='{"findings": []}\n', stderr="")
+
+    monkeypatch.setattr(producer_common.subprocess, "run", fake_run)
+
+    output = producer_common.run_opencode("shuna", prompt)
+
+    assert output == '{"findings": []}'
+    assert captured["command"] == [
+        "/home/tempest/.opencode/bin/opencode",
+        "run",
+        "--agent",
+        "shuna",
+        "--model",
+        producer_common.MODEL,
+    ]
+    assert captured["kwargs"]["input"] == prompt
+    assert captured["kwargs"]["text"] is True
+    assert prompt not in captured["command"]

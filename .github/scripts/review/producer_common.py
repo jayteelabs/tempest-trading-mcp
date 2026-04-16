@@ -14,6 +14,7 @@ MODEL = "minimax/MiniMax-M2.7-highspeed"
 MAX_DIFF_CHARS = 60000
 MAX_REFERENCE_CHARS = 12000
 OPENCODE_TIMEOUT_SECONDS = 300
+SETUP_ERROR_PREFIX = "SETUP/TRANSPORT ERROR"
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -194,14 +195,19 @@ Diff:
 
 def run_opencode(agent: str, prompt: str) -> str:
     result = subprocess.run(
-        ["/home/tempest/.opencode/bin/opencode", "run", "--agent", agent, "--model", MODEL, prompt],
+        ["/home/tempest/.opencode/bin/opencode", "run", "--agent", agent, "--model", MODEL],
         cwd=repo_root(),
         capture_output=True,
+        input=prompt,
         text=True,
         check=True,
         timeout=OPENCODE_TIMEOUT_SECONDS,
     )
     return result.stdout.strip()
+
+
+def format_setup_error(stage: str, detail: str) -> str:
+    return f"{SETUP_ERROR_PREFIX}: {stage} - {detail}"
 
 
 def execute_review(*, agent: str, stage: str) -> int:
@@ -228,11 +234,25 @@ def execute_review(*, agent: str, stage: str) -> int:
         findings = normalize_findings(payload, stage)
     except subprocess.CalledProcessError as exc:
         message = exc.stderr.strip() or exc.stdout.strip() or str(exc)
-        errors.append(f"{stage} subprocess failed: {message}")
+        errors.append(
+            format_setup_error(
+                stage, f"opencode exited non-zero before findings were parsed: {message}"
+            )
+        )
     except subprocess.TimeoutExpired as exc:
-        errors.append(f"{stage} timed out after {exc.timeout}s")
+        errors.append(
+            format_setup_error(
+                stage,
+                f"opencode timed out after {exc.timeout}s before findings were produced",
+            )
+        )
     except (OSError, ValueError) as exc:
-        errors.append(f"{stage} failed: {exc}\n{traceback.format_exc().strip()}")
+        errors.append(
+            format_setup_error(
+                stage,
+                f"review setup or transport failed before findings were produced: {exc}\n{traceback.format_exc().strip()}",
+            )
+        )
 
     write_artifact(
         args.out,

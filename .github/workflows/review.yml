@@ -32,6 +32,7 @@ jobs:
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       GITHUB_REPOSITORY: ${{ github.repository }}
+      PYTHONPATH: ${{ github.workspace }}/.github/scripts
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -68,6 +69,7 @@ jobs:
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       GITHUB_REPOSITORY: ${{ github.repository }}
+      PYTHONPATH: ${{ github.workspace }}/.github/scripts
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -104,6 +106,7 @@ jobs:
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       GITHUB_REPOSITORY: ${{ github.repository }}
+      PYTHONPATH: ${{ github.workspace }}/.github/scripts
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -143,16 +146,19 @@ jobs:
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       GITHUB_REPOSITORY: ${{ github.repository }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TRUSTED_REVIEW_ROOT: ${{ github.workspace }}/trusted-review-runtime
     steps:
-      - name: Checkout repository
+      - name: Checkout trusted base review runtime
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
+          path: trusted-review-runtime
 
-      - name: Download review artifacts
+      - name: Download untrusted review artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts/
+          path: trusted-review-runtime/artifacts
 
       - name: Refresh tempest-engineering app token
         run: |
@@ -161,11 +167,13 @@ jobs:
           echo "GH_TOKEN=$(cat ~/.config/tempest-engineering/github-mcp.token)" >> "$GITHUB_ENV"
 
       - name: Publish consolidated review
+        working-directory: ${{ env.TRUSTED_REVIEW_ROOT }}
+        env:
+          PYTHONPATH: ${{ env.TRUSTED_REVIEW_ROOT }}/.github/scripts
         run: |
           python3 -m review.publish_review \
             --pr "$PR_NUMBER" \
             --title "$PR_TITLE" \
-            --body "$PR_BODY" \
             --url "$PR_URL" \
             --base-sha "$BASE_SHA" \
             --head-sha "$HEAD_SHA" \
