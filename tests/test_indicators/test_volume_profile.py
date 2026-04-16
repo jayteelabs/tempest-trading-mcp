@@ -1,18 +1,19 @@
 """Unit tests for Volume Profile indicator."""
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 import pytest
 
 from tempest_mcp.indicators.volume.volume_profile import (
-    calculate_volume_profile,
-    COL_BIN_LOW,
+    COL_BIN_CANDLE_COUNT,
     COL_BIN_HIGH,
+    COL_BIN_LOW,
     COL_BIN_MID,
     COL_BIN_VOLUME,
-    COL_BIN_CANDLE_COUNT,
     COL_IS_HVN,
     COL_IS_LVN,
+    _calculate_value_area,
+    calculate_volume_profile,
 )
 
 
@@ -131,7 +132,6 @@ class TestCalculateVolumeProfileFixed:
         assert profile[COL_BIN_VOLUME].sum() == 10000  # Total volume
 
         # POC should be in the middle of the price range
-        poc_bin_idx = profile.attrs["poc_bin_idx"]
         poc_price = profile.attrs["poc_price"]
         assert 100 <= poc_price <= 110
 
@@ -261,6 +261,33 @@ class TestCalculateVolumeProfileFixed:
         with pytest.raises(ValueError, match="value_area_pct"):
             calculate_volume_profile(ohlcv, value_area_pct=-0.5)
 
+    def test_invalid_profile_type_raises(self):
+        """Test that unsupported profile types fail deterministically."""
+        ohlcv = _create_ohlcv(n=20)
+
+        with pytest.raises(ValueError, match="Invalid profile_type"):
+            calculate_volume_profile(ohlcv, profile_type="range")
+
+    def test_vah_uses_upper_edge_of_last_value_area_bin(self):
+        """Test that VAH resolves to the upper edge of the last included bin."""
+        dates = pd.date_range("2024-01-01", periods=10, freq="h", tz="UTC")
+        ohlcv = pd.DataFrame(
+            {
+                "open": [105.0] * 10,
+                "high": [105.0] * 9 + [110.0],
+                "low": [105.0] * 9 + [100.0],
+                "close": [105.0] * 10,
+                "volume": [1000.0] * 9 + [0.0],
+            },
+            index=dates,
+        )
+
+        profile = calculate_volume_profile(ohlcv, bin_count=10, profile_type="fixed")
+        poc_bin_idx = profile.attrs["poc_bin_idx"]
+
+        assert profile.attrs["val_price"] == pytest.approx(profile.iloc[poc_bin_idx][COL_BIN_LOW])
+        assert profile.attrs["vah_price"] == pytest.approx(profile.iloc[poc_bin_idx][COL_BIN_HIGH])
+
 
 class TestCalculateVolumeProfileDynamic:
     """Tests for calculate_volume_profile with dynamic mode."""
@@ -313,6 +340,53 @@ class TestCalculateVolumeProfileDynamic:
                 profile_type="dynamic",
                 dynamic_mode="pct",
             )
+
+    def test_invalid_dynamic_mode_raises(self):
+        """Test that invalid dynamic modes raise ValueError."""
+        ohlcv = _create_ohlcv(n=20)
+
+        with pytest.raises(ValueError, match="Invalid dynamic_mode"):
+            calculate_volume_profile(ohlcv, profile_type="dynamic", dynamic_mode="volatility")
+
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({"profile_type": "dynamic", "dynamic_mode": "atr", "atr_period": 0}, "atr_period"),
+            ({"profile_type": "dynamic", "dynamic_mode": "atr", "atr_mult": 0}, "atr_mult"),
+            ({"profile_type": "dynamic", "dynamic_mode": "pct", "range_pct": 0}, "range_pct"),
+            ({"profile_type": "dynamic", "dynamic_mode": "pct", "range_pct": -0.01}, "range_pct"),
+        ],
+    )
+    def test_non_positive_dynamic_thresholds_raise(self, kwargs, message):
+        """Test that dynamic threshold inputs must be positive."""
+        ohlcv = _create_ohlcv(n=20)
+
+        with pytest.raises(ValueError, match=message):
+            calculate_volume_profile(ohlcv, **kwargs)
+
+    def test_dynamic_pct_uses_requested_bin_width(self):
+        """Test that dynamic pct mode uses the derived bin width directly."""
+        dates = pd.date_range("2024-01-01", periods=5, freq="h", tz="UTC")
+        ohlcv = pd.DataFrame(
+            {
+                "open": [100.0] * 5,
+                "high": [110.0] * 5,
+                "low": [100.0] * 5,
+                "close": [100.0] * 5,
+                "volume": [1000.0] * 5,
+            },
+            index=dates,
+        )
+
+        profile = calculate_volume_profile(
+            ohlcv,
+            profile_type="dynamic",
+            dynamic_mode="pct",
+            range_pct=0.02,
+        )
+
+        widths = profile[COL_BIN_HIGH] - profile[COL_BIN_LOW]
+        np.testing.assert_allclose(widths.to_numpy(), np.full(len(widths), 2.0))
 
 
 class TestVolumeProfileMetadata:
@@ -375,6 +449,17 @@ class TestVolumeProfileMetadata:
 
         valid_shapes = {"bell", "bimodal", "directional", "flat", "single"}
         assert profile.attrs["profile_shape"] in valid_shapes
+
+    def test_value_area_reaches_target_across_zero_volume_gaps(self):
+        """Test that value-area expansion does not stop at zero-volume gaps."""
+        bin_volumes = pd.Series([50.0, 0.0, 0.0, 30.0, 20.0])
+
+        va_low_idx, va_high_idx = _calculate_value_area(bin_volumes, poc_idx=0, value_area_pct=0.70)
+
+        covered_volume = float(bin_volumes.iloc[va_low_idx : va_high_idx + 1].sum())
+        assert (va_low_idx, va_high_idx) == (0, 3)
+        assert covered_volume >= bin_volumes.sum() * 0.70
+        assert covered_volume == pytest.approx(80.0)
 
 
 class TestVolumeProfileIntegration:

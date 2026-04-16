@@ -32,6 +32,11 @@ COL_BIN_CANDLE_COUNT = "bin_candle_count"
 COL_IS_HVN = "is_hvn"
 COL_IS_LVN = "is_lvn"
 
+VALID_PROFILE_TYPES = ("fixed", "dynamic")
+VALID_DYNAMIC_MODES = ("atr", "pct")
+HVN_QUANTILE = 0.80
+LVN_QUANTILE = 0.20
+
 
 def _validate_ohlcv(ohlcv: pd.DataFrame) -> None:
     """Validate OHLCV DataFrame input.
@@ -61,6 +66,12 @@ def _validate_ohlcv(ohlcv: pd.DataFrame) -> None:
 
     if not ohlcv.index.is_monotonic_increasing:
         raise ValueError("OHLCV DatetimeIndex must be monotonic increasing")
+
+    if (ohlcv["high"] < ohlcv["low"]).any():
+        raise ValueError("OHLCV high values must be greater than or equal to low values")
+
+    if (ohlcv["volume"] < 0).any():
+        raise ValueError("OHLCV volume values must be non-negative")
 
 
 def _allocate_volume_to_bins(
@@ -97,6 +108,15 @@ def _allocate_volume_to_bins(
         # Calculate candle range width
         candle_width = candle_high - candle_low
 
+        if candle_width == 0:
+            for j in range(n_bins):
+                bin_low = bin_edges[j]
+                bin_high = bin_edges[j + 1]
+                if bin_low <= candle_low <= bin_high:
+                    bin_volumes.iloc[j] += candle_vol
+                    break
+            continue
+
         # Find bins that intersect with [candle_low, candle_high]
         for j in range(n_bins):
             bin_low = bin_edges[j]
@@ -112,21 +132,14 @@ def _allocate_volume_to_bins(
 
             # Check for intersection: bin_low < candle_high AND bin_high > candle_low
             if bin_low < candle_high and bin_high > candle_low:
-                if candle_width > 0:
-                    # Calculate intersection width
-                    intersect_low = max(bin_low, candle_low)
-                    intersect_high = min(bin_high, candle_high)
-                    intersect_width = intersect_high - intersect_low
+                # Calculate intersection width
+                intersect_low = max(bin_low, candle_low)
+                intersect_high = min(bin_high, candle_high)
+                intersect_width = intersect_high - intersect_low
 
-                    # Allocate proportional volume
-                    proportion = intersect_width / candle_width
-                    bin_volumes.iloc[j] += candle_vol * proportion
-                else:
-                    # Flat candle (candle_low == candle_high)
-                    # Allocate full volume to bin containing this price
-                    if bin_low <= candle_low <= bin_high:
-                        bin_volumes.iloc[j] += candle_vol
-                        break  # Only one bin gets full volume for flat candle
+                # Allocate proportional volume
+                proportion = intersect_width / candle_width
+                bin_volumes.iloc[j] += candle_vol * proportion
 
     return bin_volumes
 
@@ -173,6 +186,21 @@ def _calculate_pct_based_range(close: pd.Series, range_pct: float) -> float:
     return last_close * range_pct
 
 
+def _build_dynamic_bin_edges(price_min: float, price_max: float, bin_width: float) -> pd.Index:
+    """Build dynamic profile bin edges using the requested step size."""
+    if price_min == price_max:
+        return pd.Index([price_min, price_max])
+
+    edges = np.arange(price_min, price_max, bin_width, dtype=float)
+    if edges.size == 0 or not np.isclose(edges[0], price_min):
+        edges = np.insert(edges, 0, price_min)
+
+    if not np.isclose(edges[-1], price_max):
+        edges = np.append(edges, price_max)
+
+    return pd.Index(edges)
+
+
 def _identify_hvn_lvn(
     bin_volumes: pd.Series,
     bin_centers: pd.Series,
@@ -181,14 +209,14 @@ def _identify_hvn_lvn(
 ) -> tuple[pd.Series, pd.Series]:
     """Identify High-Volume Nodes (HVN) and Low-Volume Nodes (LVN).
 
-    HVN: bins with volume > hvn_threshold * max_volume
-    LVN: bins with volume < lvn_threshold * max_volume
+    HVN: bins with volume >= the configured upper quantile cutoff.
+    LVN: bins with volume <= the configured lower quantile cutoff.
 
     Args:
         bin_volumes: Series of bin volumes.
         bin_centers: Series of bin center prices.
-        hvn_threshold: Threshold multiplier for HVN (e.g., 0.7).
-        lvn_threshold: Threshold multiplier for LVN (e.g., 0.3).
+        hvn_threshold: Quantile threshold for HVN (e.g., 0.8).
+        lvn_threshold: Quantile threshold for LVN (e.g., 0.2).
 
     Returns:
         Tuple of (is_hvn Series, is_lvn Series) indexed by bin_centers.
@@ -197,8 +225,11 @@ def _identify_hvn_lvn(
     if max_vol == 0:
         return pd.Series(False, index=bin_centers), pd.Series(False, index=bin_centers)
 
-    is_hvn = bin_volumes > (hvn_threshold * max_vol)
-    is_lvn = bin_volumes < (lvn_threshold * max_vol)
+    hvn_cutoff = float(bin_volumes.quantile(hvn_threshold))
+    lvn_cutoff = float(bin_volumes.quantile(lvn_threshold))
+
+    is_hvn = bin_volumes >= hvn_cutoff
+    is_lvn = bin_volumes <= lvn_cutoff
 
     return is_hvn, is_lvn
 
@@ -255,7 +286,10 @@ def _classify_profile_shape(
         # Simple bimodal detection: look for two peaks
         peaks = []
         for i in range(1, n_bins - 1):
-            if bin_volumes.iloc[i] > bin_volumes.iloc[i - 1] and bin_volumes.iloc[i] > bin_volumes.iloc[i + 1]:
+            if (
+                bin_volumes.iloc[i] > bin_volumes.iloc[i - 1]
+                and bin_volumes.iloc[i] > bin_volumes.iloc[i + 1]
+            ):
                 peaks.append(i)
         if len(peaks) >= 2:
             # Check if peaks are well separated (at least 30% of range apart)
@@ -309,13 +343,10 @@ def _calculate_value_area(
     right_idx = poc_idx
     current_volume = bin_volumes.iloc[poc_idx]
 
-    # Priority expansion: expand to whichever side has more volume, or both if equal
-    while current_volume < target_volume:
+    # Expand contiguously from the POC until target coverage is reached.
+    while current_volume < target_volume and (left_idx > 0 or right_idx < n_bins - 1):
         left_add = bin_volumes.iloc[left_idx - 1] if left_idx > 0 else 0
         right_add = bin_volumes.iloc[right_idx + 1] if right_idx < n_bins - 1 else 0
-
-        if left_add == 0 and right_add == 0:
-            break
 
         if left_idx <= 0:
             right_idx += 1
@@ -371,8 +402,8 @@ def calculate_volume_profile(
             - bin_mid: Midpoint of bin (price level)
             - bin_volume: Total volume in this bin
             - bin_candle_count: Number of candles contributing to this bin
-            - is_hvn: True if High-Volume Node (above 70% of max)
-            - is_lvn: True if Low-Volume Node (below 30% of max)
+            - is_hvn: True if High-Volume Node (volume >= q80 quantile)
+            - is_lvn: True if Low-Volume Node (volume <= q20 quantile)
             - in_value_area: True if bin is within Value Area
             - profile_shape: Shape classification (bell/bimodal/directional/flat/single)
 
@@ -411,14 +442,31 @@ def calculate_volume_profile(
     if not (0 < value_area_pct <= 1):
         raise ValueError("value_area_pct must be in range (0, 1]")
 
-    if profile_type == "dynamic" and dynamic_mode is None:
-        raise ValueError("dynamic_mode is required when profile_type='dynamic'")
+    if profile_type not in VALID_PROFILE_TYPES:
+        raise ValueError(
+            f"Invalid profile_type '{profile_type}'. Must be one of {VALID_PROFILE_TYPES}."
+        )
 
-    if profile_type == "dynamic" and dynamic_mode not in ("atr", "pct"):
-        raise ValueError(f"Invalid dynamic_mode '{dynamic_mode}'. Must be 'atr' or 'pct'.")
+    if profile_type == "dynamic":
+        if dynamic_mode is None:
+            raise ValueError("dynamic_mode is required when profile_type='dynamic'")
 
-    if profile_type == "dynamic" and dynamic_mode == "pct" and range_pct is None:
-        raise ValueError("range_pct is required when dynamic_mode='pct'")
+        if dynamic_mode not in VALID_DYNAMIC_MODES:
+            raise ValueError(
+                f"Invalid dynamic_mode '{dynamic_mode}'. Must be one of {VALID_DYNAMIC_MODES}."
+            )
+
+        if dynamic_mode == "atr":
+            if atr_period <= 0:
+                raise ValueError("atr_period must be a positive integer")
+            if atr_mult <= 0:
+                raise ValueError("atr_mult must be positive")
+
+        if dynamic_mode == "pct":
+            if range_pct is None:
+                raise ValueError("range_pct is required when dynamic_mode='pct'")
+            if range_pct <= 0:
+                raise ValueError("range_pct must be positive")
 
     # Extract series
     high = ohlcv["high"]
@@ -447,13 +495,7 @@ def calculate_volume_profile(
         if range_width <= 0:
             range_width = price_max - price_min if price_max > price_min else 1.0
 
-        # Calculate number of bins to cover full range
-        if price_min == price_max:
-            n_bins = 1
-        else:
-            n_bins = max(1, int(round((price_max - price_min) / range_width)))
-
-        bin_edges = pd.Index(np.linspace(price_min, price_max, n_bins + 1))
+        bin_edges = _build_dynamic_bin_edges(price_min, price_max, range_width)
 
     # Calculate bin centers
     n_bins = len(bin_edges) - 1
@@ -476,10 +518,15 @@ def calculate_volume_profile(
     # Calculate Value Area
     va_low_idx, va_high_idx = _calculate_value_area(bin_volumes, poc_idx, value_area_pct)
     va_low_price = float(bin_edges[va_low_idx])
-    va_high_price = float(bin_edges[va_high_idx])
+    va_high_price = float(bin_edges[va_high_idx + 1])
 
     # Identify HVN and LVN
-    is_hvn, is_lvn = _identify_hvn_lvn(bin_volumes, bin_centers, hvn_threshold=0.7, lvn_threshold=0.3)
+    is_hvn, is_lvn = _identify_hvn_lvn(
+        bin_volumes,
+        bin_centers,
+        hvn_threshold=HVN_QUANTILE,
+        lvn_threshold=LVN_QUANTILE,
+    )
 
     # Classify profile shape
     profile_shape = _classify_profile_shape(bin_volumes, poc_idx)
@@ -489,6 +536,17 @@ def calculate_volume_profile(
     for i in range(len(low)):
         candle_low = low.iloc[i]
         candle_high = high.iloc[i]
+        candle_width = candle_high - candle_low
+
+        if candle_width == 0:
+            for j in range(n_bins):
+                bin_low = bin_edges[j]
+                bin_high = bin_edges[j + 1]
+                if bin_low <= candle_low <= bin_high:
+                    bin_candle_counts.iloc[j] += 1
+                    break
+            continue
+
         for j in range(n_bins):
             bin_low = bin_edges[j]
             bin_high = bin_edges[j + 1]
