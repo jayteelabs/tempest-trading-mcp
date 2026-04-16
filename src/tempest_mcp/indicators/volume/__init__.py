@@ -3,14 +3,14 @@
 import numpy as np
 import pandas as pd
 
+from tempest_mcp.indicators.volume.volume_profile import (
+    calculate_volume_profile,
+)
 from tempest_mcp.indicators.volume.vwap import (
     SESSION_ANCHORS,
     calculate_vwap,
     calculate_vwap_bands,
     detect_vwap_cross,
-)
-from tempest_mcp.indicators.volume.volume_profile import (
-    calculate_volume_profile,
 )
 from tempest_mcp.logging_config import get_logger
 

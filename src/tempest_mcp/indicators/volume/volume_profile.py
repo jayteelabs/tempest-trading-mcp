@@ -16,9 +16,6 @@ import numpy as np
 import pandas as pd
 
 from tempest_mcp.indicators.volatility.atr import calculate_atr
-from tempest_mcp.logging_config import get_logger
-
-logger = get_logger(__name__)
 
 # Profile shape classifications
 ProfileShape = Literal["bell", "bimodal", "directional", "flat", "single"]
@@ -122,12 +119,7 @@ def _allocate_volume_to_bins(
             bin_low = bin_edges[j]
             bin_high = bin_edges[j + 1]
 
-            # Handle zero-width bin (single price point)
             if bin_low == bin_high:
-                # Price equals the bin boundary - allocate full volume
-                if candle_width == 0 and candle_low == bin_low:
-                    bin_volumes.iloc[j] += candle_vol
-                    break
                 continue
 
             # Check for intersection: bin_low < candle_high AND bin_high > candle_low
