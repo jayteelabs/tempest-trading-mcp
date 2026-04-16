@@ -3,6 +3,9 @@
 import numpy as np
 import pandas as pd
 
+from tempest_mcp.indicators.volume.volume_profile import (
+    calculate_volume_profile,
+)
 from tempest_mcp.indicators.volume.vwap import (
     SESSION_ANCHORS,
     calculate_vwap,
@@ -312,6 +315,7 @@ __all__ = [
     # Pure pandas volume indicators
     "calculate_obv",
     "calculate_mfi",
+    "calculate_volume_profile",
     # Result wrappers (ta-lib)
     "calculate_obv_result",
     "calculate_mfi_result",
