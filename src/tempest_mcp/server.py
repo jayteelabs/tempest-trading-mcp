@@ -20,6 +20,7 @@ from starlette.routing import Route
 from tempest_mcp.config import ErrorCodes, get_config
 from tempest_mcp.logging_config import get_logger, setup_logging
 from tempest_mcp.tools import (
+    BACKTEST_TOOLS,
     backtest_strategy,
     fetch_klines,
     fetch_orderbook,
@@ -27,6 +28,7 @@ from tempest_mcp.tools import (
     indicator_rsi,
     screener_scan,
 )
+from tempest_mcp.tools.backtest_window import SUPPORTED_TIMEFRAMES
 
 # Server listens on port 9001 for HTTP/SSE transport
 # Binds to 127.0.0.1 — portmapped externally via Docker
@@ -45,15 +47,29 @@ SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9]+([/-][A-Za-z0-9]+)?$")
 
 logger = get_logger(__name__)
 
+BACKTEST_TIMEFRAME_PROPERTY = {
+    "type": "string",
+    "enum": list(SUPPORTED_TIMEFRAMES),
+    "description": "Supported OHLCV timeframe. Must be one of the explicitly supported intervals.",
+}
+
+BACKTEST_DATETIME_DESCRIPTION = (
+    "ISO 8601 datetime; required when trade_style=custom. "
+    "If timezone is omitted, the value is interpreted in America/New_York before conversion to UTC."
+)
+
 # ── Tool Registry ─────────────────────────────────────────────────────────────
 TOOLS: dict[str, Any] = {
     "fetch_ticker": fetch_ticker,
     "fetch_klines": fetch_klines,
     "fetch_orderbook": fetch_orderbook,
     "indicator_rsi": indicator_rsi,
-    "backtest_strategy": backtest_strategy,
     "screener_scan": screener_scan,
+    # Legacy backtest_strategy (deprecated — deterministic error response)
+    "backtest_strategy": backtest_strategy,
 }
+# Phase 2 dedicated backtest tools (ENG-17) — populate from BACKTEST_TOOLS registry
+TOOLS.update(BACKTEST_TOOLS)
 
 # ── Tool Schemas (MCP protocol surface) ──────────────────────────────────────
 TOOL_SCHEMAS: list[Tool] = [
@@ -113,23 +129,218 @@ TOOL_SCHEMAS: list[Tool] = [
             "required": ["symbol"],
         },
     ),
+    # ── Phase 2 dedicated backtest tools (ENG-17) ───────────────────────────────
     Tool(
-        name="backtest_strategy",
-        description="Run a backtest for a single strategy on a symbol.",
+        name="backtest_pdh_session",
+        description="Backtest PDH/PDL + Session Levels strategy. Enters long when close > PDH, short when close < PDL, within eligible session windows.",
         inputSchema={
             "type": "object",
             "properties": {
                 "symbol": {"type": "string"},
-                "strategy_id": {"type": "string", "default": "rsi_mean_reversion"},
-                "timeframe": {"type": "string", "default": "1h"},
-                "period": {"type": "string", "default": "1y"},
-                "initial_capital": {"type": "number", "default": 10000.0},
+                "trade_style": {
+                    "type": "string",
+                    "enum": ["day_trade", "swing_trade", "custom"],
+                    "default": "day_trade",
+                },
+                "start_at": {
+                    "type": "string",
+                    "description": BACKTEST_DATETIME_DESCRIPTION,
+                },
+                "end_at": {
+                    "type": "string",
+                    "description": BACKTEST_DATETIME_DESCRIPTION,
+                },
+                "timeframe": BACKTEST_TIMEFRAME_PROPERTY,
                 "exchange": {"type": "string", "default": "binance"},
-                "source": {"type": "string", "default": "yf"},
+                "initial_capital": {"type": "number", "default": 100000.0},
+                "max_bars": {
+                    "type": "integer",
+                    "description": "Safety cap on estimated candle count.",
+                },
+                "atr_period": {"type": "integer", "default": 14},
+                "atr_multiplier": {"type": "number", "default": 1.5},
+                "session_types": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Eligible sessions: asia, london, ny",
+                },
             },
             "required": ["symbol"],
         },
     ),
+    Tool(
+        name="backtest_rsi",
+        description="Backtest RSI Mean Reversion strategy. LONG at oversold, SHORT at overbought, with optional divergence confirmation.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string"},
+                "trade_style": {
+                    "type": "string",
+                    "enum": ["day_trade", "swing_trade", "custom"],
+                    "default": "day_trade",
+                },
+                "start_at": {
+                    "type": "string",
+                    "description": BACKTEST_DATETIME_DESCRIPTION,
+                },
+                "end_at": {
+                    "type": "string",
+                    "description": BACKTEST_DATETIME_DESCRIPTION,
+                },
+                "timeframe": BACKTEST_TIMEFRAME_PROPERTY,
+                "exchange": {"type": "string", "default": "binance"},
+                "initial_capital": {"type": "number", "default": 100000.0},
+                "max_bars": {"type": "integer"},
+                "rsi_period": {"type": "integer", "default": 14},
+                "confirmation_enabled": {"type": "boolean", "default": False},
+                "oversold_threshold": {"type": "number", "default": 30.0},
+                "overbought_threshold": {"type": "number", "default": 70.0},
+                "risk_reward_ratio": {"type": "number", "default": 2.0},
+                "atr_stop_multiplier": {"type": "number", "default": 1.5},
+                "divergence_window": {"type": "integer", "default": 20},
+            },
+            "required": ["symbol"],
+        },
+    ),
+    Tool(
+        name="backtest_vwap",
+        description="Backtest VWAP Anchored strategy. Trend-following using anchored VWAP with fast/slow EMA confirmation.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string"},
+                "trade_style": {
+                    "type": "string",
+                    "enum": ["day_trade", "swing_trade", "custom"],
+                    "default": "day_trade",
+                },
+                "start_at": {
+                    "type": "string",
+                    "description": BACKTEST_DATETIME_DESCRIPTION,
+                },
+                "end_at": {
+                    "type": "string",
+                    "description": BACKTEST_DATETIME_DESCRIPTION,
+                },
+                "timeframe": BACKTEST_TIMEFRAME_PROPERTY,
+                "exchange": {"type": "string", "default": "binance"},
+                "initial_capital": {"type": "number", "default": 100000.0},
+                "max_bars": {"type": "integer"},
+                "vwap_anchor": {
+                    "type": "string",
+                    "enum": ["asia", "london", "ny", "daily"],
+                    "default": "ny",
+                },
+                "trend_fast_period": {"type": "integer", "default": 7},
+                "trend_slow_period": {"type": "integer", "default": 25},
+                "volume_lookback": {"type": "integer", "default": 20},
+                "volume_multiplier": {"type": "number", "default": 1.2},
+            },
+            "required": ["symbol"],
+        },
+    ),
+    Tool(
+        name="backtest_ema_stack",
+        description="Backtest EMA Stack strategy. Multi-EMA trend-following with risk management.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string"},
+                "trade_style": {
+                    "type": "string",
+                    "enum": ["day_trade", "swing_trade", "custom"],
+                    "default": "day_trade",
+                },
+                "start_at": {
+                    "type": "string",
+                    "description": BACKTEST_DATETIME_DESCRIPTION,
+                },
+                "end_at": {
+                    "type": "string",
+                    "description": BACKTEST_DATETIME_DESCRIPTION,
+                },
+                "timeframe": BACKTEST_TIMEFRAME_PROPERTY,
+                "exchange": {"type": "string", "default": "binance"},
+                "initial_capital": {"type": "number", "default": 100000.0},
+                "max_bars": {"type": "integer"},
+                "ema_periods": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "default": [7, 25, 50, 200],
+                    "description": "List of EMA periods, e.g. [7,25,50,200]",
+                },
+                "rr_multiple": {"type": "number", "default": 2.0},
+                "trend_confirmation_bars": {"type": "integer", "default": 1},
+                "stop_buffer_pct": {"type": "number", "default": 0.0},
+            },
+            "required": ["symbol"],
+        },
+    ),
+    Tool(
+        name="backtest_order_blocks",
+        description="Backtest Order Blocks strategy. Institutional order block detection with retest confirmation.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string"},
+                "trade_style": {
+                    "type": "string",
+                    "enum": ["day_trade", "swing_trade", "custom"],
+                    "default": "day_trade",
+                },
+                "start_at": {
+                    "type": "string",
+                    "description": BACKTEST_DATETIME_DESCRIPTION,
+                },
+                "end_at": {
+                    "type": "string",
+                    "description": BACKTEST_DATETIME_DESCRIPTION,
+                },
+                "timeframe": BACKTEST_TIMEFRAME_PROPERTY,
+                "exchange": {"type": "string", "default": "binance"},
+                "initial_capital": {"type": "number", "default": 100000.0},
+                "max_bars": {"type": "integer"},
+                "confirmation_enabled": {"type": "boolean", "default": True},
+                "atr_period": {"type": "integer", "default": 14},
+                "impulse_atr_mult": {"type": "number", "default": 1.0},
+                "retest_atr_tolerance": {"type": "number", "default": 0.5},
+                "min_bars_before_entry": {"type": "integer", "default": 2},
+                "max_zone_age_bars": {"type": "integer", "default": 20},
+                "risk_reward_ratio": {"type": "number", "default": 2.0},
+            },
+            "required": ["symbol"],
+        },
+    ),
+    Tool(
+        name="backtest_elliot_wave",
+        description="Backtest Elliott Wave strategy. Wave counting with trend confirmation.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string"},
+                "trade_style": {
+                    "type": "string",
+                    "enum": ["day_trade", "swing_trade", "custom"],
+                    "default": "day_trade",
+                },
+                "start_at": {
+                    "type": "string",
+                    "description": BACKTEST_DATETIME_DESCRIPTION,
+                },
+                "end_at": {
+                    "type": "string",
+                    "description": BACKTEST_DATETIME_DESCRIPTION,
+                },
+                "timeframe": BACKTEST_TIMEFRAME_PROPERTY,
+                "exchange": {"type": "string", "default": "binance"},
+                "initial_capital": {"type": "number", "default": 100000.0},
+                "max_bars": {"type": "integer"},
+            },
+            "required": ["symbol"],
+        },
+    ),
+    # ── Legacy deprecated tool (not listed in TOOL_SCHEMAS, handled in call_tool) ──
     Tool(
         name="screener_scan",
         description="Multi-factor crypto screener.",
@@ -321,6 +532,17 @@ def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> str | None:
         return validate_symbol(arguments.get("symbol", ""), "symbol")
     if name == "indicator_rsi":
         return validate_symbol(arguments.get("symbol", ""), "symbol")
+    # Phase 2 backtest tools — validate symbol
+    if name in (
+        "backtest_pdh_session",
+        "backtest_rsi",
+        "backtest_vwap",
+        "backtest_ema_stack",
+        "backtest_order_blocks",
+        "backtest_elliot_wave",
+    ):
+        return validate_symbol(arguments.get("symbol", ""), "symbol")
+    # Legacy deprecated tool — still validate symbol for completeness
     if name == "backtest_strategy":
         return validate_symbol(arguments.get("symbol", ""), "symbol")
     if name == "screener_scan":

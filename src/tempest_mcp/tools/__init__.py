@@ -1,15 +1,24 @@
-"""MCP tool stubs — ENG-5 skeleton. Implementations in later phase tickets."""
+"""MCP tool stubs — Phase 2 backtest tools. ENG-17."""
 
-from tempest_mcp.tools.backtest_tools import backtest_strategy
+from tempest_mcp.tools.backtest_tools import (
+    BACKTEST_TOOLS,
+    backtest_strategy,
+)
 from tempest_mcp.tools.indicator_tools import indicator_rsi
 from tempest_mcp.tools.market_tools import fetch_klines, fetch_orderbook, fetch_ticker
 from tempest_mcp.tools.screener_tools import screener_scan
 
 __all__ = [
+    # Market tools
     "fetch_ticker",
     "fetch_klines",
     "fetch_orderbook",
+    # Indicator tools
     "indicator_rsi",
-    "backtest_strategy",
+    # Backtest tools (Phase 2 — ENG-17) — access via BACKTEST_TOOLS dict
+    "backtest_strategy",  # legacy deprecated stub
+    # Screener tools
     "screener_scan",
+    # Backtest tool registry for server registration
+    "BACKTEST_TOOLS",
 ]
