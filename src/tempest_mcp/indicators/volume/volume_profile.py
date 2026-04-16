@@ -10,6 +10,7 @@ The profile identifies key levels (POC, VAH, VAL) and classifies the profile sha
 
 from __future__ import annotations
 
+from decimal import ROUND_FLOOR, Decimal
 from typing import Literal
 
 import numpy as np
@@ -183,12 +184,15 @@ def _build_dynamic_bin_edges(price_min: float, price_max: float, bin_width: floa
     if price_min == price_max:
         return pd.Index([price_min, price_max])
 
-    edges = np.arange(price_min, price_max, bin_width, dtype=float)
-    if edges.size == 0 or not np.isclose(edges[0], price_min):
-        edges = np.insert(edges, 0, price_min)
+    min_decimal = Decimal(str(price_min))
+    max_decimal = Decimal(str(price_max))
+    width_decimal = Decimal(str(bin_width))
+    span = max_decimal - min_decimal
+    full_steps = int((span / width_decimal).to_integral_value(rounding=ROUND_FLOOR))
 
-    if not np.isclose(edges[-1], price_max):
-        edges = np.append(edges, price_max)
+    edges = [float(min_decimal + (width_decimal * step)) for step in range(full_steps + 1)]
+    if edges[-1] != price_max:
+        edges.append(price_max)
 
     return pd.Index(edges)
 

@@ -12,6 +12,7 @@ from tempest_mcp.indicators.volume.volume_profile import (
     COL_BIN_VOLUME,
     COL_IS_HVN,
     COL_IS_LVN,
+    _build_dynamic_bin_edges,
     _calculate_value_area,
     calculate_volume_profile,
 )
@@ -387,6 +388,22 @@ class TestCalculateVolumeProfileDynamic:
 
         widths = profile[COL_BIN_HIGH] - profile[COL_BIN_LOW]
         np.testing.assert_allclose(widths.to_numpy(), np.full(len(widths), 2.0))
+
+    def test_dynamic_bin_edges_anchor_decimal_widths_to_range_bounds(self):
+        """Test decimal widths keep exact range bounds and deterministic edges."""
+        price_min = 100.1
+        price_max = 100.56
+        bin_width = 0.1
+
+        first_edges = _build_dynamic_bin_edges(price_min, price_max, bin_width)
+        second_edges = _build_dynamic_bin_edges(price_min, price_max, bin_width)
+
+        assert first_edges[0] == price_min
+        assert first_edges[-1] == price_max
+        pd.testing.assert_index_equal(first_edges, second_edges)
+        np.testing.assert_allclose(
+            np.diff(first_edges[:-1]), np.full(len(first_edges) - 2, bin_width)
+        )
 
 
 class TestVolumeProfileMetadata:
