@@ -9,6 +9,9 @@ from tempest_mcp.indicators.volume.vwap import (
     calculate_vwap_bands,
     detect_vwap_cross,
 )
+from tempest_mcp.indicators.volume.volume_profile import (
+    calculate_volume_profile,
+)
 from tempest_mcp.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -312,6 +315,7 @@ __all__ = [
     # Pure pandas volume indicators
     "calculate_obv",
     "calculate_mfi",
+    "calculate_volume_profile",
     # Result wrappers (ta-lib)
     "calculate_obv_result",
     "calculate_mfi_result",
