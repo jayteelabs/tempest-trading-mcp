@@ -305,6 +305,11 @@ def build_review_body(
         lines.append(
             "No line-anchored findings were published; validated notes are summarized below."
         )
+    elif artifact_errors:
+        lines.append("")
+        lines.append(
+            "No publishable review findings were produced because one or more lanes failed before findings could be generated."
+        )
     else:
         lines.append("")
         lines.append("No publishable review findings were produced for this head SHA.")
@@ -318,7 +323,7 @@ def build_review_body(
             )
     if artifact_errors:
         lines.append("")
-        lines.append("### Lane errors")
+        lines.append("### Lane setup/transport errors")
         for error in artifact_errors:
             lines.append(f"- {error}")
     if publish_errors:
@@ -366,7 +371,7 @@ def build_check_text(
         json.dumps(summary_payload, indent=2),
     ]
     if artifact_errors:
-        lines.extend(["", "Lane errors:", *artifact_errors])
+        lines.extend(["", "Lane setup/transport errors:", *artifact_errors])
     if publish_errors:
         lines.extend(["", "Publish errors:", *publish_errors])
     return "\n".join(lines)
