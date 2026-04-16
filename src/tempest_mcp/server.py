@@ -340,6 +340,41 @@ TOOL_SCHEMAS: list[Tool] = [
             "required": ["symbol"],
         },
     ),
+    # ── Compare strategies tool (ENG-25) ─────────────────────────────────────────
+    Tool(
+        name="compare_strategies",
+        description="Compare multiple backtest strategies using a single OHLCV dataset. Strategies are ranked by total_return descending, then sharpe_ratio descending, then strategy_id ascending.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string"},
+                "strategy_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 2,
+                    "description": "Array of 2+ strategy IDs to compare. Allowed: pdh_session, rsi, vwap, ema_stack, order_blocks, elliot_wave",
+                },
+                "trade_style": {
+                    "type": "string",
+                    "enum": ["day_trade", "swing_trade", "custom"],
+                    "default": "day_trade",
+                },
+                "start_at": {
+                    "type": "string",
+                    "description": BACKTEST_DATETIME_DESCRIPTION,
+                },
+                "end_at": {
+                    "type": "string",
+                    "description": BACKTEST_DATETIME_DESCRIPTION,
+                },
+                "timeframe": BACKTEST_TIMEFRAME_PROPERTY,
+                "exchange": {"type": "string", "default": "binance"},
+                "initial_capital": {"type": "number", "default": 100000.0},
+                "max_bars": {"type": "integer"},
+            },
+            "required": ["symbol", "strategy_ids"],
+        },
+    ),
     # ── Legacy deprecated tool (not listed in TOOL_SCHEMAS, handled in call_tool) ──
     Tool(
         name="screener_scan",
@@ -540,6 +575,7 @@ def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> str | None:
         "backtest_ema_stack",
         "backtest_order_blocks",
         "backtest_elliot_wave",
+        "compare_strategies",
     ):
         return validate_symbol(arguments.get("symbol", ""), "symbol")
     # Legacy deprecated tool — still validate symbol for completeness

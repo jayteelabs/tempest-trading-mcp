@@ -490,6 +490,253 @@ def _internal_error(message: str) -> dict[str, Any]:
     }
 
 
+# ── Compare Strategies (ENG-25) ───────────────────────────────────────────────
+
+# Allowed strategy IDs for compare_strategies
+ALLOWED_STRATEGY_IDS: frozenset[str] = frozenset(
+    {
+        "pdh_session",
+        "rsi",
+        "vwap",
+        "ema_stack",
+        "order_blocks",
+        "elliot_wave",
+    }
+)
+
+# Mapping from strategy_id to tool name
+_STRATEGY_ID_TO_TOOL: dict[str, str] = {
+    "pdh_session": "backtest_pdh_session",
+    "rsi": "backtest_rsi",
+    "vwap": "backtest_vwap",
+    "ema_stack": "backtest_ema_stack",
+    "order_blocks": "backtest_order_blocks",
+    "elliot_wave": "backtest_elliot_wave",
+}
+
+
+def _validate_strategy_ids(strategy_ids: Any) -> tuple[list[str], str | None]:
+    """Validate strategy_ids array for compare_strategies.
+
+    Returns (validated_ids, error_message). error_message is None on success.
+
+    Shion fix: defensively enforce string elements and handle unhashable inputs
+    by coercing to string and catching type errors early.
+    """
+    if strategy_ids is None:
+        return [], "strategy_ids is required"
+
+    if not isinstance(strategy_ids, (list, tuple)):
+        return [], "strategy_ids must be an array"
+
+    if len(strategy_ids) < 2:
+        return [], "strategy_ids must contain at least 2 strategy IDs"
+
+    validated: list[str] = []
+    unknown: list[str] = []
+
+    for i, sid in enumerate(strategy_ids):
+        # Shion fix: check for unhashable/non-string inputs early
+        if sid is None:
+            return [], f"strategy_ids[{i}] cannot be None"
+        if isinstance(sid, dict):
+            return [], f"strategy_ids[{i}] must be a string, got dict"
+        if isinstance(sid, list):
+            return [], f"strategy_ids[{i}] must be a string, got array"
+
+        # Coerce to string to handle StringEnum and other compat types
+        try:
+            sid_str = str(sid)
+        except Exception:
+            return [], f"strategy_ids[{i}] could not be converted to string"
+
+        # Validate it's a known strategy
+        if sid_str not in ALLOWED_STRATEGY_IDS:
+            unknown.append(sid_str)
+            continue
+
+        validated.append(sid_str)
+
+    if unknown:
+        allowed_list = ", ".join(sorted(ALLOWED_STRATEGY_IDS))
+        return [], f"Unknown strategy_ids: {', '.join(sorted(unknown))}. Allowed: {allowed_list}"
+
+    # Check for duplicates after coercion to string
+    if len(validated) != len(set(validated)):
+        seen: set[str] = set()
+        for sid in validated:
+            if sid in seen:
+                return [], f"Duplicate strategy_id: {sid}"
+            seen.add(sid)
+
+    return validated, None
+
+
+def _rank_compare_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rank compare results deterministically.
+
+    Sort key precedence:
+    1. metrics.total_return descending
+    2. metrics.sharpe_ratio descending
+    3. strategy_id ascending
+    """
+
+    def sort_key(item: dict[str, Any]) -> tuple:
+        metrics = item.get("metrics", {})
+        total_return = metrics.get("total_return")
+        sharpe_ratio = metrics.get("sharpe_ratio")
+        strategy_id = item.get("strategy_id", "")
+
+        # Non-finite values sort lowest
+        if not isinstance(total_return, (int, float)) or not math.isfinite(total_return):
+            total_return = float("-inf")
+        if not isinstance(sharpe_ratio, (int, float)) or not math.isfinite(sharpe_ratio):
+            sharpe_ratio = float("-inf")
+
+        # Descending for return/sharpe, ascending for strategy_id
+        return (-total_return, -sharpe_ratio, strategy_id)
+
+    sorted_results = sorted(results, key=sort_key)
+
+    # Assign ranks
+    for rank, item in enumerate(sorted_results, start=1):
+        item["rank"] = rank
+
+    return sorted_results
+
+
+def _serialize_compare_result(
+    strategy_id: str,
+    engine: BacktestEngine,
+    trade_count: int,
+    open_position: bool,
+) -> dict[str, Any]:
+    """Serialize a single strategy result within a compare run."""
+    return {
+        "strategy_id": strategy_id,
+        "metrics": _sanitize_metrics(engine.metrics),
+        "trade_count": trade_count,
+        "open_position": open_position,
+        "initial_capital": engine.initial_capital,
+        "final_equity": engine.final_equity,
+    }
+
+
+async def compare_strategies(**kwargs: Any) -> dict[str, Any]:
+    """Compare multiple strategies using a single OHLCV dataset.
+
+    Implements ENG-25 compare_strategies MCP tool.
+    """
+    try:
+        # 1. Parse + validate shared args
+        symbol = kwargs.pop("symbol")
+        trade_style = validate_trade_style(kwargs.pop("trade_style", "day_trade"))
+        timeframe = validate_timeframe(kwargs.pop("timeframe", None))
+        start_at = _parse_iso_datetime("start_at", kwargs.pop("start_at", None))
+        end_at = _parse_iso_datetime("end_at", kwargs.pop("end_at", None))
+        exchange = kwargs.pop("exchange", "binance")
+        initial_capital = _validate_initial_capital(kwargs.pop("initial_capital", 100000.0))
+        max_bars = validate_max_bars(kwargs.pop("max_bars", None))
+
+        # 2. Validate strategy_ids (Shion fix: hardened for non-string/unhashable)
+        strategy_ids_input = kwargs.pop("strategy_ids")
+        strategy_ids, validation_error = _validate_strategy_ids(strategy_ids_input)
+        if validation_error:
+            return _validation_error(validation_error)
+
+    except ValueError as e:
+        return _validation_error(str(e))
+
+    # 3. Resolve window + fetch OHLCV once (single fetch reuse)
+    request = BacktestWindowRequest(
+        symbol=symbol,
+        trade_style=trade_style,
+        timeframe=timeframe,
+        start_at=start_at,
+        end_at=end_at,
+        exchange=exchange,
+        max_bars=max_bars,
+    )
+
+    try:
+        ohlcv_df, resolved_window = resolve_and_fetch_backtest_ohlcv(request)
+    except ValueError as e:
+        return _validation_error(str(e))
+    except Exception as e:
+        logger.error("Window resolution/fetch failed", tool="compare_strategies", error=str(e))
+        return _internal_error("Data fetch failed")
+
+    # 4. Validate fetched data minimum
+    if len(ohlcv_df) < 2:
+        return _validation_error(
+            f"Insufficient data: only {len(ohlcv_df)} bars returned (minimum 2 required)"
+        )
+
+    # 5. Run each strategy using existing handlers
+    compare_results: list[dict[str, Any]] = []
+
+    for sid in strategy_ids:
+        tool_name = _STRATEGY_ID_TO_TOOL[sid]
+        spec = _STRATEGY_SPECS.get(tool_name)
+
+        if spec is None:
+            # Should not happen since we validated strategy_ids
+            continue
+
+        # Extract strategy-specific params from kwargs
+        strategy_params = {k: v for k, v in kwargs.items() if k in spec.allowed_params}
+
+        try:
+            if spec.mode == "direct_runner":
+                _, engine = _run_direct_runner(
+                    tool_name,
+                    ohlcv_df,
+                    initial_capital,
+                    strategy_params,
+                )
+            else:  # adapter
+                _, engine = _run_adapter(tool_name, ohlcv_df, initial_capital, strategy_params)
+        except ValueError as e:
+            return _validation_error(str(e))
+        except Exception as e:
+            logger.error("Strategy execution failed", tool=tool_name, error=str(e))
+            return _internal_error("Strategy execution failed")
+
+        compare_results.append(
+            _serialize_compare_result(
+                strategy_id=sid,
+                engine=engine,
+                trade_count=len(engine.trades),
+                open_position=engine.open_position,
+            )
+        )
+
+    # 6. Rank results deterministically
+    ranked_results = _rank_compare_results(compare_results)
+    best_strategy_id = ranked_results[0]["strategy_id"] if ranked_results else None
+
+    # 7. Return contract envelope
+    return {
+        "success": True,
+        "data": {
+            "tool": "compare_strategies",
+            "symbol": symbol,
+            "strategy_ids": strategy_ids,
+            "window": {
+                "trade_style": resolved_window.trade_style,
+                "timeframe": resolved_window.timeframe,
+                "start_at_utc": resolved_window.start_at_utc.isoformat(),
+                "end_at_utc": resolved_window.end_at_utc.isoformat(),
+                "estimated_bars": resolved_window.estimated_bars,
+                "exchange": resolved_window.exchange,
+            },
+            "ranking_metric": "total_return",
+            "best_strategy_id": best_strategy_id,
+            "results": ranked_results,
+        },
+    }
+
+
 # ── Legacy stub (deprecated) ───────────────────────────────────────────────────
 
 
@@ -534,3 +781,6 @@ async def backtest_strategy(
 # ── Initialize handler registry ────────────────────────────────────────────────
 
 _register_handlers()
+
+# Register compare_strategies handler
+BACKTEST_TOOLS["compare_strategies"] = compare_strategies
