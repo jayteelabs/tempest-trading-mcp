@@ -493,14 +493,16 @@ def _internal_error(message: str) -> dict[str, Any]:
 # ── Compare Strategies (ENG-25) ───────────────────────────────────────────────
 
 # Allowed strategy IDs for compare_strategies
-ALLOWED_STRATEGY_IDS: frozenset[str] = frozenset({
-    "pdh_session",
-    "rsi",
-    "vwap",
-    "ema_stack",
-    "order_blocks",
-    "elliot_wave",
-})
+ALLOWED_STRATEGY_IDS: frozenset[str] = frozenset(
+    {
+        "pdh_session",
+        "rsi",
+        "vwap",
+        "ema_stack",
+        "order_blocks",
+        "elliot_wave",
+    }
+)
 
 # Mapping from strategy_id to tool name
 _STRATEGY_ID_TO_TOOL: dict[str, str] = {
@@ -578,6 +580,7 @@ def _rank_compare_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]
     2. metrics.sharpe_ratio descending
     3. strategy_id ascending
     """
+
     def sort_key(item: dict[str, Any]) -> tuple:
         metrics = item.get("metrics", {})
         total_return = metrics.get("total_return")
@@ -603,10 +606,7 @@ def _rank_compare_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 
 def _serialize_compare_result(
-    tool_name: str,
     strategy_id: str,
-    symbol: str,
-    window: Any,
     engine: BacktestEngine,
     trade_count: int,
     open_position: bool,
@@ -688,16 +688,14 @@ async def compare_strategies(**kwargs: Any) -> dict[str, Any]:
 
         try:
             if spec.mode == "direct_runner":
-                signals, engine = _run_direct_runner(
+                _, engine = _run_direct_runner(
                     tool_name,
                     ohlcv_df,
                     initial_capital,
                     strategy_params,
                 )
             else:  # adapter
-                signals, engine = _run_adapter(
-                    tool_name, ohlcv_df, initial_capital, strategy_params
-                )
+                _, engine = _run_adapter(tool_name, ohlcv_df, initial_capital, strategy_params)
         except ValueError as e:
             return _validation_error(str(e))
         except Exception as e:
@@ -706,10 +704,7 @@ async def compare_strategies(**kwargs: Any) -> dict[str, Any]:
 
         compare_results.append(
             _serialize_compare_result(
-                tool_name=tool_name,
                 strategy_id=sid,
-                symbol=symbol,
-                window=resolved_window,
                 engine=engine,
                 trade_count=len(engine.trades),
                 open_position=engine.open_position,
