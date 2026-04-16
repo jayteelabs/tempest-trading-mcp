@@ -13,6 +13,13 @@ from tempest_mcp.backtest.engine import (
     SignalAction,
     Trade,
 )
+from tempest_mcp.backtest.walk_forward import (
+    WalkForwardConfig,
+    WalkForwardResult,
+    WalkForwardSummary,
+    WalkForwardWindowResult,
+    run_walk_forward,
+)
 
 __all__ = [
     "BacktestEngine",
@@ -24,4 +31,10 @@ __all__ = [
     "calculate_net_pnl",
     "SignalAction",
     "PositionDirection",
+    # Walk-forward engine
+    "WalkForwardConfig",
+    "WalkForwardResult",
+    "WalkForwardSummary",
+    "WalkForwardWindowResult",
+    "run_walk_forward",
 ]
