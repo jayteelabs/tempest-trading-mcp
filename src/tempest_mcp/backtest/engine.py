@@ -23,6 +23,7 @@ class SignalAction(Enum):
     - SHORT_EXIT  — close an existing short position
     - HOLD        — no action
     """
+
     LONG_ENTRY = "long_entry"
     LONG_EXIT = "long_exit"
     SHORT_ENTRY = "short_entry"
@@ -50,6 +51,7 @@ class PositionDirection(Enum):
 
     Enforces FLAT as mandatory intermediate state for directional flips.
     """
+
     FLAT = "flat"
     LONG = "long"
     SHORT = "short"
@@ -63,26 +65,28 @@ class PositionDirection(Enum):
 @dataclass
 class Trade:
     """Represents a single closed trade."""
+
     entry_time: pd.Timestamp
     exit_time: pd.Timestamp
     entry_price: float
     exit_price: float
     size: float
     direction: PositionDirection  # long or short
-    gross_pnl: float            # direction-aware PnL at exit
-    net_pnl: float              # after commission + slippage
-    commission: float           # total commission paid (both sides)
+    gross_pnl: float  # direction-aware PnL at exit
+    net_pnl: float  # after commission + slippage
+    commission: float  # total commission paid (both sides)
     slippage_cost: float
-    bars_held: int              # number of bars between entry and exit
+    bars_held: int  # number of bars between entry and exit
 
 
 @dataclass
 class BacktestResult:
     """Result of a backtest run."""
-    trades: list[Trade]           # closed trades only
-    equity_curve: pd.Series        # index=timestamp, values=equity
-    metrics: dict[str, float]      # all computed metrics
-    open_position: bool            # True if last position is unclosed
+
+    trades: list[Trade]  # closed trades only
+    equity_curve: pd.Series  # index=timestamp, values=equity
+    metrics: dict[str, float]  # all computed metrics
+    open_position: bool  # True if last position is unclosed
     initial_capital: float
     final_equity: float
 
@@ -170,6 +174,26 @@ class BacktestEngine:
             final_equity=self._equity_curve[-1] if self._equity_curve else self.initial_capital,
         )
 
+    @property
+    def trades(self) -> list[Trade]:
+        """Public view of closed trades from the most recent run."""
+        return self._trades
+
+    @property
+    def metrics(self) -> dict[str, float]:
+        """Public view of computed metrics from the most recent run."""
+        return self._compute_metrics()
+
+    @property
+    def open_position(self) -> bool:
+        """Whether the most recent run ended with an open position."""
+        return self._has_open_position
+
+    @property
+    def final_equity(self) -> float:
+        """Final equity from the most recent run."""
+        return self._equity_curve[-1] if self._equity_curve else self.initial_capital
+
     def _normalize_signals(self, signals: pd.Series, index: pd.Index) -> pd.Series:
         """Normalize integer or SignalAction signals to SignalAction enum series."""
         if pd.api.types.is_bool_dtype(signals.dtype):
@@ -179,9 +203,7 @@ class BacktestEngine:
 
         if normalized.dtype == object:
             normalized = normalized.where(~normalized.isna(), SignalAction.HOLD.value)
-            return normalized.apply(
-                lambda x: x if isinstance(x, SignalAction) else SignalAction(x)
-            )
+            return normalized.apply(lambda x: x if isinstance(x, SignalAction) else SignalAction(x))
 
         numeric = pd.to_numeric(normalized, errors="coerce").fillna(0)
         return numeric.astype(int).apply(SignalAction.from_int)
@@ -389,7 +411,9 @@ class BacktestEngine:
             metrics["expectancy"] = 0.0
 
         # Max drawdown
-        equity_arr = np.array(self._equity_curve) if self._equity_curve else np.array([self.initial_capital])
+        equity_arr = (
+            np.array(self._equity_curve) if self._equity_curve else np.array([self.initial_capital])
+        )
         running_max = np.maximum.accumulate(equity_arr)
         drawdowns = (equity_arr - running_max) / running_max
         max_drawdown = float(abs(np.min(drawdowns))) if len(drawdowns) > 0 else 0.0
