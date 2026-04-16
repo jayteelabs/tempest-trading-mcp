@@ -24,9 +24,9 @@ Phase 2 contract:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime
-import math
 from numbers import Integral, Real
 from typing import Any, Literal
 
@@ -37,10 +37,10 @@ from tempest_mcp.backtest.engine import BacktestEngine
 from tempest_mcp.config import ErrorCodes
 from tempest_mcp.tools.backtest_window import (
     BacktestWindowRequest,
+    resolve_and_fetch_backtest_ohlcv,
     validate_max_bars,
     validate_timeframe,
     validate_trade_style,
-    resolve_and_fetch_backtest_ohlcv,
 )
 
 logger = get_logger(__name__)

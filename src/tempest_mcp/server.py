@@ -19,7 +19,6 @@ from starlette.routing import Route
 
 from tempest_mcp.config import ErrorCodes, get_config
 from tempest_mcp.logging_config import get_logger, setup_logging
-from tempest_mcp.tools.backtest_window import SUPPORTED_TIMEFRAMES
 from tempest_mcp.tools import (
     BACKTEST_TOOLS,
     backtest_strategy,
@@ -29,6 +28,7 @@ from tempest_mcp.tools import (
     indicator_rsi,
     screener_scan,
 )
+from tempest_mcp.tools.backtest_window import SUPPORTED_TIMEFRAMES
 
 # Server listens on port 9001 for HTTP/SSE transport
 # Binds to 127.0.0.1 — portmapped externally via Docker

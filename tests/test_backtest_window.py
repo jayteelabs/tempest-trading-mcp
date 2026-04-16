@@ -6,10 +6,9 @@ import pandas as pd
 import pytest
 
 from tempest_mcp.tools.backtest_window import (
-    MAX_BARS_HARD_CAP,
+    SUPPORTED_TIMEFRAMES,
     BacktestWindowRequest,
     ResolvedBacktestWindow,
-    SUPPORTED_TIMEFRAMES,
     _estimate_candle_count,
     resolve_backtest_window,
 )

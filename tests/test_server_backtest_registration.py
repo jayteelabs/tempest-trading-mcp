@@ -1,10 +1,9 @@
 """Tests for server.py backtest tool registration — ENG-17."""
 
-import pytest
 
 from tempest_mcp.server import (
-    TOOLS,
     TOOL_SCHEMAS,
+    TOOLS,
     validate_tool_arguments,
 )
 from tempest_mcp.tools.backtest_window import SUPPORTED_TIMEFRAMES
