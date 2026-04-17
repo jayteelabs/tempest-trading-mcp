@@ -1171,6 +1171,12 @@ def _validate_structure_df(swings: pd.DataFrame) -> None:
         raise ValueError(f"swings missing required columns: {missing}")
 
 
+def _validate_equal_epsilon(equal_epsilon: float) -> None:
+    """Validate market-structure equality tolerance."""
+    if not isinstance(equal_epsilon, Real) or not np.isfinite(equal_epsilon) or equal_epsilon < 0.0:
+        raise ValueError("equal_epsilon must be a finite float >= 0.0")
+
+
 def _validate_range_params(
     range_lookback: int,
     max_range_pct: float,
@@ -1327,6 +1333,7 @@ def classify_market_structure(
         If swings DataFrame fails validation or parameters are invalid.
     """
     _validate_structure_df(swings)
+    _validate_equal_epsilon(equal_epsilon)
 
     if len(swings) == 0:
         return pd.DataFrame(columns=_STRUCTURE_OUTPUT_COLUMNS)
@@ -1338,8 +1345,13 @@ def classify_market_structure(
     rows = []
     event_id = 1
 
-    # Process all swings in chronological order by pivot_index
-    all_swings_sorted = swings.sort_values(["pivot_index", "swing_type"]).reset_index(drop=True)
+    # Process all swings in chronological order by pivot_index.
+    # When a bar is both a high and a low pivot, keep the low-before-high
+    # convention used by detect_swing_points.
+    all_swings_sorted = swings.copy()
+    all_swings_sorted["_swing_order"] = all_swings_sorted["swing_type"].map({"low": 0, "high": 1})
+    all_swings_sorted = all_swings_sorted.sort_values(["pivot_index", "_swing_order", "swing_id"])
+    all_swings_sorted = all_swings_sorted.drop(columns=["_swing_order"]).reset_index(drop=True)
 
     for _, swing in all_swings_sorted.iterrows():
         if swing["swing_type"] == "high":
@@ -1370,7 +1382,9 @@ def classify_market_structure(
 
                     current_price = swing["pivot_price"]
                     price_delta = current_price - reference_price
-                    pct_delta = abs(price_delta) / abs(reference_price) if reference_price != 0 else 0.0
+                    pct_delta = (
+                        abs(price_delta) / abs(reference_price) if reference_price != 0 else 0.0
+                    )
         else:  # low
             if len(lows) < 2:
                 classification = None
@@ -1397,7 +1411,9 @@ def classify_market_structure(
 
                     current_price = swing["pivot_price"]
                     price_delta = current_price - reference_price
-                    pct_delta = abs(price_delta) / abs(reference_price) if reference_price != 0 else 0.0
+                    pct_delta = (
+                        abs(price_delta) / abs(reference_price) if reference_price != 0 else 0.0
+                    )
 
         if classification is not None:
             rows.append(
@@ -1509,8 +1525,12 @@ def detect_price_ranges(
     range_id = 1
 
     # Get swing highs and lows with their timestamps
-    swing_highs = swings[swings["swing_type"] == "high"].sort_values("pivot_index").reset_index(drop=True)
-    swing_lows = swings[swings["swing_type"] == "low"].sort_values("pivot_index").reset_index(drop=True)
+    swing_highs = (
+        swings[swings["swing_type"] == "high"].sort_values("pivot_index").reset_index(drop=True)
+    )
+    swing_lows = (
+        swings[swings["swing_type"] == "low"].sort_values("pivot_index").reset_index(drop=True)
+    )
 
     if len(swing_highs) < 2 or len(swing_lows) < 2:
         return pd.DataFrame(columns=_RANGE_OUTPUT_COLUMNS)
@@ -1555,7 +1575,9 @@ def detect_price_ranges(
             high_bound = range_high - buffer
             low_bound = range_low + buffer
 
-            contained_bars = ((ohlcv_slice["close"] >= low_bound) & (ohlcv_slice["close"] <= high_bound)).sum()
+            contained_bars = (
+                (ohlcv_slice["close"] >= low_bound) & (ohlcv_slice["close"] <= high_bound)
+            ).sum()
             actual_containment = contained_bars / bars_evaluated if bars_evaluated > 0 else 0.0
 
             if actual_containment < containment_ratio:
@@ -1648,8 +1670,8 @@ def detect_range_breakouts(
     _validate_ohlcv(ohlcv)
     _validate_breakout_params(breakout_confirm_bars, breakout_buffer_pct)
 
-    if not isinstance(ranges, pd.DataFrame) or ranges.empty:
-        return pd.DataFrame(columns=_BREAKOUT_OUTPUT_COLUMNS)
+    if not isinstance(ranges, pd.DataFrame):
+        raise ValueError("ranges must be a pandas DataFrame")
 
     required_range_cols = set(_RANGE_OUTPUT_COLUMNS)
     if not required_range_cols.issubset(set(ranges.columns)):
@@ -1668,8 +1690,9 @@ def detect_range_breakouts(
         range_low = range_row["range_low"]
         end_ts = range_row["end_ts"]
 
-        # Get OHLCV after the range end for breakout detection
-        post_range_ohlcv = ohlcv[ohlcv.index > end_ts]
+        # Include the end_ts bar so ranges already marked broken at the
+        # boundary bar can emit a matching breakout event.
+        post_range_ohlcv = ohlcv[ohlcv.index >= end_ts]
 
         if len(post_range_ohlcv) < breakout_confirm_bars:
             continue

@@ -19,6 +19,7 @@ from tempest_mcp.indicators.structure import (
 # Test Fixtures
 # =============================================================================
 
+
 def _make_ohlcv(timestamps, opens, highs, lows, closes, volumes=None):
     """Create a valid UTC-aware OHLCV DataFrame for testing."""
     if volumes is None:
@@ -31,15 +32,118 @@ def _make_ohlcv(timestamps, opens, highs, lows, closes, volumes=None):
     return df
 
 
+def _make_swings(rows):
+    """Create a swing DataFrame with the pinned public schema."""
+    return pd.DataFrame(rows)[
+        [
+            "swing_id",
+            "pivot_index",
+            "swing_type",
+            "pivot_ts",
+            "pivot_price",
+            "leg_start_ts",
+            "leg_start_price",
+            "leg_end_ts",
+            "leg_end_price",
+            "price_delta",
+            "pct_delta",
+        ]
+    ]
+
+
 def _ohlcv_bullish_sequence():
     """Create a simple bullish OHLCV sequence with clear swings (HH/HL pattern)."""
     timestamps = pd.date_range("2024-01-01", periods=20, freq="h", tz="UTC")
     # Higher highs: 102, 104, 106, 108 (increasing)
     # Higher lows: 99, 100, 101, 102 (increasing)
-    opens = [100, 101, 102, 101, 100, 102, 103, 102, 101, 103, 104, 103, 102, 104, 105, 104, 103, 105, 106, 105]
-    highs = [102, 103, 104, 103, 102, 104, 105, 104, 103, 105, 106, 105, 104, 106, 107, 106, 105, 107, 108, 107]
-    lows = [99, 100, 101, 100, 99, 101, 102, 101, 100, 102, 103, 102, 101, 103, 104, 103, 102, 104, 105, 104]
-    closes = [101, 102, 103, 102, 101, 103, 104, 103, 102, 104, 105, 104, 103, 105, 106, 105, 104, 106, 107, 106]
+    opens = [
+        100,
+        101,
+        102,
+        101,
+        100,
+        102,
+        103,
+        102,
+        101,
+        103,
+        104,
+        103,
+        102,
+        104,
+        105,
+        104,
+        103,
+        105,
+        106,
+        105,
+    ]
+    highs = [
+        102,
+        103,
+        104,
+        103,
+        102,
+        104,
+        105,
+        104,
+        103,
+        105,
+        106,
+        105,
+        104,
+        106,
+        107,
+        106,
+        105,
+        107,
+        108,
+        107,
+    ]
+    lows = [
+        99,
+        100,
+        101,
+        100,
+        99,
+        101,
+        102,
+        101,
+        100,
+        102,
+        103,
+        102,
+        101,
+        103,
+        104,
+        103,
+        102,
+        104,
+        105,
+        104,
+    ]
+    closes = [
+        101,
+        102,
+        103,
+        102,
+        101,
+        103,
+        104,
+        103,
+        102,
+        104,
+        105,
+        104,
+        103,
+        105,
+        106,
+        105,
+        104,
+        106,
+        107,
+        106,
+    ]
     volumes = [100] * 20
     return _make_ohlcv(timestamps, opens, highs, lows, closes, volumes)
 
@@ -49,10 +153,73 @@ def _ohlcv_bearish_sequence():
     timestamps = pd.date_range("2024-01-01", periods=20, freq="h", tz="UTC")
     # Lower highs: 108, 106, 104, 102 (decreasing)
     # Lower lows: 102, 101, 100, 99 (decreasing)
-    opens = [106, 105, 104, 105, 106, 104, 103, 104, 105, 103, 102, 103, 104, 102, 101, 102, 103, 101, 100, 101]
-    highs = [108, 107, 106, 107, 108, 106, 105, 106, 107, 105, 104, 105, 106, 104, 103, 104, 105, 103, 102, 103]
+    opens = [
+        106,
+        105,
+        104,
+        105,
+        106,
+        104,
+        103,
+        104,
+        105,
+        103,
+        102,
+        103,
+        104,
+        102,
+        101,
+        102,
+        103,
+        101,
+        100,
+        101,
+    ]
+    highs = [
+        108,
+        107,
+        106,
+        107,
+        108,
+        106,
+        105,
+        106,
+        107,
+        105,
+        104,
+        105,
+        106,
+        104,
+        103,
+        104,
+        105,
+        103,
+        102,
+        103,
+    ]
     lows = [102, 101, 100, 101, 102, 100, 99, 100, 101, 99, 98, 99, 100, 98, 97, 98, 99, 97, 96, 97]
-    closes = [105, 104, 103, 104, 105, 103, 102, 103, 104, 102, 101, 102, 103, 101, 100, 101, 102, 100, 99, 100]
+    closes = [
+        105,
+        104,
+        103,
+        104,
+        105,
+        103,
+        102,
+        103,
+        104,
+        102,
+        101,
+        102,
+        103,
+        101,
+        100,
+        101,
+        102,
+        100,
+        99,
+        100,
+    ]
     volumes = [100] * 20
     return _make_ohlcv(timestamps, opens, highs, lows, closes, volumes)
 
@@ -98,6 +265,7 @@ def _ohlcv_range_bound():
 # detect_swing_points Tests
 # =============================================================================
 
+
 class TestDetectSwingPoints:
     """Tests for detect_swing_points function."""
 
@@ -134,8 +302,10 @@ class TestDetectSwingPoints:
 
     def test_missing_columns_raises(self):
         """Test ValueError when OHLCV is missing required columns."""
-        ohlcv = pd.DataFrame({"open": [100], "high": [101], "low": [99], "close": [100]},
-                            index=pd.DatetimeIndex(["2024-01-01"], tz="UTC"))
+        ohlcv = pd.DataFrame(
+            {"open": [100], "high": [101], "low": [99], "close": [100]},
+            index=pd.DatetimeIndex(["2024-01-01"], tz="UTC"),
+        )
         with pytest.raises(ValueError, match="ohlcv missing required columns"):
             detect_swing_points(ohlcv)
 
@@ -152,7 +322,13 @@ class TestDetectSwingPoints:
         """Test ValueError when OHLCV has duplicate timestamps."""
         idx = pd.DatetimeIndex(["2024-01-01", "2024-01-01"], tz="UTC")
         ohlcv = pd.DataFrame(
-            {"open": [100, 101], "high": [101, 102], "low": [99, 100], "close": [100, 101], "volume": [100, 100]},
+            {
+                "open": [100, 101],
+                "high": [101, 102],
+                "low": [99, 100],
+                "close": [100, 101],
+                "volume": [100, 100],
+            },
             index=idx,
         )
         with pytest.raises(ValueError, match="ohlcv index must not have duplicates"):
@@ -200,6 +376,7 @@ class TestDetectSwingPoints:
 # =============================================================================
 # classify_market_structure Tests
 # =============================================================================
+
 
 class TestClassifyMarketStructure:
     """Tests for classify_market_structure function."""
@@ -266,12 +443,114 @@ class TestClassifyMarketStructure:
         ohlcv = _ohlcv_equal_pivots()
         swings = detect_swing_points(ohlcv, min_swing_pct=0.001)
         result = classify_market_structure(swings, equal_epsilon=1e-6)
-        # If there are equal pivots, they should be EH or EL
-        if len(result) > 0:
-            equal_highs = result[result["classification"] == "EH"]
-            equal_lows = result[result["classification"] == "EL"]
-            # EH and EL should exist if we have equal pivots
-            assert len(equal_highs) + len(equal_lows) >= 0  # Just verify the column works
+
+        equal_highs = result[result["classification"] == "EH"]
+        equal_lows = result[result["classification"] == "EL"]
+
+        assert len(equal_highs) > 0
+        assert len(equal_lows) > 0
+
+    def test_invalid_equal_epsilon_raises(self):
+        """Test equal_epsilon must be finite and non-negative."""
+        ohlcv = _ohlcv_equal_pivots()
+        swings = detect_swing_points(ohlcv, min_swing_pct=0.001)
+
+        with pytest.raises(ValueError, match="equal_epsilon must be a finite float >= 0.0"):
+            classify_market_structure(swings, equal_epsilon=-1)
+
+        with pytest.raises(ValueError, match="equal_epsilon must be a finite float >= 0.0"):
+            classify_market_structure(swings, equal_epsilon=float("nan"))
+
+    def test_same_index_low_precedes_high(self):
+        """Test same-index swings keep low-before-high ordering in classifications."""
+        swings = _make_swings(
+            [
+                {
+                    "swing_id": 1,
+                    "pivot_index": 1,
+                    "swing_type": "low",
+                    "pivot_ts": pd.Timestamp("2024-01-01T00:00:00Z"),
+                    "pivot_price": 100.0,
+                    "leg_start_ts": pd.Timestamp("2023-12-31T23:00:00Z"),
+                    "leg_start_price": 101.0,
+                    "leg_end_ts": pd.Timestamp("2024-01-01T00:00:00Z"),
+                    "leg_end_price": 100.0,
+                    "price_delta": -1.0,
+                    "pct_delta": 0.01,
+                },
+                {
+                    "swing_id": 2,
+                    "pivot_index": 2,
+                    "swing_type": "high",
+                    "pivot_ts": pd.Timestamp("2024-01-01T01:00:00Z"),
+                    "pivot_price": 110.0,
+                    "leg_start_ts": pd.Timestamp("2024-01-01T00:00:00Z"),
+                    "leg_start_price": 100.0,
+                    "leg_end_ts": pd.Timestamp("2024-01-01T01:00:00Z"),
+                    "leg_end_price": 110.0,
+                    "price_delta": 10.0,
+                    "pct_delta": 0.1,
+                },
+                {
+                    "swing_id": 3,
+                    "pivot_index": 3,
+                    "swing_type": "low",
+                    "pivot_ts": pd.Timestamp("2024-01-01T02:00:00Z"),
+                    "pivot_price": 101.0,
+                    "leg_start_ts": pd.Timestamp("2024-01-01T01:00:00Z"),
+                    "leg_start_price": 110.0,
+                    "leg_end_ts": pd.Timestamp("2024-01-01T02:00:00Z"),
+                    "leg_end_price": 101.0,
+                    "price_delta": -9.0,
+                    "pct_delta": 0.0818,
+                },
+                {
+                    "swing_id": 4,
+                    "pivot_index": 4,
+                    "swing_type": "high",
+                    "pivot_ts": pd.Timestamp("2024-01-01T03:00:00Z"),
+                    "pivot_price": 111.0,
+                    "leg_start_ts": pd.Timestamp("2024-01-01T02:00:00Z"),
+                    "leg_start_price": 101.0,
+                    "leg_end_ts": pd.Timestamp("2024-01-01T03:00:00Z"),
+                    "leg_end_price": 111.0,
+                    "price_delta": 10.0,
+                    "pct_delta": 0.099,
+                },
+                {
+                    "swing_id": 5,
+                    "pivot_index": 5,
+                    "swing_type": "low",
+                    "pivot_ts": pd.Timestamp("2024-01-01T04:00:00Z"),
+                    "pivot_price": 102.0,
+                    "leg_start_ts": pd.Timestamp("2024-01-01T03:00:00Z"),
+                    "leg_start_price": 111.0,
+                    "leg_end_ts": pd.Timestamp("2024-01-01T04:00:00Z"),
+                    "leg_end_price": 102.0,
+                    "price_delta": -9.0,
+                    "pct_delta": 0.0811,
+                },
+                {
+                    "swing_id": 6,
+                    "pivot_index": 5,
+                    "swing_type": "high",
+                    "pivot_ts": pd.Timestamp("2024-01-01T04:00:00Z"),
+                    "pivot_price": 112.0,
+                    "leg_start_ts": pd.Timestamp("2024-01-01T04:00:00Z"),
+                    "leg_start_price": 102.0,
+                    "leg_end_ts": pd.Timestamp("2024-01-01T04:00:00Z"),
+                    "leg_end_price": 112.0,
+                    "price_delta": 10.0,
+                    "pct_delta": 0.098,
+                },
+            ]
+        )
+
+        result = classify_market_structure(swings)
+        same_pivot_rows = result[result["event_ts"] == pd.Timestamp("2024-01-01T04:00:00Z")]
+
+        assert same_pivot_rows["swing_type"].tolist() == ["low", "high"]
+        assert same_pivot_rows["classification"].tolist() == ["HL", "HH"]
 
     def test_bullish_sequence_has_hh_hl(self):
         """Test bullish sequence produces HH and HL classifications."""
@@ -280,7 +559,9 @@ class TestClassifyMarketStructure:
         result = classify_market_structure(swings)
         if len(result) > 0:
             # In a bullish sequence, we should see some HH and HL
-            assert "HH" in result["classification"].values or "HL" in result["classification"].values
+            assert (
+                "HH" in result["classification"].values or "HL" in result["classification"].values
+            )
 
     def test_deterministic_output(self):
         """Test repeated runs on identical input produce identical output."""
@@ -289,12 +570,15 @@ class TestClassifyMarketStructure:
         swings2 = detect_swing_points(ohlcv)
         result1 = classify_market_structure(swings1)
         result2 = classify_market_structure(swings2)
-        pd.testing.assert_frame_equal(result1.reset_index(drop=True), result2.reset_index(drop=True))
+        pd.testing.assert_frame_equal(
+            result1.reset_index(drop=True), result2.reset_index(drop=True)
+        )
 
 
 # =============================================================================
 # detect_price_ranges Tests
 # =============================================================================
+
 
 class TestDetectPriceRanges:
     """Tests for detect_price_ranges function."""
@@ -373,6 +657,7 @@ class TestDetectPriceRanges:
 # detect_range_breakouts Tests
 # =============================================================================
 
+
 class TestDetectRangeBreakouts:
     """Tests for detect_range_breakouts function."""
 
@@ -406,11 +691,21 @@ class TestDetectRangeBreakouts:
     def test_empty_ranges_returns_empty_df(self):
         """Test empty ranges returns DataFrame with pinned columns."""
         ohlcv = _ohlcv_range_bound()
-        empty_ranges = pd.DataFrame(columns=[
-            "range_id", "start_ts", "end_ts", "range_high", "range_low",
-            "range_mid", "range_width", "range_width_pct", "bars_evaluated",
-            "containment_ratio", "status"
-        ])
+        empty_ranges = pd.DataFrame(
+            columns=[
+                "range_id",
+                "start_ts",
+                "end_ts",
+                "range_high",
+                "range_low",
+                "range_mid",
+                "range_width",
+                "range_width_pct",
+                "bars_evaluated",
+                "containment_ratio",
+                "status",
+            ]
+        )
         result = detect_range_breakouts(ohlcv, empty_ranges)
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 0
@@ -433,6 +728,53 @@ class TestDetectRangeBreakouts:
         with pytest.raises(ValueError, match="breakout_buffer_pct must be"):
             detect_range_breakouts(ohlcv, ranges, breakout_buffer_pct=-0.01)
 
+    def test_invalid_ranges_type_raises(self):
+        """Test non-DataFrame ranges fail fast."""
+        ohlcv = _ohlcv_range_bound()
+
+        with pytest.raises(ValueError, match="ranges must be a pandas DataFrame"):
+            detect_range_breakouts(ohlcv, "not a dataframe")
+
+    def test_breakout_at_end_ts_bar_is_detected(self):
+        """Test breakout detection includes the range end bar when it breaks the boundary."""
+        idx = pd.date_range("2024-01-01", periods=4, freq="h", tz="UTC")
+        ohlcv = pd.DataFrame(
+            {
+                "open": [100, 100, 100, 100],
+                "high": [101, 101, 101, 101],
+                "low": [99, 99, 99, 99],
+                "close": [100, 100, 101.5, 100],
+                "volume": [100, 100, 100, 100],
+            },
+            index=idx,
+        )
+        ranges = pd.DataFrame(
+            [
+                {
+                    "range_id": 1,
+                    "start_ts": idx[0],
+                    "end_ts": idx[2],
+                    "range_high": 101.0,
+                    "range_low": 99.0,
+                    "range_mid": 100.0,
+                    "range_width": 2.0,
+                    "range_width_pct": 0.02,
+                    "bars_evaluated": 3,
+                    "containment_ratio": 1.0,
+                    "status": "broken_up",
+                }
+            ]
+        )
+
+        result = detect_range_breakouts(
+            ohlcv, ranges, breakout_confirm_bars=1, breakout_buffer_pct=0.0
+        )
+
+        assert len(result) == 1
+        assert result.iloc[0]["range_id"] == 1
+        assert result.iloc[0]["direction"] == "up"
+        assert result.iloc[0]["breakout_ts"] == idx[2]
+
     def test_direction_values(self):
         """Test direction contains only 'up' or 'down'."""
         ohlcv = _ohlcv_range_bound()
@@ -446,6 +788,7 @@ class TestDetectRangeBreakouts:
 # =============================================================================
 # Indicator Layer Boundary Tests
 # =============================================================================
+
 
 class TestIndicatorLayerBoundary:
     """Tests confirming ENG-32 remains an indicator-layer ticket."""
@@ -466,6 +809,7 @@ class TestIndicatorLayerBoundary:
     def test_new_functions_are_exported(self):
         """Test new functions are exported from indicators package."""
         from tempest_mcp import indicators
+
         assert hasattr(indicators, "detect_swing_points")
         assert hasattr(indicators, "classify_market_structure")
         assert hasattr(indicators, "detect_price_ranges")
@@ -475,6 +819,7 @@ class TestIndicatorLayerBoundary:
 # =============================================================================
 # Integration Tests
 # =============================================================================
+
 
 class TestIntegration:
     """Integration tests for price pattern engine workflow."""
@@ -548,7 +893,15 @@ class TestIntegration:
         breakouts1 = detect_range_breakouts(ohlcv, ranges1)
         breakouts2 = detect_range_breakouts(ohlcv, ranges2)
 
-        pd.testing.assert_frame_equal(swings1.reset_index(drop=True), swings2.reset_index(drop=True))
-        pd.testing.assert_frame_equal(structure1.reset_index(drop=True), structure2.reset_index(drop=True))
-        pd.testing.assert_frame_equal(ranges1.reset_index(drop=True), ranges2.reset_index(drop=True))
-        pd.testing.assert_frame_equal(breakouts1.reset_index(drop=True), breakouts2.reset_index(drop=True))
+        pd.testing.assert_frame_equal(
+            swings1.reset_index(drop=True), swings2.reset_index(drop=True)
+        )
+        pd.testing.assert_frame_equal(
+            structure1.reset_index(drop=True), structure2.reset_index(drop=True)
+        )
+        pd.testing.assert_frame_equal(
+            ranges1.reset_index(drop=True), ranges2.reset_index(drop=True)
+        )
+        pd.testing.assert_frame_equal(
+            breakouts1.reset_index(drop=True), breakouts2.reset_index(drop=True)
+        )
