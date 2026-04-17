@@ -24,12 +24,12 @@ from .structure import (
     calculate_fib_retracements,
     calculate_fibonacci_levels,
     calculate_pivot_points,
+    classify_market_structure,
     detect_elliott_waves,
     detect_fib_confluence,
-    detect_swing_points,
-    classify_market_structure,
     detect_price_ranges,
     detect_range_breakouts,
+    detect_swing_points,
 )
 from .trend import (
     calculate_ema,

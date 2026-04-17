@@ -3,7 +3,6 @@
 import os
 import sys
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -15,7 +14,6 @@ from tempest_mcp.indicators.structure import (
     detect_range_breakouts,
     detect_swing_points,
 )
-
 
 # =============================================================================
 # Test Fixtures
@@ -520,7 +518,7 @@ class TestIntegration:
         ohlcv = _ohlcv_range_bound()
 
         swings = detect_swing_points(ohlcv, min_swing_pct=0.01)
-        structure = classify_market_structure(swings)
+        classify_market_structure(swings)
         ranges = detect_price_ranges(ohlcv, swings)
         breakouts = detect_range_breakouts(ohlcv, ranges)
 

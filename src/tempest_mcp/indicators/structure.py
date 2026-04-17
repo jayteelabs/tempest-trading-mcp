@@ -1348,7 +1348,6 @@ def classify_market_structure(
                 classification = None
                 reference_swing_id = None
                 reference_price = None
-                trend_state = "transition"
             else:
                 # Find prior high
                 prior_high_idx = highs[highs["swing_id"] < swing["swing_id"]].index
@@ -1356,7 +1355,6 @@ def classify_market_structure(
                     classification = None
                     reference_swing_id = None
                     reference_price = None
-                    trend_state = "transition"
                 else:
                     prior_high = highs.loc[prior_high_idx[-1]]
                     reference_swing_id = int(prior_high["swing_id"])
@@ -1378,14 +1376,12 @@ def classify_market_structure(
                 classification = None
                 reference_swing_id = None
                 reference_price = None
-                trend_state = "transition"
             else:
                 prior_low_idx = lows[lows["swing_id"] < swing["swing_id"]].index
                 if len(prior_low_idx) == 0:
                     classification = None
                     reference_swing_id = None
                     reference_price = None
-                    trend_state = "transition"
                 else:
                     prior_low = lows.loc[prior_low_idx[-1]]
                     reference_swing_id = int(prior_low["swing_id"])
@@ -1670,7 +1666,6 @@ def detect_range_breakouts(
         range_id = int(range_row["range_id"])
         range_high = range_row["range_high"]
         range_low = range_row["range_low"]
-        start_ts = range_row["start_ts"]
         end_ts = range_row["end_ts"]
 
         # Get OHLCV after the range end for breakout detection
