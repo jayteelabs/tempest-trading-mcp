@@ -17,6 +17,15 @@ from .session_levels import (
     detect_pdh_pdl,
     detect_session_levels,
 )
+from .structure import (
+    DEFAULT_FIB_EXTENSION_LEVELS,
+    DEFAULT_FIB_RETRACEMENT_LEVELS,
+    calculate_fib_extensions,
+    calculate_fib_retracements,
+    calculate_fibonacci_levels,
+    calculate_pivot_points,
+    detect_fib_confluence,
+)
 from .trend import (
     calculate_ema,
     calculate_ema_result,
@@ -83,4 +92,12 @@ __all__ = [
     # Session level indicators
     "detect_session_levels",
     "detect_pdh_pdl",
+    # Structure indicators (Fibonacci engine)
+    "calculate_fib_retracements",
+    "calculate_fib_extensions",
+    "detect_fib_confluence",
+    "calculate_fibonacci_levels",
+    "calculate_pivot_points",
+    "DEFAULT_FIB_RETRACEMENT_LEVELS",
+    "DEFAULT_FIB_EXTENSION_LEVELS",
 ]
