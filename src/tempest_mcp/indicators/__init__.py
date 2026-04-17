@@ -26,6 +26,10 @@ from .structure import (
     calculate_pivot_points,
     detect_elliott_waves,
     detect_fib_confluence,
+    detect_swing_points,
+    classify_market_structure,
+    detect_price_ranges,
+    detect_range_breakouts,
 )
 from .trend import (
     calculate_ema,
@@ -105,4 +109,9 @@ __all__ = [
     "DEFAULT_FIB_EXTENSION_LEVELS",
     # Elliott Wave indicator
     "detect_elliott_waves",
+    # Price pattern engine
+    "detect_swing_points",
+    "classify_market_structure",
+    "detect_price_ranges",
+    "detect_range_breakouts",
 ]

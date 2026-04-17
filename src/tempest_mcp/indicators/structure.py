@@ -1088,3 +1088,664 @@ def detect_elliott_waves(
             result_df[col] = np.nan
 
     return result_df[_ELLIOTT_OUTPUT_COLUMNS]
+
+
+# =============================================================================
+# Price Pattern Engine — Swing Points, Market Structure, Range & Breakout
+# =============================================================================
+
+# Output column order for detect_swing_points (pinned schema)
+_SWING_OUTPUT_COLUMNS = [
+    "swing_id",
+    "pivot_index",
+    "swing_type",
+    "pivot_ts",
+    "pivot_price",
+    "leg_start_ts",
+    "leg_start_price",
+    "leg_end_ts",
+    "leg_end_price",
+    "price_delta",
+    "pct_delta",
+]
+
+# Output column order for classify_market_structure (pinned schema)
+_STRUCTURE_OUTPUT_COLUMNS = [
+    "event_id",
+    "event_ts",
+    "swing_id",
+    "swing_type",
+    "classification",
+    "reference_swing_id",
+    "reference_price",
+    "current_price",
+    "price_delta",
+    "pct_delta",
+    "trend_state",
+]
+
+# Output column order for detect_price_ranges (pinned schema)
+_RANGE_OUTPUT_COLUMNS = [
+    "range_id",
+    "start_ts",
+    "end_ts",
+    "range_high",
+    "range_low",
+    "range_mid",
+    "range_width",
+    "range_width_pct",
+    "bars_evaluated",
+    "containment_ratio",
+    "status",
+]
+
+# Output column order for detect_range_breakouts (pinned schema)
+_BREAKOUT_OUTPUT_COLUMNS = [
+    "breakout_id",
+    "range_id",
+    "breakout_ts",
+    "direction",
+    "breakout_price",
+    "boundary_price",
+    "distance",
+    "distance_pct",
+    "confirm_bars",
+]
+
+
+def _validate_swing_params(swing_window: int, min_swing_pct: float) -> None:
+    """Validate swing detection parameters."""
+    if not isinstance(swing_window, int) or swing_window < 1:
+        raise ValueError("swing_window must be an integer >= 1")
+    if not isinstance(min_swing_pct, Real) or not (0.0 <= min_swing_pct < 1.0):
+        raise ValueError("min_swing_pct must be a float in [0.0, 1.0)")
+
+
+def _validate_structure_df(swings: pd.DataFrame) -> None:
+    """Validate swings DataFrame from detect_swing_points."""
+    if not isinstance(swings, pd.DataFrame):
+        raise ValueError("swings must be a pandas DataFrame")
+    required_cols = set(_SWING_OUTPUT_COLUMNS)
+    if not required_cols.issubset(set(swings.columns)):
+        missing = required_cols - set(swings.columns)
+        raise ValueError(f"swings missing required columns: {missing}")
+
+
+def _validate_range_params(
+    range_lookback: int,
+    max_range_pct: float,
+    containment_ratio: float,
+    boundary_buffer_pct: float,
+) -> None:
+    """Validate range detection parameters."""
+    if not isinstance(range_lookback, int) or range_lookback < 2:
+        raise ValueError("range_lookback must be an integer >= 2")
+    if not isinstance(max_range_pct, Real) or not (0.0 < max_range_pct < 1.0):
+        raise ValueError("max_range_pct must be a float in (0.0, 1.0)")
+    if not isinstance(containment_ratio, Real) or not (0.0 < containment_ratio <= 1.0):
+        raise ValueError("containment_ratio must be a float in (0.0, 1.0]")
+    if not isinstance(boundary_buffer_pct, Real) or not (0.0 <= boundary_buffer_pct < 1.0):
+        raise ValueError("boundary_buffer_pct must be a float in [0.0, 1.0)")
+
+
+def _validate_breakout_params(breakout_confirm_bars: int, breakout_buffer_pct: float) -> None:
+    """Validate breakout detection parameters."""
+    if not isinstance(breakout_confirm_bars, int) or breakout_confirm_bars < 1:
+        raise ValueError("breakout_confirm_bars must be an integer >= 1")
+    if not isinstance(breakout_buffer_pct, Real) or not (0.0 <= breakout_buffer_pct < 1.0):
+        raise ValueError("breakout_buffer_pct must be a float in [0.0, 1.0)")
+
+
+def detect_swing_points(
+    ohlcv: pd.DataFrame,
+    *,
+    swing_window: int = 2,
+    min_swing_pct: float = 0.02,
+) -> pd.DataFrame:
+    """
+    Detect deterministic swing pivot points from already-windowed OHLCV input.
+
+    Parameters
+    ----------
+    ohlcv : pd.DataFrame
+        Windowed OHLCV data with UTC-aware DatetimeIndex and columns:
+        open, high, low, close, volume. Must be monotonically increasing
+        with no duplicates.
+    swing_window : int, optional
+        Window size for swing detection. Default is 2.
+    min_swing_pct : float, optional
+        Minimum percentage move to qualify as a swing. Default is 0.02 (2%).
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with columns (in order):
+        - swing_id: int (ascending, 1-based)
+        - pivot_index: int
+        - swing_type: 'high' or 'low'
+        - pivot_ts: pd.Timestamp
+        - pivot_price: float
+        - leg_start_ts: pd.Timestamp
+        - leg_start_price: float
+        - leg_end_ts: pd.Timestamp
+        - leg_end_price: float
+        - price_delta: float
+        - pct_delta: float
+
+        Rows are ordered by pivot_index ASC, then swing_type stable tie-break
+        (lows before highs at the same index).
+
+    Raises
+    ------
+    ValueError
+        If OHLCV fails validation or parameters are invalid.
+    """
+    _validate_ohlcv(ohlcv)
+    _validate_swing_params(swing_window, min_swing_pct)
+
+    # Reuse Elliott internal swing extraction (doesn't change Elliott public contract)
+    swings = _extract_swings(ohlcv, swing_window, min_swing_pct)
+
+    if not swings:
+        return pd.DataFrame(columns=_SWING_OUTPUT_COLUMNS)
+
+    rows = []
+    for idx, swing in enumerate(swings, start=1):
+        price_delta = swing["price"] - swing["start_price"]
+        prev_price = swing["start_price"]
+        pct_delta = abs(price_delta) / abs(prev_price) if prev_price != 0 else 0.0
+
+        rows.append(
+            {
+                "swing_id": idx,
+                "pivot_index": swing["index"],
+                "swing_type": swing["kind"],
+                "pivot_ts": swing["end_ts"],
+                "pivot_price": swing["price"],
+                "leg_start_ts": swing["start_ts"],
+                "leg_start_price": swing["start_price"],
+                "leg_end_ts": swing["end_ts"],
+                "leg_end_price": swing["end_price"],
+                "price_delta": price_delta,
+                "pct_delta": pct_delta,
+            }
+        )
+
+    result_df = pd.DataFrame(rows)
+    # Deterministic ordering: pivot_index ASC, swing_type tie-break (low before high)
+    result_df["_swing_order"] = result_df["swing_type"].map({"low": 0, "high": 1})
+    result_df = result_df.sort_values(["pivot_index", "_swing_order"]).reset_index(drop=True)
+    result_df["swing_id"] = range(1, len(result_df) + 1)
+    result_df = result_df.drop(columns=["_swing_order"])
+
+    return result_df[_SWING_OUTPUT_COLUMNS]
+
+
+def classify_market_structure(
+    swings: pd.DataFrame,
+    *,
+    equal_epsilon: float = 1e-9,
+) -> pd.DataFrame:
+    """
+    Classify deterministic market structure transitions from swing points.
+
+    Classifies each swing as HH (Higher High), HL (Higher Low), LH (Lower High),
+    LL (Lower Low), EH (Equal High), or EL (Equal Low) based on comparison to the
+    prior swing of the same type.
+
+    Parameters
+    ----------
+    swings : pd.DataFrame
+        DataFrame from detect_swing_points with columns:
+        swing_id, pivot_index, swing_type, pivot_ts, pivot_price,
+        leg_start_ts, leg_start_price, leg_end_ts, leg_end_price,
+        price_delta, pct_delta.
+    equal_epsilon : float, optional
+        Tolerance for considering prices equal. Default is 1e-9.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with columns (in order):
+        - event_id: int (ascending, 1-based)
+        - event_ts: pd.Timestamp
+        - swing_id: int
+        - swing_type: 'high' or 'low'
+        - classification: 'HH', 'HL', 'LH', 'LL', 'EH', or 'EL'
+        - reference_swing_id: int
+        - reference_price: float
+        - current_price: float
+        - price_delta: float
+        - pct_delta: float
+        - trend_state: 'bullish', 'bearish', 'transition', or 'range'
+
+        Rows are ordered by event_id ASC.
+
+    Raises
+    ------
+    ValueError
+        If swings DataFrame fails validation or parameters are invalid.
+    """
+    _validate_structure_df(swings)
+
+    if len(swings) == 0:
+        return pd.DataFrame(columns=_STRUCTURE_OUTPUT_COLUMNS)
+
+    # Separate highs and lows, preserving order
+    highs = swings[swings["swing_type"] == "high"].sort_values("swing_id").reset_index(drop=True)
+    lows = swings[swings["swing_type"] == "low"].sort_values("swing_id").reset_index(drop=True)
+
+    rows = []
+    event_id = 1
+
+    # Process all swings in chronological order by pivot_index
+    all_swings_sorted = swings.sort_values(["pivot_index", "swing_type"]).reset_index(drop=True)
+
+    for _, swing in all_swings_sorted.iterrows():
+        if swing["swing_type"] == "high":
+            if len(highs) < 2:
+                # First high has no prior to compare
+                classification = None
+                reference_swing_id = None
+                reference_price = None
+                trend_state = "transition"
+            else:
+                # Find prior high
+                prior_high_idx = highs[highs["swing_id"] < swing["swing_id"]].index
+                if len(prior_high_idx) == 0:
+                    classification = None
+                    reference_swing_id = None
+                    reference_price = None
+                    trend_state = "transition"
+                else:
+                    prior_high = highs.loc[prior_high_idx[-1]]
+                    reference_swing_id = int(prior_high["swing_id"])
+                    reference_price = prior_high["pivot_price"]
+
+                    price_diff = swing["pivot_price"] - reference_price
+                    if abs(price_diff) <= equal_epsilon:
+                        classification = "EH"
+                    elif price_diff > 0:
+                        classification = "HH"
+                    else:
+                        classification = "LH"
+
+                    current_price = swing["pivot_price"]
+                    price_delta = current_price - reference_price
+                    pct_delta = abs(price_delta) / abs(reference_price) if reference_price != 0 else 0.0
+        else:  # low
+            if len(lows) < 2:
+                classification = None
+                reference_swing_id = None
+                reference_price = None
+                trend_state = "transition"
+            else:
+                prior_low_idx = lows[lows["swing_id"] < swing["swing_id"]].index
+                if len(prior_low_idx) == 0:
+                    classification = None
+                    reference_swing_id = None
+                    reference_price = None
+                    trend_state = "transition"
+                else:
+                    prior_low = lows.loc[prior_low_idx[-1]]
+                    reference_swing_id = int(prior_low["swing_id"])
+                    reference_price = prior_low["pivot_price"]
+
+                    price_diff = swing["pivot_price"] - reference_price
+                    if abs(price_diff) <= equal_epsilon:
+                        classification = "EL"
+                    elif price_diff < 0:
+                        classification = "LL"
+                    else:
+                        classification = "HL"
+
+                    current_price = swing["pivot_price"]
+                    price_delta = current_price - reference_price
+                    pct_delta = abs(price_delta) / abs(reference_price) if reference_price != 0 else 0.0
+
+        if classification is not None:
+            rows.append(
+                {
+                    "event_id": event_id,
+                    "event_ts": swing["pivot_ts"],
+                    "swing_id": int(swing["swing_id"]),
+                    "swing_type": swing["swing_type"],
+                    "classification": classification,
+                    "reference_swing_id": int(reference_swing_id),
+                    "reference_price": reference_price,
+                    "current_price": swing["pivot_price"],
+                    "price_delta": price_delta,
+                    "pct_delta": pct_delta,
+                    "trend_state": None,  # Will be filled after all rows processed
+                }
+            )
+            event_id += 1
+
+    if not rows:
+        return pd.DataFrame(columns=_STRUCTURE_OUTPUT_COLUMNS)
+
+    result_df = pd.DataFrame(rows)
+
+    # Determine trend_state based on most recent high+low pair
+    # Get the latest classified high and low
+    latest_high = result_df[result_df["swing_type"] == "high"].sort_values("event_id").tail(1)
+    latest_low = result_df[result_df["swing_type"] == "low"].sort_values("event_id").tail(1)
+
+    if len(latest_high) > 0 and len(latest_low) > 0:
+        high_class = latest_high.iloc[0]["classification"]
+        low_class = latest_low.iloc[0]["classification"]
+
+        if high_class in ("HH", "EH") and low_class == "HL":
+            current_trend = "bullish"
+        elif high_class == "LH" and low_class in ("LL", "EL"):
+            current_trend = "bearish"
+        else:
+            current_trend = "range"
+
+        result_df["trend_state"] = current_trend
+    else:
+        result_df["trend_state"] = "transition"
+
+    return result_df[_STRUCTURE_OUTPUT_COLUMNS]
+
+
+def detect_price_ranges(
+    ohlcv: pd.DataFrame,
+    swings: pd.DataFrame,
+    *,
+    range_lookback: int = 20,
+    max_range_pct: float = 0.03,
+    containment_ratio: float = 0.8,
+    boundary_buffer_pct: float = 0.001,
+) -> pd.DataFrame:
+    """
+    Detect deterministic range-bound periods from OHLCV and swing data.
+
+    A range is detected when price consolidates within a tight band over
+    the lookback window, with highs and lows respecting boundaries.
+
+    Parameters
+    ----------
+    ohlcv : pd.DataFrame
+        Windowed OHLCV data with UTC-aware DatetimeIndex and columns:
+        open, high, low, close, volume. Must be monotonically increasing
+        with no duplicates.
+    swings : pd.DataFrame
+        DataFrame from detect_swing_points.
+    range_lookback : int, optional
+        Number of bars to evaluate for range detection. Default is 20.
+    max_range_pct : float, optional
+        Maximum range width as percentage of range midpoint. Default is 0.03 (3%).
+    containment_ratio : float, optional
+        Minimum ratio of bars that must be within range boundaries. Default is 0.8.
+    boundary_buffer_pct : float, optional
+        Buffer around boundaries as percentage. Default is 0.001 (0.1%).
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with columns (in order):
+        - range_id: int (ascending, 1-based)
+        - start_ts: pd.Timestamp
+        - end_ts: pd.Timestamp
+        - range_high: float
+        - range_low: float
+        - range_mid: float
+        - range_width: float
+        - range_width_pct: float
+        - bars_evaluated: int
+        - containment_ratio: float
+        - status: 'active', 'expired', 'broken_up', or 'broken_down'
+
+    Raises
+    ------
+    ValueError
+        If inputs fail validation or parameters are invalid.
+    """
+    _validate_ohlcv(ohlcv)
+    _validate_structure_df(swings)
+    _validate_range_params(range_lookback, max_range_pct, containment_ratio, boundary_buffer_pct)
+
+    if len(swings) < 4:
+        return pd.DataFrame(columns=_RANGE_OUTPUT_COLUMNS)
+
+    rows = []
+    range_id = 1
+
+    # Get swing highs and lows with their timestamps
+    swing_highs = swings[swings["swing_type"] == "high"].sort_values("pivot_index").reset_index(drop=True)
+    swing_lows = swings[swings["swing_type"] == "low"].sort_values("pivot_index").reset_index(drop=True)
+
+    if len(swing_highs) < 2 or len(swing_lows) < 2:
+        return pd.DataFrame(columns=_RANGE_OUTPUT_COLUMNS)
+
+    # Evaluate rolling windows of swings
+    for start_idx in range(len(swing_highs) - 1):
+        for end_idx in range(start_idx + 1, min(start_idx + range_lookback, len(swing_highs))):
+            # Get swing subset for this window
+            window_highs = swing_highs.iloc[start_idx : end_idx + 1]
+            window_lows_subset = swing_lows[
+                (swing_lows["pivot_index"] >= window_highs["pivot_index"].iloc[0])
+                & (swing_lows["pivot_index"] <= window_highs["pivot_index"].iloc[-1])
+            ]
+
+            if len(window_highs) < 2 or len(window_lows_subset) < 2:
+                continue
+
+            range_high = window_highs["pivot_price"].max()
+            range_low = window_lows_subset["pivot_price"].min()
+            range_mid = (range_high + range_low) / 2.0
+            range_width = range_high - range_low
+            range_width_pct = range_width / range_mid if range_mid != 0 else 0.0
+
+            # Check width threshold
+            if range_width_pct > max_range_pct:
+                continue
+
+            # Get OHLCV slice for this range
+            start_ts = window_highs["pivot_ts"].iloc[0]
+            end_ts = window_highs["pivot_ts"].iloc[-1]
+
+            # Align to actual bar times in ohlcv
+            ohlcv_slice = ohlcv[(ohlcv.index >= start_ts) & (ohlcv.index <= end_ts)]
+
+            if len(ohlcv_slice) == 0:
+                continue
+
+            bars_evaluated = len(ohlcv_slice)
+
+            # Calculate containment: bars within range boundaries with buffer
+            buffer = range_width * boundary_buffer_pct
+            high_bound = range_high - buffer
+            low_bound = range_low + buffer
+
+            contained_bars = ((ohlcv_slice["close"] >= low_bound) & (ohlcv_slice["close"] <= high_bound)).sum()
+            actual_containment = contained_bars / bars_evaluated if bars_evaluated > 0 else 0.0
+
+            if actual_containment < containment_ratio:
+                continue
+
+            # Determine status based on current price position
+            last_close = ohlcv_slice["close"].iloc[-1]
+            if last_close > high_bound:
+                status = "broken_up"
+            elif last_close < low_bound:
+                status = "broken_down"
+            else:
+                status = "active"
+
+            rows.append(
+                {
+                    "range_id": range_id,
+                    "start_ts": start_ts,
+                    "end_ts": end_ts,
+                    "range_high": range_high,
+                    "range_low": range_low,
+                    "range_mid": range_mid,
+                    "range_width": range_width,
+                    "range_width_pct": range_width_pct,
+                    "bars_evaluated": bars_evaluated,
+                    "containment_ratio": round(actual_containment, 4),
+                    "status": status,
+                }
+            )
+            range_id += 1
+
+    if not rows:
+        return pd.DataFrame(columns=_RANGE_OUTPUT_COLUMNS)
+
+    result_df = pd.DataFrame(rows)
+    # Deduplicate ranges by range_high/range_low boundaries, keep first occurrence
+    result_df = result_df.drop_duplicates(subset=["range_high", "range_low"], keep="first")
+    result_df["range_id"] = range(1, len(result_df) + 1)
+    result_df = result_df.sort_values("start_ts").reset_index(drop=True)
+
+    return result_df[_RANGE_OUTPUT_COLUMNS]
+
+
+def detect_range_breakouts(
+    ohlcv: pd.DataFrame,
+    ranges: pd.DataFrame,
+    *,
+    breakout_confirm_bars: int = 1,
+    breakout_buffer_pct: float = 0.001,
+) -> pd.DataFrame:
+    """
+    Detect deterministic breakout events from range boundaries.
+
+    Identifies upward or downward structural breakouts relative to
+    pinned range definitions from detect_price_ranges.
+
+    Parameters
+    ----------
+    ohlcv : pd.DataFrame
+        Windowed OHLCV data with UTC-aware DatetimeIndex and columns:
+        open, high, low, close, volume. Must be monotonically increasing
+        with no duplicates.
+    ranges : pd.DataFrame
+        DataFrame from detect_price_ranges.
+    breakout_confirm_bars : int, optional
+        Number of consecutive bars required to confirm breakout. Default is 1.
+    breakout_buffer_pct : float, optional
+        Buffer above/below range boundaries for breakout detection.
+        Default is 0.001 (0.1%).
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with columns (in order):
+        - breakout_id: int (ascending, 1-based)
+        - range_id: int
+        - breakout_ts: pd.Timestamp
+        - direction: 'up' or 'down'
+        - breakout_price: float
+        - boundary_price: float
+        - distance: float
+        - distance_pct: float
+        - confirm_bars: int
+
+    Raises
+    ------
+    ValueError
+        If inputs fail validation or parameters are invalid.
+    """
+    _validate_ohlcv(ohlcv)
+    _validate_breakout_params(breakout_confirm_bars, breakout_buffer_pct)
+
+    if not isinstance(ranges, pd.DataFrame) or ranges.empty:
+        return pd.DataFrame(columns=_BREAKOUT_OUTPUT_COLUMNS)
+
+    required_range_cols = set(_RANGE_OUTPUT_COLUMNS)
+    if not required_range_cols.issubset(set(ranges.columns)):
+        missing = required_range_cols - set(ranges.columns)
+        raise ValueError(f"ranges missing required columns: {missing}")
+
+    if len(ranges) == 0:
+        return pd.DataFrame(columns=_BREAKOUT_OUTPUT_COLUMNS)
+
+    rows = []
+    breakout_id = 1
+
+    for _, range_row in ranges.iterrows():
+        range_id = int(range_row["range_id"])
+        range_high = range_row["range_high"]
+        range_low = range_row["range_low"]
+        start_ts = range_row["start_ts"]
+        end_ts = range_row["end_ts"]
+
+        # Get OHLCV after the range end for breakout detection
+        post_range_ohlcv = ohlcv[ohlcv.index > end_ts]
+
+        if len(post_range_ohlcv) < breakout_confirm_bars:
+            continue
+
+        buffer = (range_high - range_low) * breakout_buffer_pct
+
+        # Check for upward breakout: close > range_high + buffer for confirm_bars
+        up_breakout_idx = None
+        for i in range(len(post_range_ohlcv) - breakout_confirm_bars + 1):
+            window = post_range_ohlcv.iloc[i : i + breakout_confirm_bars]
+            if all(window["close"] > range_high + buffer):
+                up_breakout_idx = i
+                break
+
+        # Check for downward breakout: close < range_low - buffer for confirm_bars
+        down_breakout_idx = None
+        for i in range(len(post_range_ohlcv) - breakout_confirm_bars + 1):
+            window = post_range_ohlcv.iloc[i : i + breakout_confirm_bars]
+            if all(window["close"] < range_low - buffer):
+                down_breakout_idx = i
+                break
+
+        # Emit first qualifying breakout per range (deterministic no-dup policy)
+        if up_breakout_idx is not None and down_breakout_idx is not None:
+            # Both detected - take the earlier one
+            if up_breakout_idx <= down_breakout_idx:
+                breakout_idx = up_breakout_idx
+                direction = "up"
+                boundary_price = range_high
+                breakout_price = post_range_ohlcv.iloc[breakout_idx]["close"]
+                distance = breakout_price - range_high
+            else:
+                breakout_idx = down_breakout_idx
+                direction = "down"
+                boundary_price = range_low
+                breakout_price = post_range_ohlcv.iloc[breakout_idx]["close"]
+                distance = range_low - breakout_price
+        elif up_breakout_idx is not None:
+            breakout_idx = up_breakout_idx
+            direction = "up"
+            boundary_price = range_high
+            breakout_price = post_range_ohlcv.iloc[breakout_idx]["close"]
+            distance = breakout_price - range_high
+        elif down_breakout_idx is not None:
+            breakout_idx = down_breakout_idx
+            direction = "down"
+            boundary_price = range_low
+            breakout_price = post_range_ohlcv.iloc[breakout_idx]["close"]
+            distance = range_low - breakout_price
+        else:
+            continue
+
+        distance_pct = distance / boundary_price if boundary_price != 0 else 0.0
+
+        rows.append(
+            {
+                "breakout_id": breakout_id,
+                "range_id": range_id,
+                "breakout_ts": post_range_ohlcv.index[breakout_idx],
+                "direction": direction,
+                "breakout_price": breakout_price,
+                "boundary_price": boundary_price,
+                "distance": distance,
+                "distance_pct": distance_pct,
+                "confirm_bars": breakout_confirm_bars,
+            }
+        )
+        breakout_id += 1
+
+    if not rows:
+        return pd.DataFrame(columns=_BREAKOUT_OUTPUT_COLUMNS)
+
+    result_df = pd.DataFrame(rows)
+    return result_df[_BREAKOUT_OUTPUT_COLUMNS]
