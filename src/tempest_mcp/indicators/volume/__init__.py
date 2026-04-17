@@ -3,6 +3,16 @@
 import numpy as np
 import pandas as pd
 
+from tempest_mcp.indicators.volume.tpo import (
+    COL_IN_VALUE_AREA,
+    COL_PERIOD_COUNT,
+    COL_PERIOD_MARKERS,
+    COL_ROW_HIGH,
+    COL_ROW_LOW,
+    COL_ROW_MID,
+    COL_TPO_COUNT,
+    calculate_tpo_chart,
+)
 from tempest_mcp.indicators.volume.volume_profile import (
     calculate_volume_profile,
 )
@@ -316,6 +326,15 @@ __all__ = [
     "calculate_obv",
     "calculate_mfi",
     "calculate_volume_profile",
+    "calculate_tpo_chart",
+    # TPO column constants
+    "COL_ROW_LOW",
+    "COL_ROW_HIGH",
+    "COL_ROW_MID",
+    "COL_TPO_COUNT",
+    "COL_PERIOD_MARKERS",
+    "COL_PERIOD_COUNT",
+    "COL_IN_VALUE_AREA",
     # Result wrappers (ta-lib)
     "calculate_obv_result",
     "calculate_mfi_result",

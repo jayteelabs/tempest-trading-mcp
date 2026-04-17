@@ -105,5 +105,4 @@ __all__ = [
     "DEFAULT_FIB_EXTENSION_LEVELS",
     # Elliott Wave indicator
     "detect_elliott_waves",
-
 ]
