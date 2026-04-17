@@ -22,6 +22,8 @@ from tempest_mcp.logging_config import get_logger, setup_logging
 from tempest_mcp.tools import (
     BACKTEST_TOOLS,
     backtest_strategy,
+    calculate_volume_profile,
+    detect_order_blocks,
     fetch_klines,
     fetch_orderbook,
     fetch_ticker,
@@ -70,6 +72,9 @@ TOOLS: dict[str, Any] = {
 }
 # Phase 2 dedicated backtest tools (ENG-17) — populate from BACKTEST_TOOLS registry
 TOOLS.update(BACKTEST_TOOLS)
+# Phase 2 analysis tools (ENG-28)
+TOOLS["calculate_volume_profile"] = calculate_volume_profile
+TOOLS["detect_order_blocks"] = detect_order_blocks
 
 # ── Tool Schemas (MCP protocol surface) ──────────────────────────────────────
 TOOL_SCHEMAS: list[Tool] = [
@@ -389,6 +394,49 @@ TOOL_SCHEMAS: list[Tool] = [
             },
         },
     ),
+    # ── Analysis tools (ENG-28) ──────────────────────────────────────────────────
+    Tool(
+        name="calculate_volume_profile",
+        description="Calculate volume profile for a symbol over a time window. Returns profile rows, POC, VAH, VAL, and shape classification.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string"},
+                "timeframe": BACKTEST_TIMEFRAME_PROPERTY,
+                "start_at": {"type": "string", "description": BACKTEST_DATETIME_DESCRIPTION},
+                "end_at": {"type": "string", "description": BACKTEST_DATETIME_DESCRIPTION},
+                "exchange": {"type": "string", "default": "binance"},
+                "bin_count": {"type": "integer", "default": 100, "minimum": 1, "maximum": 500},
+                "profile_type": {"type": "string", "enum": ["fixed", "dynamic"], "default": "fixed"},
+                "dynamic_mode": {"type": "string", "enum": ["atr", "pct"]},
+                "atr_period": {"type": "integer", "default": 14},
+                "atr_mult": {"type": "number", "default": 1.0},
+                "range_pct": {"type": "number"},
+                "value_area_pct": {"type": "number", "default": 0.70},
+                "max_bars": {"type": "integer"},
+            },
+            "required": ["symbol", "timeframe", "start_at", "end_at"],
+        },
+    ),
+    Tool(
+        name="detect_order_blocks",
+        description="Detect active order-block zones as of the end of the requested window. Read-only analytical output: candidate detection + invalidation + age filtering only. No retest, entry, or PnL output.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string"},
+                "timeframe": BACKTEST_TIMEFRAME_PROPERTY,
+                "start_at": {"type": "string", "description": BACKTEST_DATETIME_DESCRIPTION},
+                "end_at": {"type": "string", "description": BACKTEST_DATETIME_DESCRIPTION},
+                "exchange": {"type": "string", "default": "binance"},
+                "atr_period": {"type": "integer", "default": 14},
+                "impulse_atr_mult": {"type": "number", "default": 1.0},
+                "max_zone_age_bars": {"type": "integer", "default": 20},
+                "max_bars": {"type": "integer"},
+            },
+            "required": ["symbol", "timeframe", "start_at", "end_at"],
+        },
+    ),
 ]
 
 
@@ -577,6 +625,9 @@ def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> str | None:
         "backtest_elliot_wave",
         "compare_strategies",
     ):
+        return validate_symbol(arguments.get("symbol", ""), "symbol")
+    # Phase 2 analysis tools (ENG-28) — validate symbol
+    if name in ("calculate_volume_profile", "detect_order_blocks"):
         return validate_symbol(arguments.get("symbol", ""), "symbol")
     # Legacy deprecated tool — still validate symbol for completeness
     if name == "backtest_strategy":

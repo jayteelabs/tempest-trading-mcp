@@ -773,5 +773,176 @@ def generate_order_block_signals(
     return signals
 
 
-__all__ = ["generate_order_block_signals"]
+# ---------------------------------------------------------------------------
+# Standalone analytical detection helper (ENG-28)
+# ---------------------------------------------------------------------------
+
+
+def detect_active_order_blocks(
+    ohlcv_df: pd.DataFrame,
+    *,
+    atr_period: int = DEFAULT_ATR_PERIOD,
+    impulse_atr_mult: float = OB_IMPULSE_ATR_MULT,
+    max_zone_age_bars: int = OB_MAX_ZONE_AGE_BARS,
+) -> list[dict]:
+    """Detect active, uninvalidated order-block zones as of the final bar in the window.
+
+    This is a **read-only analytical** helper that exposes only the detection-stage
+    boundary: candidate detection → invalidation filtering → age filtering.
+    It **does not** produce retest confirmation, entry signals, or PnL output.
+
+    The function processes the full window left-to-right, progressively applying
+    invalidation so that zones invalidated before the end-of-window are excluded.
+
+    Parameters
+    ----------
+    ohlcv_df : pd.DataFrame
+        DataFrame with columns [open, high, low, close, volume] and
+        UTC-aware DatetimeIndex. Must be non-empty, monotonic, non-duplicated.
+    atr_period : int, default 14
+        Period for ATR calculation.
+    impulse_atr_mult : float, default 1.0
+        Body size must be >= impulse_atr_mult * ATR for a valid displacement candle.
+    max_zone_age_bars : int, default 20
+        Maximum age of a zone before it is excluded from the active set.
+
+    Returns
+    -------
+    list[dict]
+        List of active zone dicts sorted by creation order. Each dict contains:
+        - ``date``: ISO 8601 timestamp of the zone's displacement candle (UTC)
+        - ``type``: ``"bullish"`` or ``"bearish"``
+        - ``zone_high``: Upper boundary of the zone
+        - ``zone_low``: Lower boundary of the zone
+        - ``freshness_candles``: Bars from zone creation to final window bar
+          (after invalidation and age filtering)
+
+    Raises
+    ------
+    ValueError
+        If ohlcv_df is missing required columns, has insufficient data,
+        contains NaN values, has non-monotonic index, or parameters are invalid.
+
+    Note
+    ----
+    ``freshness_candles`` is computed as ``final_bar_index - zone.created_at``
+    after invalidation and age filtering have been applied at the end of the window.
+    A zone that was invalidated before the final bar will not appear in the result.
+    """
+    # Validate detection-stage inputs only (subset of full strategy validation)
+    _validate_detection_inputs(
+        ohlcv_df=ohlcv_df,
+        atr_period=atr_period,
+        impulse_atr_mult=impulse_atr_mult,
+        max_zone_age_bars=max_zone_age_bars,
+    )
+
+    open_series = ohlcv_df["open"]
+    high_series = ohlcv_df["high"]
+    low_series = ohlcv_df["low"]
+    close_series = ohlcv_df["close"]
+
+    # Compute ATR context
+    atr, _, _, _ = _compute_context(
+        high=high_series,
+        low=low_series,
+        open_series=open_series,
+        close=close_series,
+        atr_period=atr_period,
+    )
+
+    # Detect all candidate zones upfront
+    all_zones: list[_Zone] = _detect_order_block_candidates(
+        high=high_series,
+        low=low_series,
+        open=open_series,
+        close=close_series,
+        atr=atr,
+        impulse_atr_mult=impulse_atr_mult,
+    )
+
+    n = len(ohlcv_df)
+    final_idx = n - 1
+
+    # Progressively apply invalidation across the window
+    for i in range(n):
+        if i > 0:
+            all_zones = _invalidate_zones_by_retest(
+                all_zones, high_series, low_series, close_series, i
+            )
+
+    # Select active zones at the final bar
+    active_at_end = _select_active_zones(
+        zones=all_zones,
+        current_idx=final_idx,
+        max_zone_age_bars=max_zone_age_bars,
+    )
+
+    # Build result sorted by creation order (stable, deterministic)
+    result = []
+    index_map = {}
+    for idx_ts in ohlcv_df.index:
+        index_map[idx_ts] = idx_ts
+
+    for zone, _age in active_at_end:
+        # freshness_candles = bars from creation to final bar
+        freshness = final_idx - zone.created_at
+        zone_ts = ohlcv_df.index[zone.ob_candle_idx]
+        result.append(
+            {
+                "date": zone_ts.isoformat(),
+                "type": zone.direction.value,
+                "zone_high": zone.high,
+                "zone_low": zone.low,
+                "freshness_candles": freshness,
+            }
+        )
+
+    # Sort by ob_candle_idx (creation order) for deterministic output
+    result.sort(key=lambda z: ohlcv_df.index.get_loc(
+        pd.Timestamp(z["date"]).tz_localize("UTC")
+    ) if pd.Timestamp(z["date"]).tzinfo is None else pd.Timestamp(z["date"]))
+
+    return result
+
+
+def _validate_detection_inputs(
+    ohlcv_df: pd.DataFrame,
+    atr_period: int,
+    impulse_atr_mult: float,
+    max_zone_age_bars: int,
+) -> None:
+    """Validate detection-stage inputs for detect_active_order_blocks."""
+    required_columns = {"open", "high", "low", "close", "volume"}
+    missing_columns = required_columns.difference(ohlcv_df.columns)
+    if missing_columns:
+        missing_list = ", ".join(sorted(missing_columns))
+        raise ValueError(f"OHLCV DataFrame missing required columns: {missing_list}")
+
+    if atr_period <= 0:
+        raise ValueError(f"atr_period must be positive, got {atr_period}")
+
+    if impulse_atr_mult <= 0:
+        raise ValueError(f"impulse_atr_mult must be positive, got {impulse_atr_mult}")
+
+    if max_zone_age_bars <= 0:
+        raise ValueError(f"max_zone_age_bars must be positive, got {max_zone_age_bars}")
+
+    if len(ohlcv_df) < max(atr_period, 4):
+        raise ValueError(
+            f"Insufficient data for ATR({atr_period}) + zone detection: "
+            f"need at least {max(atr_period, 4)} bars, got {len(ohlcv_df)}"
+        )
+
+    for col in required_columns:
+        if ohlcv_df[col].isna().any():
+            raise ValueError(f"OHLCV DataFrame contains NaN values in required column: {col}")
+
+    if not ohlcv_df.index.is_monotonic_increasing and not ohlcv_df.index.equals(
+        ohlcv_df.index.sort_values()
+    ):
+        raise ValueError("OHLCV DataFrame index must be monotonically increasing")
+
+
+__all__ = ["generate_order_block_signals", "detect_active_order_blocks"]
 

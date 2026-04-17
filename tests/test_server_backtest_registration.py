@@ -346,3 +346,286 @@ class TestOrderBlocksSchemaParams:
             if tool.name == "backtest_order_blocks":
                 props = tool.inputSchema.get("properties", {})
                 assert "risk_reward_ratio" in props
+
+
+# ── ENG-28 analysis tools registration tests ────────────────────────────────────
+
+
+class TestEng28ToolRegistration:
+    """Tests for ENG-28 analysis tool server registration."""
+
+    def test_calculate_volume_profile_in_tools(self):
+        """calculate_volume_profile is registered in TOOLS."""
+        from tempest_mcp.server import TOOLS
+        assert "calculate_volume_profile" in TOOLS
+
+    def test_detect_order_blocks_in_tools(self):
+        """detect_order_blocks is registered in TOOLS."""
+        from tempest_mcp.server import TOOLS
+        assert "detect_order_blocks" in TOOLS
+
+    def test_both_tools_in_schemas(self):
+        """Both ENG-28 tools are listed in TOOL_SCHEMAS."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        schema_names = {tool.name for tool in TOOL_SCHEMAS}
+        assert "calculate_volume_profile" in schema_names
+        assert "detect_order_blocks" in schema_names
+
+
+class TestEng28SharedWindowContract:
+    """Tests that ENG-28 tools follow the shared window naming contract."""
+
+    def test_calculate_volume_profile_has_symbol(self):
+        """calculate_volume_profile has symbol param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "calculate_volume_profile":
+                props = tool.inputSchema.get("properties", {})
+                assert "symbol" in props
+
+    def test_calculate_volume_profile_has_timeframe(self):
+        """calculate_volume_profile has timeframe param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "calculate_volume_profile":
+                props = tool.inputSchema.get("properties", {})
+                assert "timeframe" in props
+
+    def test_calculate_volume_profile_has_start_at(self):
+        """calculate_volume_profile has start_at param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "calculate_volume_profile":
+                props = tool.inputSchema.get("properties", {})
+                assert "start_at" in props
+
+    def test_calculate_volume_profile_has_end_at(self):
+        """calculate_volume_profile has end_at param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "calculate_volume_profile":
+                props = tool.inputSchema.get("properties", {})
+                assert "end_at" in props
+
+    def test_detect_order_blocks_has_symbol(self):
+        """detect_order_blocks has symbol param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "detect_order_blocks":
+                props = tool.inputSchema.get("properties", {})
+                assert "symbol" in props
+
+    def test_detect_order_blocks_has_timeframe(self):
+        """detect_order_blocks has timeframe param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "detect_order_blocks":
+                props = tool.inputSchema.get("properties", {})
+                assert "timeframe" in props
+
+    def test_detect_order_blocks_has_start_at(self):
+        """detect_order_blocks has start_at param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "detect_order_blocks":
+                props = tool.inputSchema.get("properties", {})
+                assert "start_at" in props
+
+    def test_detect_order_blocks_has_end_at(self):
+        """detect_order_blocks has end_at param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "detect_order_blocks":
+                props = tool.inputSchema.get("properties", {})
+                assert "end_at" in props
+
+    def test_both_use_timeframe_enum(self):
+        """Both ENG-28 tools use the shared SUPPORTED_TIMEFRAMES enum."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        from tempest_mcp.tools.backtest_window import SUPPORTED_TIMEFRAMES
+
+        for tool_name in ("calculate_volume_profile", "detect_order_blocks"):
+            for tool in TOOL_SCHEMAS:
+                if tool.name == tool_name:
+                    tf = tool.inputSchema.get("properties", {}).get("timeframe", {})
+                    assert tf.get("enum") == list(SUPPORTED_TIMEFRAMES)
+
+
+class TestEng28ValidateToolArguments:
+    """Tests for validate_tool_arguments with ENG-28 tools."""
+
+    def test_valid_symbol_passes_volume_profile(self):
+        """Valid symbol returns None for calculate_volume_profile."""
+        from tempest_mcp.server import validate_tool_arguments
+        result = validate_tool_arguments("calculate_volume_profile", {"symbol": "BTC/USDT"})
+        assert result is None
+
+    def test_valid_symbol_passes_order_blocks(self):
+        """Valid symbol returns None for detect_order_blocks."""
+        from tempest_mcp.server import validate_tool_arguments
+        result = validate_tool_arguments("detect_order_blocks", {"symbol": "ETH/USDT"})
+        assert result is None
+
+    def test_empty_symbol_fails_volume_profile(self):
+        """Empty symbol returns error for calculate_volume_profile."""
+        from tempest_mcp.server import validate_tool_arguments
+        result = validate_tool_arguments("calculate_volume_profile", {"symbol": ""})
+        assert result is not None
+        assert "empty" in result.lower()
+
+    def test_empty_symbol_fails_order_blocks(self):
+        """Empty symbol returns error for detect_order_blocks."""
+        from tempest_mcp.server import validate_tool_arguments
+        result = validate_tool_arguments("detect_order_blocks", {"symbol": ""})
+        assert result is not None
+        assert "empty" in result.lower()
+
+    def test_invalid_symbol_format_fails_volume_profile(self):
+        """Invalid symbol format returns error for calculate_volume_profile."""
+        from tempest_mcp.server import validate_tool_arguments
+        result = validate_tool_arguments("calculate_volume_profile", {"symbol": "INVALID@"})
+        assert result is not None
+
+    def test_invalid_symbol_format_fails_order_blocks(self):
+        """Invalid symbol format returns error for detect_order_blocks."""
+        from tempest_mcp.server import validate_tool_arguments
+        result = validate_tool_arguments("detect_order_blocks", {"symbol": "INVALID/"})
+        assert result is not None
+
+
+class TestVolumeProfileSchemaParams:
+    """Tests for calculate_volume_profile specific schema params."""
+
+    def test_has_bin_count(self):
+        """calculate_volume_profile has bin_count param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "calculate_volume_profile":
+                props = tool.inputSchema.get("properties", {})
+                assert "bin_count" in props
+
+    def test_has_profile_type(self):
+        """calculate_volume_profile has profile_type param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "calculate_volume_profile":
+                props = tool.inputSchema.get("properties", {})
+                assert "profile_type" in props
+
+    def test_profile_type_enum_fixed_dynamic(self):
+        """profile_type enum is ['fixed', 'dynamic']."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "calculate_volume_profile":
+                props = tool.inputSchema.get("properties", {})
+                assert props["profile_type"]["enum"] == ["fixed", "dynamic"]
+
+    def test_has_dynamic_mode(self):
+        """calculate_volume_profile has dynamic_mode param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "calculate_volume_profile":
+                props = tool.inputSchema.get("properties", {})
+                assert "dynamic_mode" in props
+
+    def test_has_value_area_pct(self):
+        """calculate_volume_profile has value_area_pct param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "calculate_volume_profile":
+                props = tool.inputSchema.get("properties", {})
+                assert "value_area_pct" in props
+
+    def test_no_legacy_backtest_params(self):
+        """calculate_volume_profile does NOT expose backtest-only params."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        backtest_params = {
+            "trade_style", "initial_capital", "confirmation_enabled",
+            "retest_atr_tolerance", "risk_reward_ratio", "min_bars_before_entry",
+        }
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "calculate_volume_profile":
+                props = tool.inputSchema.get("properties", {})
+                for param in backtest_params:
+                    assert param not in props, f"calculate_volume_profile should not have {param}"
+
+
+class TestOrderBlocksAnalyticalBoundary:
+    """Tests that detect_order_blocks only exposes detection-stage params.
+
+    Per ENG-28 design: the standalone tool must NOT expose backtest-only
+    params (confirmation_enabled, retest_atr_tolerance, min_bars_before_entry,
+    risk_reward_ratio, exit/risk-management parameters).
+    """
+
+    def test_has_atr_period(self):
+        """detect_order_blocks has atr_period param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "detect_order_blocks":
+                props = tool.inputSchema.get("properties", {})
+                assert "atr_period" in props
+
+    def test_has_impulse_atr_mult(self):
+        """detect_order_blocks has impulse_atr_mult param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "detect_order_blocks":
+                props = tool.inputSchema.get("properties", {})
+                assert "impulse_atr_mult" in props
+
+    def test_has_max_zone_age_bars(self):
+        """detect_order_blocks has max_zone_age_bars param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "detect_order_blocks":
+                props = tool.inputSchema.get("properties", {})
+                assert "max_zone_age_bars" in props
+
+    def test_no_confirmation_enabled(self):
+        """detect_order_blocks does NOT have confirmation_enabled param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "detect_order_blocks":
+                props = tool.inputSchema.get("properties", {})
+                assert "confirmation_enabled" not in props
+
+    def test_no_retest_atr_tolerance(self):
+        """detect_order_blocks does NOT have retest_atr_tolerance param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "detect_order_blocks":
+                props = tool.inputSchema.get("properties", {})
+                assert "retest_atr_tolerance" not in props
+
+    def test_no_min_bars_before_entry(self):
+        """detect_order_blocks does NOT have min_bars_before_entry param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "detect_order_blocks":
+                props = tool.inputSchema.get("properties", {})
+                assert "min_bars_before_entry" not in props
+
+    def test_no_risk_reward_ratio(self):
+        """detect_order_blocks does NOT have risk_reward_ratio param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "detect_order_blocks":
+                props = tool.inputSchema.get("properties", {})
+                assert "risk_reward_ratio" not in props
+
+    def test_no_trade_style(self):
+        """detect_order_blocks does NOT have trade_style param (uses custom internally)."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "detect_order_blocks":
+                props = tool.inputSchema.get("properties", {})
+                assert "trade_style" not in props
+
+    def test_no_initial_capital(self):
+        """detect_order_blocks does NOT have initial_capital param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "detect_order_blocks":
+                props = tool.inputSchema.get("properties", {})
+                assert "initial_capital" not in props

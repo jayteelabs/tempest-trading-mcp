@@ -1,5 +1,6 @@
 """MCP tool stubs — Phase 2 backtest tools. ENG-17."""
 
+from tempest_mcp.tools.analysis_tools import calculate_volume_profile, detect_order_blocks
 from tempest_mcp.tools.backtest_tools import (
     BACKTEST_TOOLS,
     backtest_strategy,
@@ -21,4 +22,7 @@ __all__ = [
     "screener_scan",
     # Backtest tool registry for server registration
     "BACKTEST_TOOLS",
+    # Analysis tools (ENG-28)
+    "calculate_volume_profile",
+    "detect_order_blocks",
 ]
