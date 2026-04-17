@@ -16,6 +16,7 @@ from tempest_mcp.indicators.structure import detect_elliott_waves
 # Fixtures
 # =============================================================================
 
+
 def _make_ohlcv(dates, opens, highs, lows, closes, volumes):
     """Helper to create a UTC-aware OHLCV DataFrame."""
     df = pd.DataFrame(
@@ -25,44 +26,52 @@ def _make_ohlcv(dates, opens, highs, lows, closes, volumes):
     return df
 
 
+def _make_zigzag_ohlcv(closes):
+    """Create a deterministic OHLCV fixture from a zig-zag close path."""
+    dates = pd.date_range("2024-01-01", periods=len(closes), freq="D", tz="UTC")
+    opens = [closes[0], *closes[:-1]]
+    highs = [max(o, c) + 0.4 for o, c in zip(opens, closes)]
+    lows = [min(o, c) - 0.4 for o, c in zip(opens, closes)]
+    volumes = [1000.0] * len(closes)
+    return _make_ohlcv(dates, opens, highs, lows, closes, volumes)
+
+
 def _make_bullish_impulse_ohlcv():
-    """Create a clean 5-wave bullish impulse pattern."""
-    dates = pd.date_range("2024-01-01", periods=50, freq="D", tz="UTC")
-    # Wave 1: up 10
-    # Wave 2: down 3.8 (38% retracement)
-    # Wave 3: up 15
-    # Wave 4: down 3 (38% retracement)
-    # Wave 5: up 8
-    prices = [100.0]
-    for _ in range(9):
-        prices.append(prices[-1] + 1.0)
-    # Wave 1 top
-    prices.append(110.0)
-    # Wave 2 bottom (38% retracement)
-    prices.append(106.2)
-    # Wave 3 top
-    prices.append(121.2)
-    # Wave 4 bottom
-    prices.append(118.2)
-    # Wave 5 top
-    prices.append(126.2)
-    # Continue higher
-    for _ in range(40):
-        prices.append(prices[-1] + 0.5)
+    """Create a fixture with at least one accepted deterministic bullish impulse."""
+    closes = [
+        100,
+        103,
+        106,
+        110,
+        107,
+        105.2,
+        108,
+        114,
+        120,
+        127,
+        124,
+        121,
+        124,
+        130,
+        136,
+        132,
+        128,
+        125,
+        129,
+    ]
+    return _make_zigzag_ohlcv(closes)
 
-    n = len(dates)
-    opens = prices[:n]
-    closes = prices[1:n+1] if len(prices) > n else prices
-    highs = [max(o, c) + 0.5 for o, c in zip(opens, closes)]
-    lows = [min(o, c) - 0.5 for o, c in zip(opens, closes)]
-    volumes = [1000.0] * n
 
-    return _make_ohlcv(dates, opens[:n], highs[:n], lows[:n], closes[:n], volumes)
+def _make_threshold_sensitive_ohlcv():
+    """Create a fixture where min_swing_pct changes extracted swings."""
+    closes = [100, 103, 106, 110, 109, 104, 108, 113, 119, 126, 123, 120, 124, 130, 136, 133, 129]
+    return _make_zigzag_ohlcv(closes)
 
 
 # =============================================================================
 # Tests: Output Schema
 # =============================================================================
+
 
 class TestElliottOutputSchema:
     """Tests for detect_elliott_waves output schema."""
@@ -118,6 +127,7 @@ class TestElliottOutputSchema:
 # Tests: Input Validation
 # =============================================================================
 
+
 class TestElliottInputValidation:
     """Tests for detect_elliott_waves input validation."""
 
@@ -157,7 +167,13 @@ class TestElliottInputValidation:
     def test_duplicate_index_raises(self):
         """Test ValueError when index has duplicates."""
         ohlcv = pd.DataFrame(
-            {"open": [1.0, 1.1], "high": [2.0, 2.1], "low": [0.5, 0.6], "close": [1.5, 1.6], "volume": [100.0, 100.0]},
+            {
+                "open": [1.0, 1.1],
+                "high": [2.0, 2.1],
+                "low": [0.5, 0.6],
+                "close": [1.5, 1.6],
+                "volume": [100.0, 100.0],
+            },
             index=pd.DatetimeIndex(["2024-01-01", "2024-01-01"], tz="UTC"),
         )
         with pytest.raises(ValueError, match="ohlcv index must not have duplicates"):
@@ -185,6 +201,7 @@ class TestElliottInputValidation:
 # =============================================================================
 # Tests: Parameter Validation
 # =============================================================================
+
 
 class TestElliottParameterValidation:
     """Tests for detect_elliott_waves parameter validation."""
@@ -240,6 +257,7 @@ class TestElliottParameterValidation:
 # Tests: Degree Classification
 # =============================================================================
 
+
 class TestElliottDegreeClassification:
     """Tests for Elliott Wave degree classification."""
 
@@ -267,10 +285,30 @@ class TestElliottDegreeClassification:
             assert isinstance(result["start_ts"].iloc[0], (pd.Timestamp, np.datetime64))
             assert isinstance(result["end_ts"].iloc[0], (pd.Timestamp, np.datetime64))
 
+    def test_baseline_fixture_contains_accepted_bullish_impulse(self):
+        """Test the baseline fixture proves at least one accepted bullish impulse."""
+        ohlcv = _make_bullish_impulse_ohlcv()
+        result = detect_elliott_waves(ohlcv, include_rejected=False)
+
+        accepted_impulses = result[
+            (result["sequence_type"] == "impulse")
+            & (result["direction"] == "bullish")
+            & (result["is_accepted_sequence"])
+        ]
+
+        assert not accepted_impulses.empty
+        first_sequence = accepted_impulses.iloc[0]["sequence_id"]
+        sequence_rows = accepted_impulses[accepted_impulses["sequence_id"] == first_sequence]
+
+        assert sequence_rows["wave_label"].tolist() == ["1", "2", "3", "4", "5"]
+        assert all(sequence_rows["is_rule_compliant"])
+        assert all(sequence_rows["is_accepted_sequence"])
+
 
 # =============================================================================
 # Tests: Empty/Edge Cases
 # =============================================================================
+
 
 class TestElliottEdgeCases:
     """Tests for empty and edge case inputs."""
@@ -278,14 +316,27 @@ class TestElliottEdgeCases:
     def test_insufficient_data_returns_empty_dataframe_with_schema(self):
         """Test that insufficient data returns empty DataFrame with correct columns."""
         dates = pd.date_range("2024-01-01", periods=5, freq="D", tz="UTC")
-        ohlcv = _make_ohlcv(dates, [1.0]*5, [2.0]*5, [0.5]*5, [1.5]*5, [100.0]*5)
+        ohlcv = _make_ohlcv(dates, [1.0] * 5, [2.0] * 5, [0.5] * 5, [1.5] * 5, [100.0] * 5)
         result = detect_elliott_waves(ohlcv)
         expected_columns = [
-            "sequence_id", "sequence_type", "wave_label", "segment_order",
-            "direction", "degree", "start_ts", "end_ts", "start_price",
-            "end_price", "price_delta", "retrace_ratio", "extension_ratio",
-            "overlap_violation", "invalidation_violation", "is_rule_compliant",
-            "is_accepted_sequence", "rejection_reason",
+            "sequence_id",
+            "sequence_type",
+            "wave_label",
+            "segment_order",
+            "direction",
+            "degree",
+            "start_ts",
+            "end_ts",
+            "start_price",
+            "end_price",
+            "price_delta",
+            "retrace_ratio",
+            "extension_ratio",
+            "overlap_violation",
+            "invalidation_violation",
+            "is_rule_compliant",
+            "is_accepted_sequence",
+            "rejection_reason",
         ]
         assert list(result.columns) == expected_columns
         assert len(result) == 0
@@ -306,6 +357,7 @@ class TestElliottEdgeCases:
 # Tests: Determinism
 # =============================================================================
 
+
 class TestElliottDeterminism:
     """Tests for deterministic behavior."""
 
@@ -317,18 +369,34 @@ class TestElliottDeterminism:
         pd.testing.assert_frame_equal(result1, result2)
 
     def test_parameter_changes_affect_output(self):
-        """Test that different parameters produce different results."""
+        """Test min_swing_pct changes swing extraction and downstream output."""
+        ohlcv = _make_threshold_sensitive_ohlcv()
+        result1 = detect_elliott_waves(ohlcv, min_swing_pct=0.05)
+        result2 = detect_elliott_waves(ohlcv, min_swing_pct=0.08)
+
+        assert len(result1) > len(result2)
+
+    def test_sequence_ids_do_not_span_multiple_directions(self):
+        """Test sequence IDs remain unique across bullish and bearish directions."""
         ohlcv = _make_bullish_impulse_ohlcv()
-        result1 = detect_elliott_waves(ohlcv, min_swing_pct=0.03)
-        result2 = detect_elliott_waves(ohlcv, min_swing_pct=0.10)
-        # Different thresholds should generally produce different results
-        # (may occasionally be same if no waves in the affected range)
-        assert len(result1) >= len(result2)  # Lower threshold = more swings
+        result = detect_elliott_waves(ohlcv)
+
+        if len(result) > 0:
+            assert result.groupby("sequence_id")["direction"].nunique().max() == 1
+
+    def test_is_accepted_sequence_is_consistent_per_sequence(self):
+        """Test sequence-level acceptance is the same for every row in a sequence."""
+        ohlcv = _make_bullish_impulse_ohlcv()
+        result = detect_elliott_waves(ohlcv)
+
+        if len(result) > 0:
+            assert result.groupby("sequence_id")["is_accepted_sequence"].nunique().max() == 1
 
 
 # =============================================================================
 # Tests: Indicator Layer Boundary
 # =============================================================================
+
 
 class TestElliottIndicatorLayerBoundary:
     """Tests confirming ENG-31 remains indicator-layer only."""
@@ -361,6 +429,7 @@ class TestElliottIndicatorLayerBoundary:
 # Tests: Integration with Existing Structure Functions
 # =============================================================================
 
+
 class TestElliottIntegration:
     """Integration tests for Elliott Wave with existing structure indicators."""
 
@@ -370,6 +439,7 @@ class TestElliottIntegration:
             calculate_fib_retracements,
             detect_elliott_waves,
         )
+
         ohlcv = _make_bullish_impulse_ohlcv()
         fib_result = calculate_fib_retracements(110.0, 100.0)
         wave_result = detect_elliott_waves(ohlcv)
@@ -379,6 +449,7 @@ class TestElliottIntegration:
     def test_import_via_indicators_package(self):
         """Test detect_elliott_waves can be imported from indicators package."""
         from tempest_mcp.indicators import detect_elliott_waves
+
         ohlcv = _make_bullish_impulse_ohlcv()
         result = detect_elliott_waves(ohlcv)
         assert isinstance(result, pd.DataFrame)
