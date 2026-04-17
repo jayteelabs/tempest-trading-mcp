@@ -159,7 +159,9 @@ def _validate_inputs(
         raise ValueError(f"stop_atr_multiplier must be positive, got {stop_atr_multiplier}")
 
     if structural_break_atr_mult <= 0:
-        raise ValueError(f"structural_break_atr_mult must be positive, got {structural_break_atr_mult}")
+        raise ValueError(
+            f"structural_break_atr_mult must be positive, got {structural_break_atr_mult}"
+        )
 
     if len(ohlcv_df) < max(atr_period, 4):
         raise ValueError(
@@ -173,8 +175,13 @@ def _validate_inputs(
             raise ValueError(f"OHLCV DataFrame contains NaN values in required column: {col}")
 
     # Check for non-monotonic index
-    if not ohlcv_df.index.is_monotonic_increasing and not ohlcv_df.index.equals(ohlcv_df.index.sort_values()):
+    if not ohlcv_df.index.is_monotonic_increasing and not ohlcv_df.index.equals(
+        ohlcv_df.index.sort_values()
+    ):
         raise ValueError("OHLCV DataFrame index must be monotonically increasing")
+
+    if ohlcv_df.index.has_duplicates:
+        raise ValueError("OHLCV DataFrame index must not contain duplicates")
 
 
 # ---------------------------------------------------------------------------
@@ -880,11 +887,7 @@ def detect_active_order_blocks(
 
     # Build result sorted by creation order (stable, deterministic)
     result = []
-    index_map = {}
-    for idx_ts in ohlcv_df.index:
-        index_map[idx_ts] = idx_ts
-
-    for zone, _age in active_at_end:
+    for zone, _age in sorted(active_at_end, key=lambda item: item[0].ob_candle_idx):
         # freshness_candles = bars from creation to final bar
         freshness = final_idx - zone.created_at
         zone_ts = ohlcv_df.index[zone.ob_candle_idx]
@@ -897,11 +900,6 @@ def detect_active_order_blocks(
                 "freshness_candles": freshness,
             }
         )
-
-    # Sort by ob_candle_idx (creation order) for deterministic output
-    result.sort(key=lambda z: ohlcv_df.index.get_loc(
-        pd.Timestamp(z["date"]).tz_localize("UTC")
-    ) if pd.Timestamp(z["date"]).tzinfo is None else pd.Timestamp(z["date"]))
 
     return result
 
@@ -943,6 +941,8 @@ def _validate_detection_inputs(
     ):
         raise ValueError("OHLCV DataFrame index must be monotonically increasing")
 
+    if ohlcv_df.index.has_duplicates:
+        raise ValueError("OHLCV DataFrame index must not contain duplicates")
+
 
 __all__ = ["generate_order_block_signals", "detect_active_order_blocks"]
-

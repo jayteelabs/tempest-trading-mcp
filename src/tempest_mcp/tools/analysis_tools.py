@@ -21,21 +21,22 @@ import re
 from datetime import datetime
 from typing import Any
 
-import pandas as pd
-
-# Symbol format pattern — matches alphanumeric base/quote with optional / or -
-_SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9]+([/-][A-Za-z0-9]+)?$")
 from structlog import get_logger
 
 from tempest_mcp.config import ErrorCodes
-from tempest_mcp.indicators.volume.volume_profile import calculate_volume_profile as _calculate_volume_profile_indicator
+from tempest_mcp.indicators.volume.volume_profile import (
+    calculate_volume_profile as _calculate_volume_profile_indicator,
+)
+from tempest_mcp.strategies.backtest_order_blocks import detect_active_order_blocks
 from tempest_mcp.tools.backtest_window import (
     BacktestWindowRequest,
     resolve_and_fetch_backtest_ohlcv,
     validate_max_bars,
     validate_timeframe,
 )
-from tempest_mcp.strategies.backtest_order_blocks import detect_active_order_blocks
+
+# Symbol format pattern — matches alphanumeric base/quote with optional / or -
+_SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9]+([/-][A-Za-z0-9]+)?$")
 
 logger = get_logger(__name__)
 
@@ -98,7 +99,9 @@ def _validate_symbol(symbol: str) -> None:
             f"Invalid symbol format: {symbol!r} — expected alphanumeric with optional '/' or '-'"
         )
     if symbol.startswith(("/", "-")) or symbol.endswith(("/", "-")):
-        raise ValueError(f"Invalid symbol format: {symbol!r} — separator cannot be leading or trailing")
+        raise ValueError(
+            f"Invalid symbol format: {symbol!r} — separator cannot be leading or trailing"
+        )
     if "//" in symbol or "--" in symbol or "/-" in symbol or "-/" in symbol:
         raise ValueError(f"Invalid symbol format: {symbol!r} — malformed separators")
 
@@ -181,9 +184,7 @@ async def calculate_volume_profile(
         )
     if profile_type == "dynamic":
         if dynamic_mode is None:
-            return _validation_error(
-                "dynamic_mode is required when profile_type='dynamic'"
-            )
+            return _validation_error("dynamic_mode is required when profile_type='dynamic'")
         if dynamic_mode not in VALID_DYNAMIC_MODES:
             return _validation_error(
                 f"dynamic_mode must be one of {VALID_DYNAMIC_MODES}, got {dynamic_mode!r}"
@@ -219,7 +220,9 @@ async def calculate_volume_profile(
     except ValueError as e:
         return _validation_error(str(e))
     except Exception as e:
-        logger.error("Window resolution/fetch failed", tool="calculate_volume_profile", error=str(e))
+        logger.error(
+            "Window resolution/fetch failed", tool="calculate_volume_profile", error=str(e)
+        )
         return _internal_error("Data fetch failed")
 
     # 4. Validate fetched data
@@ -243,23 +246,27 @@ async def calculate_volume_profile(
     except ValueError as e:
         return _validation_error(str(e))
     except Exception as e:
-        logger.error("Volume profile calculation failed", tool="calculate_volume_profile", error=str(e))
+        logger.error(
+            "Volume profile calculation failed", tool="calculate_volume_profile", error=str(e)
+        )
         return _internal_error("Volume profile calculation failed")
 
     # 6. Serialize result
     profile_rows = []
     for row in profile_df.itertuples(index=True):
-        profile_rows.append({
-            "bin_index": row.Index,
-            "bin_low": float(row.bin_low),
-            "bin_high": float(row.bin_high),
-            "bin_mid": float(row.bin_mid),
-            "bin_volume": float(row.bin_volume),
-            "bin_candle_count": int(row.bin_candle_count),
-            "is_hvn": bool(row.is_hvn),
-            "is_lvn": bool(row.is_lvn),
-            "in_value_area": bool(row.in_value_area),
-        })
+        profile_rows.append(
+            {
+                "bin_index": row.Index,
+                "bin_low": float(row.bin_low),
+                "bin_high": float(row.bin_high),
+                "bin_mid": float(row.bin_mid),
+                "bin_volume": float(row.bin_volume),
+                "bin_candle_count": int(row.bin_candle_count),
+                "is_hvn": bool(row.is_hvn),
+                "is_lvn": bool(row.is_lvn),
+                "in_value_area": bool(row.in_value_area),
+            }
+        )
 
     return {
         "success": True,

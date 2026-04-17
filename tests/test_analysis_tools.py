@@ -8,13 +8,14 @@ Covers:
     - reuse of existing indicator/strategy logic
 """
 
-from datetime import datetime, timezone
-
 import numpy as np
 import pandas as pd
 import pytest
 
 from tempest_mcp.config import ErrorCodes
+from tempest_mcp.indicators.volume.volume_profile import (
+    calculate_volume_profile as volume_profile_indicator,
+)
 from tempest_mcp.tools.analysis_tools import (
     _internal_error,
     _parse_iso_datetime,
@@ -24,8 +25,8 @@ from tempest_mcp.tools.analysis_tools import (
     detect_order_blocks,
 )
 
-
 # ── Fixtures ───────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def deterministic_ohlcv():
@@ -92,6 +93,7 @@ def order_block_fixture_ohlcv():
 
 
 # ── Helper tests ───────────────────────────────────────────────────────────────
+
 
 class TestParseIsoDatetime:
     """Tests for _parse_iso_datetime helper."""
@@ -170,6 +172,7 @@ class TestValidationErrorEnvelope:
 
 
 # ── calculate_volume_profile handler tests ─────────────────────────────────────
+
 
 class TestCalculateVolumeProfileValidation:
     """Validation envelope tests for calculate_volume_profile handler.
@@ -327,7 +330,10 @@ class TestCalculateVolumeProfileValidation:
         )
         # Should not be a validation error (may fail for other reasons like data fetch)
         # but the bin_count itself should be accepted
-        assert result.get("success") is not False or "bin_count" not in result.get("error", {}).get("message", "").lower()
+        assert (
+            result.get("success") is not False
+            or "bin_count" not in result.get("error", {}).get("message", "").lower()
+        )
 
     @pytest.mark.asyncio
     async def test_value_area_out_of_range(self):
@@ -353,6 +359,7 @@ class TestCalculateVolumeProfileSerialization:
     @pytest.mark.asyncio
     async def test_success_envelope_structure(self, deterministic_ohlcv, monkeypatch):
         """Success envelope has correct top-level structure."""
+
         def mock_resolve(request):
             return deterministic_ohlcv, _mock_window()
 
@@ -380,6 +387,7 @@ class TestCalculateVolumeProfileSerialization:
     @pytest.mark.asyncio
     async def test_summary_fields_present(self, deterministic_ohlcv, monkeypatch):
         """Summary dict contains all required scalar fields."""
+
         def mock_resolve(request):
             return deterministic_ohlcv, _mock_window()
 
@@ -396,13 +404,21 @@ class TestCalculateVolumeProfileSerialization:
         )
 
         summary = result["data"]["summary"]
-        required = {"poc_price", "vah_price", "val_price", "profile_shape",
-                    "total_volume", "bin_count", "profile_type"}
+        required = {
+            "poc_price",
+            "vah_price",
+            "val_price",
+            "profile_shape",
+            "total_volume",
+            "bin_count",
+            "profile_type",
+        }
         assert required <= set(summary.keys())
 
     @pytest.mark.asyncio
     async def test_profile_rows_are_serializable(self, deterministic_ohlcv, monkeypatch):
         """profile_rows list is JSON-serializable (all native Python types)."""
+
         def mock_resolve(request):
             return deterministic_ohlcv, _mock_window()
 
@@ -419,6 +435,7 @@ class TestCalculateVolumeProfileSerialization:
         )
 
         import json
+
         # Must not raise — confirms JSON serializable
         json.dumps(result["data"]["profile_rows"])
         assert result["data"]["summary"]["bin_count"] == len(result["data"]["profile_rows"])
@@ -426,6 +443,7 @@ class TestCalculateVolumeProfileSerialization:
     @pytest.mark.asyncio
     async def test_deterministic_output(self, deterministic_ohlcv, monkeypatch):
         """Running the same calculation twice produces identical output."""
+
         def mock_resolve(request):
             return deterministic_ohlcv, _mock_window()
 
@@ -434,21 +452,23 @@ class TestCalculateVolumeProfileSerialization:
             mock_resolve,
         )
 
-        args = dict(
-            symbol="BTC/USDT",
-            timeframe="1h",
-            start_at="2024-01-01T00:00:00",
-            end_at="2024-01-08T00:00:00",
-        )
+        args = {
+            "symbol": "BTC/USDT",
+            "timeframe": "1h",
+            "start_at": "2024-01-01T00:00:00",
+            "end_at": "2024-01-08T00:00:00",
+        }
 
         result1 = await calculate_volume_profile(**args)
         result2 = await calculate_volume_profile(**args)
 
         import json
+
         assert json.dumps(result1, sort_keys=True) == json.dumps(result2, sort_keys=True)
 
 
 # ── detect_order_blocks handler tests ─────────────────────────────────────────
+
 
 class TestDetectOrderBlocksValidation:
     """Validation envelope tests for detect_order_blocks handler.
@@ -549,13 +569,14 @@ class TestDetectOrderBlocksSerialization:
     @pytest.mark.asyncio
     async def test_success_envelope_structure(self, order_block_fixture_ohlcv, monkeypatch):
         """Success envelope has correct top-level structure."""
-        from tempest_mcp.tools.backtest_window import resolve_and_fetch_backtest_ohlcv
 
         def mock_resolve(request):
             return order_block_fixture_ohlcv, _mock_window()
 
-        from tempest_mcp.tools import backtest_window as bw_module
-        monkeypatch.setattr(bw_module, "resolve_and_fetch_backtest_ohlcv", mock_resolve)
+        monkeypatch.setattr(
+            "tempest_mcp.tools.analysis_tools.resolve_and_fetch_backtest_ohlcv",
+            mock_resolve,
+        )
 
         result = await detect_order_blocks(
             symbol="BTC/USDT",
@@ -576,13 +597,14 @@ class TestDetectOrderBlocksSerialization:
     @pytest.mark.asyncio
     async def test_order_block_fields(self, order_block_fixture_ohlcv, monkeypatch):
         """Each order_block dict contains required analytical fields only."""
-        from tempest_mcp.tools.backtest_window import resolve_and_fetch_backtest_ohlcv
 
         def mock_resolve(request):
             return order_block_fixture_ohlcv, _mock_window()
 
-        from tempest_mcp.tools import backtest_window as bw_module
-        monkeypatch.setattr(bw_module, "resolve_and_fetch_backtest_ohlcv", mock_resolve)
+        monkeypatch.setattr(
+            "tempest_mcp.tools.analysis_tools.resolve_and_fetch_backtest_ohlcv",
+            mock_resolve,
+        )
 
         result = await detect_order_blocks(
             symbol="BTC/USDT",
@@ -613,13 +635,14 @@ class TestDetectOrderBlocksSerialization:
             - trade counts
             - position state
         """
-        from tempest_mcp.tools.backtest_window import resolve_and_fetch_backtest_ohlcv
 
         def mock_resolve(request):
             return order_block_fixture_ohlcv, _mock_window()
 
-        from tempest_mcp.tools import backtest_window as bw_module
-        monkeypatch.setattr(bw_module, "resolve_and_fetch_backtest_ohlcv", mock_resolve)
+        monkeypatch.setattr(
+            "tempest_mcp.tools.analysis_tools.resolve_and_fetch_backtest_ohlcv",
+            mock_resolve,
+        )
 
         result = await detect_order_blocks(
             symbol="BTC/USDT",
@@ -636,25 +659,27 @@ class TestDetectOrderBlocksSerialization:
     @pytest.mark.asyncio
     async def test_deterministic_output(self, order_block_fixture_ohlcv, monkeypatch):
         """Running detection twice produces identical output."""
-        from tempest_mcp.tools.backtest_window import resolve_and_fetch_backtest_ohlcv
 
         def mock_resolve(request):
             return order_block_fixture_ohlcv, _mock_window()
 
-        from tempest_mcp.tools import backtest_window as bw_module
-        monkeypatch.setattr(bw_module, "resolve_and_fetch_backtest_ohlcv", mock_resolve)
-
-        args = dict(
-            symbol="BTC/USDT",
-            timeframe="1h",
-            start_at="2024-01-01T00:00:00",
-            end_at="2024-01-02T00:00:00",
+        monkeypatch.setattr(
+            "tempest_mcp.tools.analysis_tools.resolve_and_fetch_backtest_ohlcv",
+            mock_resolve,
         )
+
+        args = {
+            "symbol": "BTC/USDT",
+            "timeframe": "1h",
+            "start_at": "2024-01-01T00:00:00",
+            "end_at": "2024-01-02T00:00:00",
+        }
 
         result1 = await detect_order_blocks(**args)
         result2 = await detect_order_blocks(**args)
 
         import json
+
         assert json.dumps(result1, sort_keys=True) == json.dumps(result2, sort_keys=True)
 
 
@@ -765,6 +790,43 @@ class TestOrderBlocksDetectionHelper:
         with pytest.raises(ValueError, match="Insufficient data"):
             detect_active_order_blocks(ohlcv)
 
+    def test_duplicate_index_raises(self):
+        """Duplicate datetime index raises ValueError."""
+        from tempest_mcp.strategies.backtest_order_blocks import detect_active_order_blocks
+
+        idx = pd.to_datetime(
+            [
+                "2024-01-01T00:00:00Z",
+                "2024-01-01T01:00:00Z",
+                "2024-01-01T01:00:00Z",
+                "2024-01-01T02:00:00Z",
+                "2024-01-01T03:00:00Z",
+                "2024-01-01T04:00:00Z",
+                "2024-01-01T05:00:00Z",
+                "2024-01-01T06:00:00Z",
+                "2024-01-01T07:00:00Z",
+                "2024-01-01T08:00:00Z",
+                "2024-01-01T09:00:00Z",
+                "2024-01-01T10:00:00Z",
+                "2024-01-01T11:00:00Z",
+                "2024-01-01T12:00:00Z",
+            ],
+            utc=True,
+        )
+        ohlcv = pd.DataFrame(
+            {
+                "open": [100.0] * len(idx),
+                "high": [101.0] * len(idx),
+                "low": [99.0] * len(idx),
+                "close": [100.5] * len(idx),
+                "volume": [1000.0] * len(idx),
+            },
+            index=idx,
+        )
+
+        with pytest.raises(ValueError, match="must not contain duplicates"):
+            detect_active_order_blocks(ohlcv)
+
     def test_deterministic_on_repeated_runs(self, deterministic_ohlcv):
         """Running detection repeatedly produces identical output."""
         from tempest_mcp.strategies.backtest_order_blocks import detect_active_order_blocks
@@ -776,6 +838,7 @@ class TestOrderBlocksDetectionHelper:
 
 # ── Reuse confirmation tests ─────────────────────────────────────────────────
 
+
 class TestIndicatorReuse:
     """Confirms ENG-28 tools reuse existing indicator/strategy logic.
 
@@ -786,10 +849,8 @@ class TestIndicatorReuse:
     @pytest.mark.asyncio
     async def test_calculate_volume_profile_uses_indicator(self, deterministic_ohlcv, monkeypatch):
         """calculate_volume_profile handler calls the existing indicator exactly once."""
-        from tempest_mcp.indicators.volume.volume_profile import calculate_volume_profile as original_indicator
-
         call_count = 0
-        indicator_result_df = original_indicator(deterministic_ohlcv, bin_count=50)
+        indicator_result_df = volume_profile_indicator(deterministic_ohlcv, bin_count=50)
         # Add required attrs that the handler's serialization expects
         indicator_result_df.attrs["poc_price"] = 100.0
         indicator_result_df.attrs["vah_price"] = 105.0
@@ -821,6 +882,7 @@ class TestIndicatorReuse:
 
         # Call the handler directly (not the indicator)
         from tempest_mcp.tools.analysis_tools import calculate_volume_profile as handler
+
         result = await handler(
             symbol="BTC/USDT",
             timeframe="1h",
@@ -843,6 +905,7 @@ class TestIndicatorReuse:
 
 
 # ── Mock window helper ─────────────────────────────────────────────────────────
+
 
 def _mock_window():
     """Return a mock ResolvedBacktestWindow for testing."""
