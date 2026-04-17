@@ -786,8 +786,8 @@ def _build_impulse_candidates(
                     "start_price": swing["start_price"],
                     "end_price": swing["price"],
                     "price_delta": price_delta,
-                    "retrace_ratio": retrace_ratio_out if wave_num > 1 else np.nan,
-                    "extension_ratio": extension_ratio_out if wave_num > 2 else np.nan,
+                    "retrace_ratio": retrace_ratio_out if wave_num in (2, 4) else np.nan,
+                    "extension_ratio": extension_ratio_out if wave_num in (3, 5) else np.nan,
                     "overlap_violation": overlap_violation if wave_num in (2, 4, 5) else False,
                     "invalidation_violation": invalidation_violation if wave_num == 5 else False,
                     "is_rule_compliant": is_rule_compliant,
@@ -1002,8 +1002,8 @@ def detect_elliott_waves(
         - start_price: float
         - end_price: float
         - price_delta: float
-        - retrace_ratio: float or NaN
-        - extension_ratio: float or NaN
+        - retrace_ratio: float or NaN (impulse waves 2/4, corrective wave B)
+        - extension_ratio: float or NaN (impulse waves 3/5, corrective wave C)
         - overlap_violation: bool
         - invalidation_violation: bool
         - is_rule_compliant: bool

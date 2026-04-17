@@ -1,16 +1,10 @@
 """Unit tests for Elliott Wave detector (detect_elliott_waves)."""
 
-import os
-import sys
-
 import numpy as np
 import pandas as pd
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../src"))
-
 from tempest_mcp.indicators.structure import detect_elliott_waves
-
 
 # =============================================================================
 # Fixtures
@@ -30,8 +24,8 @@ def _make_zigzag_ohlcv(closes):
     """Create a deterministic OHLCV fixture from a zig-zag close path."""
     dates = pd.date_range("2024-01-01", periods=len(closes), freq="D", tz="UTC")
     opens = [closes[0], *closes[:-1]]
-    highs = [max(o, c) + 0.4 for o, c in zip(opens, closes)]
-    lows = [min(o, c) - 0.4 for o, c in zip(opens, closes)]
+    highs = [max(o, c) + 0.4 for o, c in zip(opens, closes, strict=True)]
+    lows = [min(o, c) - 0.4 for o, c in zip(opens, closes, strict=True)]
     volumes = [1000.0] * len(closes)
     return _make_ohlcv(dates, opens, highs, lows, closes, volumes)
 
@@ -114,13 +108,44 @@ class TestElliottOutputSchema:
         result = detect_elliott_waves(ohlcv)
         if len(result) > 1:
             seq_ids = result["sequence_id"].tolist()
-            segment_orders = result["segment_order"].tolist()
             # Check sequence_id is non-decreasing
             assert seq_ids == sorted(seq_ids)
             # For same sequence_id, segment_order should be increasing
             for i in range(len(result) - 1):
                 if result.iloc[i]["sequence_id"] == result.iloc[i + 1]["sequence_id"]:
                     assert result.iloc[i]["segment_order"] < result.iloc[i + 1]["segment_order"]
+
+    def test_impulse_ratio_metadata_is_wave_specific(self):
+        """Test impulse ratio metadata is populated only on the documented waves."""
+        ohlcv = _make_bullish_impulse_ohlcv()
+        result = detect_elliott_waves(ohlcv, include_rejected=False)
+
+        accepted_impulses = result[
+            (result["sequence_type"] == "impulse")
+            & (result["direction"] == "bullish")
+            & (result["is_accepted_sequence"])
+        ]
+
+        assert not accepted_impulses.empty
+
+        first_sequence = accepted_impulses.iloc[0]["sequence_id"]
+        sequence_rows = (
+            accepted_impulses[accepted_impulses["sequence_id"] == first_sequence]
+            .set_index("wave_label")
+            .sort_index()
+        )
+
+        assert pd.notna(sequence_rows.loc["2", "retrace_ratio"])
+        assert pd.notna(sequence_rows.loc["4", "retrace_ratio"])
+        assert pd.isna(sequence_rows.loc["1", "retrace_ratio"])
+        assert pd.isna(sequence_rows.loc["3", "retrace_ratio"])
+        assert pd.isna(sequence_rows.loc["5", "retrace_ratio"])
+
+        assert pd.notna(sequence_rows.loc["3", "extension_ratio"])
+        assert pd.notna(sequence_rows.loc["5", "extension_ratio"])
+        assert pd.isna(sequence_rows.loc["1", "extension_ratio"])
+        assert pd.isna(sequence_rows.loc["2", "extension_ratio"])
+        assert pd.isna(sequence_rows.loc["4", "extension_ratio"])
 
 
 # =============================================================================
@@ -403,9 +428,8 @@ class TestElliottIndicatorLayerBoundary:
 
     def test_structure_module_has_no_server_imports(self):
         """Test that structure.py does not import server or tools modules."""
-        import tempest_mcp.indicators.structure as structure_module
+        from tempest_mcp.indicators.structure import __file__ as module_file
 
-        module_file = structure_module.__file__
         with open(module_file) as f:
             content = f.read()
         assert "from tempest_mcp.tools" not in content
@@ -415,9 +439,8 @@ class TestElliottIndicatorLayerBoundary:
 
     def test_structure_module_has_no_backtest_imports(self):
         """Test that structure.py does not import strategy/backtest modules."""
-        import tempest_mcp.indicators.structure as structure_module
+        from tempest_mcp.indicators.structure import __file__ as module_file
 
-        module_file = structure_module.__file__
         with open(module_file) as f:
             content = f.read()
         assert "from tempest_mcp.strategies" not in content
