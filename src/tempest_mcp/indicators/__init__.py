@@ -24,6 +24,7 @@ from .structure import (
     calculate_fib_retracements,
     calculate_fibonacci_levels,
     calculate_pivot_points,
+    detect_elliott_waves,
     detect_fib_confluence,
 )
 from .trend import (
@@ -102,4 +103,6 @@ __all__ = [
     "calculate_pivot_points",
     "DEFAULT_FIB_RETRACEMENT_LEVELS",
     "DEFAULT_FIB_EXTENSION_LEVELS",
+    # Elliott Wave indicator
+    "detect_elliott_waves",
 ]

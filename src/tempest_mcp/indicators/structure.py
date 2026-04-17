@@ -402,3 +402,689 @@ def calculate_pivot_points(high, low, close, method: str = "standard"):
         "r2": pp + (h - lo),
         "s2": pp - (h - lo),
     }
+
+
+# =============================================================================
+# Elliott Wave Engine
+# =============================================================================
+
+# Output column order for detect_elliott_waves (pinned schema)
+_ELLIOTT_OUTPUT_COLUMNS = [
+    "sequence_id",
+    "sequence_type",
+    "wave_label",
+    "segment_order",
+    "direction",
+    "degree",
+    "start_ts",
+    "end_ts",
+    "start_price",
+    "end_price",
+    "price_delta",
+    "retrace_ratio",
+    "extension_ratio",
+    "overlap_violation",
+    "invalidation_violation",
+    "is_rule_compliant",
+    "is_accepted_sequence",
+    "rejection_reason",
+]
+
+
+def _validate_ohlcv(ohlcv: pd.DataFrame) -> None:
+    """Validate OHLCV DataFrame meets requirements."""
+    if not isinstance(ohlcv, pd.DataFrame):
+        raise ValueError("ohlcv must be a pandas DataFrame")
+    if ohlcv.empty:
+        raise ValueError("ohlcv must not be empty")
+    required_cols = {"open", "high", "low", "close", "volume"}
+    missing = required_cols - set(ohlcv.columns)
+    if missing:
+        raise ValueError(f"ohlcv missing required columns: {missing}")
+    if not isinstance(ohlcv.index, pd.DatetimeIndex):
+        raise ValueError("ohlcv index must be a DatetimeIndex")
+    if ohlcv.index.tz is None:
+        raise ValueError("ohlcv index must be UTC-aware (tz-aware)")
+    if not ohlcv.index.is_monotonic_increasing:
+        raise ValueError("ohlcv index must be monotonically increasing")
+    if ohlcv.index.has_duplicates:
+        raise ValueError("ohlcv index must not have duplicates")
+    for col in ["high", "low", "open", "close", "volume"]:
+        if not np.isfinite(ohlcv[col]).all():
+            raise ValueError(f"{col} must contain only finite values")
+    if (ohlcv["high"] < ohlcv["low"]).any():
+        raise ValueError("high must be >= low for all rows")
+    if (ohlcv["volume"] < 0).any():
+        raise ValueError("volume must be non-negative")
+
+
+def _validate_elliott_params(
+    swing_window: int,
+    min_swing_pct: float,
+    wave2_retrace_band: tuple,
+    wave3_extension_min: float,
+    wave4_retrace_max: float,
+    waveb_retrace_band: tuple,
+    wavec_extension_min: float,
+    degree_thresholds: tuple,
+) -> None:
+    """Validate Elliott Wave detector parameters."""
+    if not isinstance(swing_window, int) or swing_window < 1:
+        raise ValueError("swing_window must be an integer >= 1")
+    if not isinstance(min_swing_pct, Real) or not (0.0 < min_swing_pct < 1.0):
+        raise ValueError("min_swing_pct must be a float in (0.0, 1.0)")
+    if not isinstance(wave2_retrace_band, tuple) or len(wave2_retrace_band) != 2:
+        raise ValueError("wave2_retrace_band must be a tuple of (min, max)")
+    if not (0.0 < wave2_retrace_band[0] < wave2_retrace_band[1] < 1.0):
+        raise ValueError("wave2_retrace_band values must satisfy 0 < min < max < 1")
+    if not isinstance(wave3_extension_min, Real) or wave3_extension_min < 0.0:
+        raise ValueError("wave3_extension_min must be a non-negative number")
+    if not isinstance(wave4_retrace_max, Real) or not (0.0 < wave4_retrace_max < 1.0):
+        raise ValueError("wave4_retrace_max must be a float in (0.0, 1.0)")
+    if not isinstance(waveb_retrace_band, tuple) or len(waveb_retrace_band) != 2:
+        raise ValueError("waveb_retrace_band must be a tuple of (min, max)")
+    if not (0.0 < waveb_retrace_band[0] < waveb_retrace_band[1] < 1.0):
+        raise ValueError("waveb_retrace_band values must satisfy 0 < min < max < 1")
+    if not isinstance(wavec_extension_min, Real) or wavec_extension_min < 0.0:
+        raise ValueError("wavec_extension_min must be a non-negative number")
+    if not isinstance(degree_thresholds, tuple) or len(degree_thresholds) != 2:
+        raise ValueError("degree_thresholds must be a tuple of (micro_max, minor_max)")
+    if not (0.0 < degree_thresholds[0] < degree_thresholds[1]):
+        raise ValueError("degree_thresholds must satisfy 0 < micro_max < minor_max")
+
+
+def _extract_swings(ohlcv: pd.DataFrame, swing_window: int, min_swing_pct: float) -> list[dict]:
+    """
+    Extract deterministic alternating swing pivots from OHLCV data.
+
+    Returns
+    -------
+    list[dict]
+        Chronologically ordered swing pivots with keys:
+        index, kind, price, start_ts, start_price, end_ts, end_price
+    """
+    n = len(ohlcv)
+    swing_candidates: list[dict] = []
+
+    for i in range(swing_window, n - swing_window):
+        window_highs = ohlcv["high"].iloc[i - swing_window : i + swing_window + 1].values
+        window_lows = ohlcv["low"].iloc[i - swing_window : i + swing_window + 1].values
+        current_high = ohlcv["high"].iloc[i]
+        current_low = ohlcv["low"].iloc[i]
+
+        if current_high == window_highs.max() and current_high > window_highs.min():
+            swing_candidates.append(
+                {
+                    "index": i,
+                    "kind": "high",
+                    "price": float(current_high),
+                    "end_ts": ohlcv.index[i],
+                }
+            )
+
+        if current_low == window_lows.min() and current_low < window_lows.max():
+            swing_candidates.append(
+                {
+                    "index": i,
+                    "kind": "low",
+                    "price": float(current_low),
+                    "end_ts": ohlcv.index[i],
+                }
+            )
+
+    if not swing_candidates:
+        return []
+
+    swing_candidates = sorted(
+        swing_candidates,
+        key=lambda swing: (swing["index"], 0 if swing["kind"] == "low" else 1),
+    )
+
+    confirmed_swings: list[dict] = []
+
+    for candidate in swing_candidates:
+        if not confirmed_swings:
+            start_idx = max(0, candidate["index"] - swing_window)
+            confirmed_swings.append(
+                {
+                    **candidate,
+                    "start_ts": ohlcv.index[start_idx],
+                    "start_price": float(ohlcv.iloc[start_idx]["close"]),
+                    "end_price": candidate["price"],
+                }
+            )
+            continue
+
+        previous_swing = confirmed_swings[-1]
+
+        if candidate["kind"] == previous_swing["kind"]:
+            is_more_extreme = (
+                candidate["price"] >= previous_swing["price"]
+                if candidate["kind"] == "high"
+                else candidate["price"] <= previous_swing["price"]
+            )
+            if is_more_extreme:
+                confirmed_swings[-1] = {
+                    **candidate,
+                    "start_ts": previous_swing["start_ts"],
+                    "start_price": previous_swing["start_price"],
+                    "end_price": candidate["price"],
+                }
+            continue
+
+        previous_price = previous_swing["price"]
+        pct_move = (
+            abs(candidate["price"] - previous_price) / abs(previous_price)
+            if previous_price != 0
+            else abs(candidate["price"] - previous_price)
+        )
+        if pct_move < min_swing_pct:
+            continue
+
+        confirmed_swings.append(
+            {
+                **candidate,
+                "start_ts": previous_swing["end_ts"],
+                "start_price": previous_swing["price"],
+                "end_price": candidate["price"],
+            }
+        )
+
+    return confirmed_swings
+
+
+def _classify_degree(price_delta: float, prev_legs: list, thresholds: tuple) -> str:
+    """Classify wave degree based on normalized move and thresholds."""
+    if not prev_legs:
+        normalized = abs(price_delta)
+    else:
+        avg_leg = sum(abs(leg) for leg in prev_legs) / len(prev_legs)
+        if avg_leg > 0:
+            normalized = abs(price_delta) / avg_leg
+        else:
+            normalized = abs(price_delta)
+
+    micro_max, minor_max = thresholds
+    if normalized < micro_max:
+        return "micro"
+    elif normalized < minor_max:
+        return "minor"
+    else:
+        return "intermediate"
+
+
+def _build_impulse_candidates(
+    swings: list,
+    direction: str,
+    wave2_band: tuple,
+    wave3_ext_min: float,
+    wave4_max: float,
+    thresholds: tuple,
+    include_rejected: bool,
+) -> list:
+    """Build impulse wave (5-wave) candidates from alternating swing highs/lows."""
+    candidates = []
+
+    if len(swings) < 5:
+        return candidates
+
+    expected_kinds = ["high", "low", "high", "low", "high"]
+    if direction == "bearish":
+        expected_kinds = ["low", "high", "low", "high", "low"]
+
+    for start_idx in range(len(swings) - 4):
+        seq_swings = swings[start_idx : start_idx + 5]
+        if len(seq_swings) != 5:
+            continue
+        if [swing["kind"] for swing in seq_swings] != expected_kinds:
+            continue
+
+        waves = []
+        prev_legs = []
+        sequence_id = f"impulse_{direction}_{seq_swings[0]['index']}"
+
+        for i, swing in enumerate(seq_swings):
+            wave_num = i + 1
+            wave_label = str(wave_num)
+            retrace_ratio_out = np.nan
+            extension_ratio_out = np.nan
+
+            if i == 0:
+                is_accepted = True
+                rejection_reason = None
+                overlap_violation = False
+                invalidation_violation = False
+            else:
+                prev_leg = abs(waves[i - 1]["price_delta"])
+                prev_legs.append(prev_leg)
+
+                if wave_num == 2:
+                    wave1 = waves[0]
+                    retraced = abs(swing["price"] - wave1["end_price"])
+                    wave1_range = abs(wave1["end_price"] - wave1["start_price"])
+                    if wave1_range > 0:
+                        retrace_ratio = retraced / wave1_range
+                    else:
+                        retrace_ratio = 0.0
+
+                    if not (wave2_band[0] <= retrace_ratio <= wave2_band[1]):
+                        is_accepted = False
+                        rejection_reason = f"wave2_retrace_{retrace_ratio:.3f}_not_in_band"
+                    else:
+                        is_accepted = True
+                        rejection_reason = None
+
+                    retrace_ratio_out = retrace_ratio
+                    extension_ratio_out = np.nan
+
+                    overlap_violation = False
+                    invalidation_violation = False
+
+                elif wave_num == 3:
+                    wave1 = waves[0]
+                    wave3_price_diff = (
+                        swing["price"] - wave1["end_price"]
+                        if direction == "bullish"
+                        else wave1["end_price"] - swing["price"]
+                    )
+                    wave1_range = abs(wave1["end_price"] - wave1["start_price"])
+                    ext_ratio = wave3_price_diff / wave1_range if wave1_range > 0 else 0.0
+
+                    if ext_ratio < wave3_ext_min:
+                        is_accepted = False
+                        rejection_reason = f"wave3_extension_{ext_ratio:.3f}_below_min"
+                    else:
+                        is_accepted = True
+                        rejection_reason = None
+
+                    retrace_ratio_out = np.nan
+                    extension_ratio_out = ext_ratio
+
+                    overlap_violation = False
+                    invalidation_violation = False
+
+                elif wave_num == 4:
+                    wave3 = waves[2]
+
+                    retraced = abs(swing["price"] - wave3["end_price"])
+                    wave3_range = abs(wave3["end_price"] - wave3["start_price"])
+                    if wave3_range > 0:
+                        retrace_ratio = retraced / wave3_range
+                    else:
+                        retrace_ratio = 0.0
+
+                    if retrace_ratio > wave4_max:
+                        is_accepted = False
+                        rejection_reason = f"wave4_retrace_{retrace_ratio:.3f}_exceeds_max"
+                    else:
+                        is_accepted = True
+                        rejection_reason = None
+
+                    retrace_ratio_out = retrace_ratio
+                    extension_ratio_out = np.nan
+
+                    wave1 = waves[0]
+                    overlap_violation = (
+                        swing["price"] <= wave1["end_price"]
+                        if direction == "bullish"
+                        else swing["price"] >= wave1["end_price"]
+                    )
+                    if overlap_violation:
+                        rejection_reason = "wave4_overlap_violation"
+                    invalidation_violation = False
+
+                elif wave_num == 5:
+                    wave3 = waves[2]
+                    wave4 = waves[3]
+
+                    wave4_range = abs(wave4["end_price"] - wave4["start_price"])
+                    wave3_range = abs(wave3["end_price"] - wave3["start_price"])
+                    ext_ratio = (
+                        abs(swing["price"] - wave4["end_price"]) / wave4_range
+                        if wave4_range > 0
+                        else 0.0
+                    )
+
+                    is_accepted = True
+                    rejection_reason = None
+                    retrace_ratio_out = np.nan
+                    extension_ratio_out = ext_ratio
+
+                    overlap_violation = False
+                    invalidation_violation = (
+                        swing["price"] <= wave4["end_price"]
+                        if direction == "bullish"
+                        else swing["price"] >= wave4["end_price"]
+                    )
+                    if invalidation_violation:
+                        rejection_reason = "wave5_invalidation_violation"
+
+                else:
+                    is_accepted = True
+                    rejection_reason = None
+                    retrace_ratio_out = np.nan
+                    extension_ratio_out = np.nan
+                    overlap_violation = False
+                    invalidation_violation = False
+
+            price_delta = swing["price"] - swing["start_price"]
+
+            degree = _classify_degree(price_delta, prev_legs, thresholds)
+
+            is_rule_compliant = is_accepted and not overlap_violation and not invalidation_violation
+
+            waves.append(
+                {
+                    "sequence_id": sequence_id,
+                    "sequence_type": "impulse",
+                    "wave_label": wave_label,
+                    "segment_order": wave_num,
+                    "direction": direction,
+                    "degree": degree,
+                    "start_ts": swing["start_ts"],
+                    "end_ts": swing["end_ts"],
+                    "start_price": swing["start_price"],
+                    "end_price": swing["price"],
+                    "price_delta": price_delta,
+                    "retrace_ratio": retrace_ratio_out if wave_num in (2, 4) else np.nan,
+                    "extension_ratio": extension_ratio_out if wave_num in (3, 5) else np.nan,
+                    "overlap_violation": overlap_violation if wave_num in (2, 4, 5) else False,
+                    "invalidation_violation": invalidation_violation if wave_num == 5 else False,
+                    "is_rule_compliant": is_rule_compliant,
+                    "is_accepted_sequence": False,
+                    "rejection_reason": rejection_reason,
+                }
+            )
+
+        sequence_accepted = all(w["is_rule_compliant"] for w in waves)
+        for wave in waves:
+            wave["is_accepted_sequence"] = sequence_accepted
+
+        if include_rejected or sequence_accepted:
+            candidates.extend(waves)
+
+    return candidates
+
+
+def _build_corrective_candidates(
+    swings: list,
+    direction: str,
+    waveb_band: tuple,
+    wavec_ext_min: float,
+    thresholds: tuple,
+    include_rejected: bool,
+) -> list:
+    """Build corrective wave (A-B-C) candidates from alternating swing highs/lows."""
+    candidates = []
+
+    if len(swings) < 3:
+        return candidates
+
+    expected_kinds = ["low", "high", "low"]
+    if direction == "bearish":
+        expected_kinds = ["high", "low", "high"]
+
+    for start_idx in range(len(swings) - 2):
+        seq_swings = swings[start_idx : start_idx + 3]
+        if len(seq_swings) != 3:
+            continue
+        if [swing["kind"] for swing in seq_swings] != expected_kinds:
+            continue
+
+        waves = []
+        prev_legs = []
+        sequence_id = f"corrective_{direction}_{seq_swings[0]['index']}"
+
+        for i, swing in enumerate(seq_swings):
+            wave_label = ["A", "B", "C"][i]
+
+            if i == 0:
+                is_accepted = True
+                rejection_reason = None
+                retrace_ratio_out = np.nan
+                extension_ratio_out = np.nan
+                overlap_violation = False
+                invalidation_violation = False
+            elif i == 1:
+                wave_a = waves[0]
+                retraced = abs(swing["price"] - wave_a["end_price"])
+                wave_a_range = abs(wave_a["end_price"] - wave_a["start_price"])
+                if wave_a_range > 0:
+                    retrace_ratio = retraced / wave_a_range
+                else:
+                    retrace_ratio = 0.0
+
+                if not (waveb_band[0] <= retrace_ratio <= waveb_band[1]):
+                    is_accepted = False
+                    rejection_reason = f"waveb_retrace_{retrace_ratio:.3f}_not_in_band"
+                else:
+                    is_accepted = True
+                    rejection_reason = None
+
+                retrace_ratio_out = retrace_ratio
+                extension_ratio_out = np.nan
+                overlap_violation = False
+                invalidation_violation = False
+
+            else:
+                wave_a = waves[0]
+                wave_b = waves[1]
+
+                wave_a_range = abs(wave_a["end_price"] - wave_a["start_price"])
+                ext_ratio = (
+                    abs(swing["price"] - wave_b["end_price"]) / wave_a_range
+                    if wave_a_range > 0
+                    else 0.0
+                )
+
+                if ext_ratio < wavec_ext_min:
+                    is_accepted = False
+                    rejection_reason = f"wavec_extension_{ext_ratio:.3f}_below_min"
+                else:
+                    is_accepted = True
+                    rejection_reason = None
+
+                retrace_ratio_out = np.nan
+                extension_ratio_out = ext_ratio
+
+                overlap_violation = (
+                    swing["price"] >= wave_a["start_price"]
+                    if direction == "bullish"
+                    else swing["price"] <= wave_a["start_price"]
+                )
+                invalidation_violation = False
+
+            if i > 0:
+                prev_leg = abs(waves[i - 1]["price_delta"])
+                prev_legs.append(prev_leg)
+
+            if i == 2 and overlap_violation:
+                rejection_reason = "wavec_overlap_violation"
+
+            price_delta = swing["price"] - swing["start_price"]
+
+            degree = _classify_degree(price_delta, prev_legs, thresholds)
+
+            is_rule_compliant = is_accepted and not overlap_violation
+
+            waves.append(
+                {
+                    "sequence_id": sequence_id,
+                    "sequence_type": "corrective",
+                    "wave_label": wave_label,
+                    "segment_order": i + 1,
+                    "direction": direction,
+                    "degree": degree,
+                    "start_ts": swing["start_ts"],
+                    "end_ts": swing["end_ts"],
+                    "start_price": swing["start_price"],
+                    "end_price": swing["price"],
+                    "price_delta": price_delta,
+                    "retrace_ratio": retrace_ratio_out if i > 0 else np.nan,
+                    "extension_ratio": extension_ratio_out if i == 2 else np.nan,
+                    "overlap_violation": overlap_violation if i == 2 else False,
+                    "invalidation_violation": invalidation_violation if i == 2 else False,
+                    "is_rule_compliant": is_rule_compliant,
+                    "is_accepted_sequence": False,
+                    "rejection_reason": rejection_reason,
+                }
+            )
+
+        sequence_accepted = all(w["is_rule_compliant"] for w in waves)
+        for wave in waves:
+            wave["is_accepted_sequence"] = sequence_accepted
+
+        if include_rejected or sequence_accepted:
+            candidates.extend(waves)
+
+    return candidates
+
+
+def detect_elliott_waves(
+    ohlcv: pd.DataFrame,
+    *,
+    swing_window: int = 2,
+    min_swing_pct: float = 0.05,
+    wave2_retrace_band: tuple[float, float] = (0.382, 0.786),
+    wave3_extension_min: float = 1.0,
+    wave4_retrace_max: float = 0.618,
+    waveb_retrace_band: tuple[float, float] = (0.382, 0.886),
+    wavec_extension_min: float = 1.0,
+    degree_thresholds: tuple[float, float] = (0.02, 0.08),
+    include_rejected: bool = True,
+) -> pd.DataFrame:
+    """
+    Detect Elliott Wave patterns from OHLCV data.
+
+    Parameters
+    ----------
+    ohlcv : pd.DataFrame
+        Windowed OHLCV data with UTC-aware DatetimeIndex and columns:
+        open, high, low, close, volume. Must be monotonically increasing
+        with no duplicates.
+    swing_window : int, optional
+        Window size for swing detection. Default is 2.
+    min_swing_pct : float, optional
+        Minimum percentage move to qualify as a swing. Default is 0.05 (5%).
+    wave2_retrace_band : tuple[float, float], optional
+        Acceptable retracement range for wave 2 as (min, max).
+        Default is (0.382, 0.786).
+    wave3_extension_min : float, optional
+        Minimum extension ratio for wave 3 relative to wave 1.
+        Default is 1.0.
+    wave4_retrace_max : float, optional
+        Maximum retracement for wave 4 relative to wave 3.
+        Default is 0.618.
+    waveb_retrace_band : tuple[float, float], optional
+        Acceptable retracement range for wave B as (min, max).
+        Default is (0.382, 0.886).
+    wavec_extension_min : float, optional
+        Minimum extension ratio for wave C relative to wave A.
+        Default is 1.0.
+    degree_thresholds : tuple[float, float], optional
+        Thresholds for degree classification as (micro_max, minor_max).
+        Default is (0.02, 0.08).
+    include_rejected : bool, optional
+        If True, include rejected candidates in output. Default is True.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with columns (in order):
+        - sequence_id: str
+        - sequence_type: 'impulse' or 'corrective'
+        - wave_label: '1'-'5' or 'A'-'C'
+        - segment_order: int
+        - direction: 'bullish' or 'bearish'
+        - degree: 'micro', 'minor', or 'intermediate'
+        - start_ts: pd.Timestamp
+        - end_ts: pd.Timestamp
+        - start_price: float
+        - end_price: float
+        - price_delta: float
+        - retrace_ratio: float or NaN (impulse waves 2/4, corrective wave B)
+        - extension_ratio: float or NaN (impulse waves 3/5, corrective wave C)
+        - overlap_violation: bool
+        - invalidation_violation: bool
+        - is_rule_compliant: bool
+        - is_accepted_sequence: bool
+        - rejection_reason: str or None
+
+        Rows are ordered by sequence_id ASC, segment_order ASC.
+
+    Raises
+    ------
+    ValueError
+        If OHLCV or parameters fail validation.
+    """
+    _validate_ohlcv(ohlcv)
+    _validate_elliott_params(
+        swing_window,
+        min_swing_pct,
+        wave2_retrace_band,
+        wave3_extension_min,
+        wave4_retrace_max,
+        waveb_retrace_band,
+        wavec_extension_min,
+        degree_thresholds,
+    )
+
+    swings = _extract_swings(ohlcv, swing_window, min_swing_pct)
+
+    all_waves = []
+
+    if swings:
+        all_waves.extend(
+            _build_impulse_candidates(
+                swings,
+                "bullish",
+                wave2_retrace_band,
+                wave3_extension_min,
+                wave4_retrace_max,
+                degree_thresholds,
+                include_rejected,
+            )
+        )
+        all_waves.extend(
+            _build_corrective_candidates(
+                swings,
+                "bullish",
+                waveb_retrace_band,
+                wavec_extension_min,
+                degree_thresholds,
+                include_rejected,
+            )
+        )
+        all_waves.extend(
+            _build_impulse_candidates(
+                swings,
+                "bearish",
+                wave2_retrace_band,
+                wave3_extension_min,
+                wave4_retrace_max,
+                degree_thresholds,
+                include_rejected,
+            )
+        )
+        all_waves.extend(
+            _build_corrective_candidates(
+                swings,
+                "bearish",
+                waveb_retrace_band,
+                wavec_extension_min,
+                degree_thresholds,
+                include_rejected,
+            )
+        )
+
+    if not all_waves:
+        return pd.DataFrame(columns=_ELLIOTT_OUTPUT_COLUMNS)
+
+    result_df = pd.DataFrame(all_waves)
+    result_df = result_df.sort_values(["sequence_id", "segment_order"]).reset_index(drop=True)
+
+    for col in _ELLIOTT_OUTPUT_COLUMNS:
+        if col not in result_df.columns:
+            result_df[col] = np.nan
+
+    return result_df[_ELLIOTT_OUTPUT_COLUMNS]
