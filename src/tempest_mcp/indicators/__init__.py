@@ -46,6 +46,7 @@ from .volume import (
     SESSION_ANCHORS,
     calculate_mfi_result,
     calculate_obv_result,
+    calculate_tpo_chart,
     calculate_volume_profile,
     calculate_vwap,
     calculate_vwap_bands,
@@ -80,6 +81,7 @@ __all__ = [
     "calculate_vwap_bands",
     "detect_vwap_cross",
     "calculate_volume_profile",
+    "calculate_tpo_chart",
     "SESSION_ANCHORS",
     # Volume indicators (result wrappers - ta-lib)
     "calculate_obv_result",
