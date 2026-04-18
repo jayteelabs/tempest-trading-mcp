@@ -493,6 +493,8 @@ def _validate_elliott_params(
         raise ValueError("degree_thresholds must satisfy 0 < micro_max < minor_max")
 
 
+# TODO(ENG-32): if this helper continues serving multiple detectors, split it into a neutral
+# shared helper/module with its own pinned schema and tests.
 def _extract_swings(ohlcv: pd.DataFrame, swing_window: int, min_swing_pct: float) -> list[dict]:
     """
     Extract deterministic alternating swing pivots from OHLCV data.
