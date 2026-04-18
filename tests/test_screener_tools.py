@@ -1,28 +1,15 @@
 """Tests for screener_tools MCP tool implementation."""
 
-import pandas as pd
 import pytest
 
-from tempest_mcp.screener.scanner import ScanResult, Screener
+from tempest_mcp.screener.scanner import ScanFailure, ScanResult
 from tempest_mcp.tools.screener_tools import (
     FILTER_VALUE_MAP,
+    MAX_SCAN_SYMBOLS,
     _parse_filters,
     _serialize_scan_result,
     screener_scan,
 )
-
-
-class DummyAdapter:
-    """Dummy adapter for testing."""
-
-    def __init__(self, df: pd.DataFrame | None = None, should_fail: bool = False):
-        self.df = df
-        self.should_fail = should_fail
-
-    def fetch_ohlcv_live(self, symbol: str, timeframe: str = "1h", limit: int = 100):
-        if self.should_fail:
-            raise RuntimeError("Simulated fetch error")
-        return self.df
 
 
 class TestFilterValueMap:
@@ -66,6 +53,14 @@ class TestParseFilters:
         assert ScanFilter.RSI_OVERSOLD in result
         assert ScanFilter.TREND_BULLISH in result
 
+    def test_parse_duplicate_filters_dedupes_preserving_order(self):
+        """Duplicate filter strings should not inflate later scoring."""
+        from tempest_mcp.screener.scanner import ScanFilter
+
+        result = _parse_filters(["rsi_oversold", "rsi_oversold", "trend_bullish"])
+
+        assert result == [ScanFilter.RSI_OVERSOLD, ScanFilter.TREND_BULLISH]
+
     def test_parse_invalid_filter(self):
         """Invalid filter string should raise ValueError."""
         with pytest.raises(ValueError) as exc_info:
@@ -108,136 +103,188 @@ class TestSerializeScanResult:
 class TestScreenerScanTool:
     """Tests for screener_scan tool function."""
 
-    def _create_df(self) -> pd.DataFrame:
-        """Create a standard test DataFrame."""
-        dates = pd.date_range("2024-03-15", periods=50, freq="h", tz="UTC")
-        close_prices = [100.0 + i * 0.2 for i in range(50)]
-        return pd.DataFrame(
+    @pytest.mark.asyncio
+    async def test_screener_scan_returns_success_envelope(self, monkeypatch):
+        """screener_scan should return the deterministic success envelope."""
+
+        class FakeScreener:
+            last_init: dict | None = None
+
+            def __init__(self, symbols, exchange, filters, min_score):
+                type(self).last_init = {
+                    "symbols": symbols,
+                    "exchange": exchange,
+                    "filters": filters,
+                    "min_score": min_score,
+                }
+
+            def scan(self):
+                return (
+                    [
+                        ScanResult(
+                            symbol="BTC/USDT",
+                            exchange="binance",
+                            timestamp=1.0,
+                            price=50000.0,
+                            filters_matched=["rsi_oversold"],
+                            indicator_values={"rsi": 25.0},
+                            score=100.0,
+                        )
+                    ],
+                    [
+                        ScanFailure(
+                            symbol="ETH/USDT",
+                            exchange="binance",
+                            reason="fetch_error",
+                        )
+                    ],
+                )
+
+        monkeypatch.setattr("tempest_mcp.tools.screener_tools.Screener", FakeScreener)
+
+        result = await screener_scan(
+            symbols=["BTC/USDT"],
+            filters=["rsi_oversold", "rsi_oversold"],
+            min_score=10.0,
+            exchange="BINANCE",
+        )
+
+        assert result["success"] is True
+        assert result["data"]["tool"] == "screener_scan"
+        assert result["data"]["exchange"] == "binance"
+        assert result["data"]["applied_config"] == {
+            "filters": ["rsi_oversold"],
+            "min_score": 10.0,
+        }
+        assert result["data"]["results"][0]["filters_matched"] == ["rsi_oversold"]
+        assert result["data"]["failures"] == [
             {
-                "open": close_prices,
-                "high": [p + 1.0 for p in close_prices],
-                "low": [p - 1.0 for p in close_prices],
-                "close": close_prices,
-                "volume": [1000.0] * 50,
-            },
-            index=dates,
-        )
+                "symbol": "ETH/USDT",
+                "exchange": "binance",
+                "reason": "fetch_error",
+            }
+        ]
+        assert "stub" not in result["data"]
+        assert FakeScreener.last_init == {
+            "symbols": ("BTC/USDT",),
+            "exchange": "binance",
+            "filters": [FILTER_VALUE_MAP["rsi_oversold"]],
+            "min_score": 10.0,
+        }
 
-    def test_screener_scan_returns_envelope(self):
-        """screener_scan should return proper success/error envelope."""
-        df = self._create_df()
-
-        class TestAdapter(DummyAdapter):
-            pass
-
-        screener = Screener(symbols=("BTC/USDT",), exchange="binance")
-        screener._adapter = TestAdapter(df)
-
-        # Patch the Screener temporarily
-        import tempest_mcp.tools.screener_tools as st
-
-        original_screener = st.Screener
-        st.Screener = TestAdapter
-        TestAdapter.Screener = original_screener
-
-    def test_screener_scan_invalid_min_score_type(self):
+    @pytest.mark.asyncio
+    async def test_screener_scan_invalid_min_score_type(self):
         """Invalid min_score type should return error envelope."""
-        import asyncio
-
-        result = asyncio.get_event_loop().run_until_complete(
-            screener_scan(symbols=["BTC/USDT"], min_score="not_a_number")
-        )
+        result = await screener_scan(symbols=["BTC/USDT"], min_score="not_a_number")
 
         assert result["success"] is False
         assert "error" in result
         assert result["error"]["code"] == 1004  # INVALID_PARAMETER
 
-    def test_screener_scan_invalid_filter_value(self):
+    @pytest.mark.asyncio
+    async def test_screener_scan_rejects_non_finite_min_score(self):
+        result = await screener_scan(symbols=["BTC/USDT"], min_score=float("inf"))
+
+        assert result == {
+            "success": False,
+            "error": {"code": 1004, "message": "min_score must be finite"},
+        }
+
+    @pytest.mark.asyncio
+    async def test_screener_scan_rejects_out_of_range_min_score(self):
+        result = await screener_scan(symbols=["BTC/USDT"], min_score=101.0)
+
+        assert result == {
+            "success": False,
+            "error": {"code": 1004, "message": "min_score must be between 0 and 100"},
+        }
+
+    @pytest.mark.asyncio
+    async def test_screener_scan_invalid_filter_value(self):
         """Invalid filter value should return error envelope."""
-        import asyncio
-
-        result = asyncio.get_event_loop().run_until_complete(
-            screener_scan(symbols=["BTC/USDT"], filters=["invalid_filter"])
-        )
+        result = await screener_scan(symbols=["BTC/USDT"], filters=["invalid_filter"])
 
         assert result["success"] is False
         assert "error" in result
         assert result["error"]["code"] == 1004  # INVALID_PARAMETER
 
-    def test_screener_scan_empty_symbols_uses_defaults(self):
-        """Empty symbols should use default symbols from config."""
-        import asyncio
+    @pytest.mark.asyncio
+    async def test_screener_scan_rejects_unknown_exchange(self):
+        result = await screener_scan(symbols=["BTC/USDT"], exchange="okx")
 
-        # This will attempt to use actual data adapter
-        # Should handle gracefully
-        result = asyncio.get_event_loop().run_until_complete(
-            screener_scan(symbols=None, filters=[])
+        assert result == {
+            "success": False,
+            "error": {
+                "code": 1004,
+                "message": "exchange must be one of: binance, bybit, coinbase, kraken",
+            },
+        }
+
+    @pytest.mark.asyncio
+    async def test_screener_scan_rejects_symbol_lists_above_cap(self):
+        result = await screener_scan(symbols=["BTC/USDT"] * (MAX_SCAN_SYMBOLS + 1))
+
+        assert result == {
+            "success": False,
+            "error": {
+                "code": 1004,
+                "message": f"symbols must contain at most {MAX_SCAN_SYMBOLS} entries",
+            },
+        }
+
+    @pytest.mark.asyncio
+    async def test_screener_scan_empty_symbols_uses_defaults(self, monkeypatch):
+        """Empty symbols should use default symbols from config."""
+
+        class FakeScreener:
+            last_symbols = None
+
+            def __init__(self, symbols, exchange, filters, min_score):
+                type(self).last_symbols = symbols
+
+            def scan(self):
+                return [], []
+
+        monkeypatch.setattr("tempest_mcp.tools.screener_tools.Screener", FakeScreener)
+
+        result = await screener_scan(symbols=[], filters=[])
+
+        assert result["success"] is True
+        assert result["data"]["results"] == []
+        assert result["data"]["failures"] == []
+        assert FakeScreener.last_symbols == ("BTC/USDT", "ETH/USDT", "DOGE/USDT")
+
+    @pytest.mark.asyncio
+    async def test_screener_scan_internal_errors_are_sanitized(self, monkeypatch):
+        class ExplodingScreener:
+            def __init__(self, symbols, exchange, filters, min_score):
+                pass
+
+            def scan(self):
+                raise RuntimeError("sensitive network error")
+
+        monkeypatch.setattr(
+            "tempest_mcp.tools.screener_tools.Screener",
+            ExplodingScreener,
         )
 
-        # Should return either success with data or failure
-        assert "success" in result
-        assert isinstance(result["success"], bool)
+        result = await screener_scan(symbols=["BTC/USDT"])
+
+        assert result == {
+            "success": False,
+            "error": {"code": 9000, "message": "Unable to complete screener scan"},
+        }
 
 
 class TestScreenerScanEnvelope:
     """Tests for screener_scan response envelope format."""
 
-    def _create_df(self) -> pd.DataFrame:
-        dates = pd.date_range("2024-03-15", periods=50, freq="h", tz="UTC")
-        close_prices = [100.0 + i * 0.2 for i in range(50)]
-        return pd.DataFrame(
-            {
-                "open": close_prices,
-                "high": [p + 1.0 for p in close_prices],
-                "low": [p - 1.0 for p in close_prices],
-                "close": close_prices,
-                "volume": [1000.0] * 50,
-            },
-            index=dates,
-        )
-
-    def test_success_envelope_structure(self):
-        """Success envelope should have correct structure."""
-        # This is tested indirectly via integration tests
-        # The key structure is:
-        # {
-        #   "success": True,
-        #   "data": {
-        #     "tool": "screener_scan",
-        #     "exchange": str,
-        #     "applied_config": {"filters": [...], "min_score": float},
-        #     "results": [...],
-        #     "failures": [...]
-        #   }
-        # }
-        pass
-
-    def test_error_envelope_structure(self):
+    @pytest.mark.asyncio
+    async def test_error_envelope_structure(self):
         """Error envelope should have correct structure."""
-        import asyncio
-
-        result = asyncio.get_event_loop().run_until_complete(
-            screener_scan(symbols=["BTC/USDT"], min_score="invalid")
-        )
+        result = await screener_scan(symbols=["BTC/USDT"], min_score="invalid")
 
         assert result["success"] is False
         assert "error" in result
         assert "code" in result["error"]
         assert "message" in result["error"]
-
-    def test_no_stub_in_response(self):
-        """Response should not contain stub fields."""
-        import asyncio
-
-        result = asyncio.get_event_loop().run_until_complete(
-            screener_scan(symbols=["BTC/USDT"], filters=["rsi_oversold"])
-        )
-
-        # Should not have "stub" field
-        if "success" in result and result["success"]:
-            assert "data" in result
-            if "data" in result:
-                assert "stub" not in result["data"]
-        else:
-            # Error response should not have stub either
-            assert "stub" not in result

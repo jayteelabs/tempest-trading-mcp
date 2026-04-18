@@ -10,6 +10,7 @@ from tempest_mcp.config import get_config
 from tempest_mcp.data.ccxt_adapter import CCXTAdapter
 from tempest_mcp.indicators.momentum import calculate_rsi_result
 from tempest_mcp.indicators.trend import calculate_ema_result
+from tempest_mcp.indicators.volatility import calculate_bollinger_width
 from tempest_mcp.logging_config import get_logger
 from tempest_mcp.models.indicator import SessionType
 
@@ -32,6 +33,9 @@ DEFAULT_FILTER_PRESET: list[ScanFilter] = [
     ScanFilter.RSI_OVERSOLD,
     ScanFilter.TREND_BULLISH,
 ]
+
+HIGH_VOLATILITY_BOLLINGER_WIDTH_THRESHOLD = 0.08
+LOW_VOLATILITY_BOLLINGER_WIDTH_THRESHOLD = 0.03
 
 
 @dataclass
@@ -69,6 +73,8 @@ class Screener:
             self.symbols = config.screener_symbols
         if self.exchange == "binance":
             self.exchange = config.default_exchange
+        if self.filters:
+            self.filters = list(dict.fromkeys(self.filters))
 
     @property
     def adapter(self) -> CCXTAdapter:
@@ -76,9 +82,7 @@ class Screener:
             self._adapter = CCXTAdapter(exchange_name=self.exchange)
         return self._adapter
 
-    def scan(
-        self, symbols: list[str] | None = None
-    ) -> tuple[list[ScanResult], list[ScanFailure]]:
+    def scan(self, symbols: list[str] | None = None) -> tuple[list[ScanResult], list[ScanFailure]]:
         """Execute multi-factor scan across symbols.
 
         Returns:
@@ -112,9 +116,7 @@ class Screener:
                 results.append(result)
 
         # Deterministic sorting: (-score, -len(filters_matched), symbol, exchange)
-        results.sort(
-            key=lambda r: (-r.score, -len(r.filters_matched), r.symbol, r.exchange)
-        )
+        results.sort(key=lambda r: (-r.score, -len(r.filters_matched), r.symbol, r.exchange))
 
         logger.info(
             "Scan complete",
@@ -147,7 +149,7 @@ class Screener:
             return None, ScanFailure(
                 symbol=symbol,
                 exchange=self.exchange,
-                reason=f"fetch_error: {e}",
+                reason="fetch_error",
             )
 
         close = df["close"].tolist()
@@ -155,6 +157,10 @@ class Screener:
 
         indicator_values: dict[str, float] = {}
         filters_matched: list[str] = []
+
+        def append_match(filter_name: str) -> None:
+            if filter_name not in filters_matched:
+                filters_matched.append(filter_name)
 
         # ── RSI Evaluation ───────────────────────────────────────────────────
         try:
@@ -165,9 +171,9 @@ class Screener:
             indicator_values["rsi_overbought"] = float(rsi_result.values.get("overbought", False))
 
             if ScanFilter.RSI_OVERSOLD in filters and indicator_values["rsi_oversold"]:
-                filters_matched.append("rsi_oversold")
+                append_match("rsi_oversold")
             if ScanFilter.RSI_OVERBOUGHT in filters and indicator_values["rsi_overbought"]:
-                filters_matched.append("rsi_overbought")
+                append_match("rsi_overbought")
         except Exception as e:
             logger.warning("RSI calculation failed", symbol=symbol, error=str(e))
             indicator_values["rsi"] = 50.0
@@ -190,27 +196,49 @@ class Screener:
             is_bearish = ema_7 < ema_25 < ema_50
 
             if ScanFilter.TREND_BULLISH in filters and is_bullish:
-                filters_matched.append("trend_bullish")
+                append_match("trend_bullish")
             if ScanFilter.TREND_BEARISH in filters and is_bearish:
-                filters_matched.append("trend_bearish")
+                append_match("trend_bearish")
         except Exception as e:
             logger.warning("EMA calculation failed", symbol=symbol, error=str(e))
             indicator_values["ema_7"] = close[-1]
             indicator_values["ema_25"] = close[-1]
             indicator_values["ema_50"] = close[-1]
 
+        # ── Volatility Evaluation ────────────────────────────────────────────
+        try:
+            bollinger_width = calculate_bollinger_width(pd.Series(close, index=df.index))
+            latest_width = float(bollinger_width.iloc[-1]) if not bollinger_width.empty else 0.0
+            indicator_values["bollinger_width"] = latest_width
+
+            if (
+                ScanFilter.HIGH_VOLATILITY in filters
+                and latest_width >= HIGH_VOLATILITY_BOLLINGER_WIDTH_THRESHOLD
+            ):
+                append_match("high_volatility")
+            if (
+                ScanFilter.LOW_VOLATILITY in filters
+                and latest_width <= LOW_VOLATILITY_BOLLINGER_WIDTH_THRESHOLD
+            ):
+                append_match("low_volatility")
+        except Exception as e:
+            logger.warning("Volatility calculation failed", symbol=symbol, error=str(e))
+            indicator_values["bollinger_width"] = 0.0
+
         # ── Volume Evaluation ────────────────────────────────────────────────
         try:
             # Calculate volume spike: current volume vs 20-bar average
             lookback = min(20, len(volume))
             if lookback >= 5:
-                avg_volume = sum(volume[-lookback:-1]) / (lookback - 1) if lookback > 1 else volume[-1]
+                avg_volume = (
+                    sum(volume[-lookback:-1]) / (lookback - 1) if lookback > 1 else volume[-1]
+                )
                 current_volume = volume[-1]
                 volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
                 indicator_values["volume_ratio"] = volume_ratio
                 # Volume spike threshold: 1.5x average
                 if ScanFilter.VOLUME_SPIKE in filters and volume_ratio >= 1.5:
-                    filters_matched.append("volume_spike")
+                    append_match("volume_spike")
             else:
                 indicator_values["volume_ratio"] = 1.0
         except Exception as e:
@@ -224,12 +252,6 @@ class Screener:
             if lookback > 0:
                 momentum = ((close[-1] - close[-lookback - 1]) / close[-lookback - 1]) * 100
                 indicator_values["momentum_pct"] = momentum
-                # Positive momentum = bullish, negative = bearish
-                # This is a simplified momentum check; more complex could use MACD histogram
-                if momentum > 0 and ScanFilter.TREND_BULLISH in filters:
-                    filters_matched.append("trend_bullish")
-                elif momentum < 0 and ScanFilter.TREND_BEARISH in filters:
-                    filters_matched.append("trend_bearish")
             else:
                 indicator_values["momentum_pct"] = 0.0
         except Exception as e:
@@ -271,6 +293,8 @@ class Screener:
 
         When filters are specified, score = (matched / total) * 100
         """
+        unique_filters = list(dict.fromkeys(filters))
+
         if not filters:
             # Default scoring when no filters specified
             score = 50.0
@@ -309,10 +333,11 @@ class Screener:
             }
 
             # Count how many specified filters were matched
+            matched_filter_names = set(filters_matched)
             matched_count = sum(
-                1 for f in filters if filter_str_map.get(f) in filters_matched
+                1 for f in unique_filters if filter_str_map.get(f) in matched_filter_names
             )
-            match_ratio = matched_count / len(filters) if filters else 0
+            match_ratio = matched_count / len(unique_filters) if unique_filters else 0
             return min(100, match_ratio * 100)
 
     def session_breakout_scan(

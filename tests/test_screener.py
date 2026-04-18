@@ -201,7 +201,7 @@ class TestScreenerScan:
 
         assert len(results) == 0
         assert len(failures) == 1
-        assert "fetch_error" in failures[0].reason
+        assert failures[0].reason == "fetch_error"
 
     def test_scan_deterministic_sorting(self):
         """Results should be sorted by (-score, -len(filters_matched), symbol, exchange)."""
@@ -270,19 +270,33 @@ class TestScreenerScan:
         screener = Screener(
             symbols=("BTC/USDT",),
             exchange="binance",
-            filters=[ScanFilter.RSI_OVERSOLD],  # Should match
-            min_score=100.0,  # Very high threshold
+            filters=[ScanFilter.RSI_OVERSOLD, ScanFilter.TREND_BULLISH],
+            min_score=75.0,
         )
         screener._adapter = DummyAdapter(df)
 
         results, failures = screener.scan()
 
-        # With min_score=100, no results should pass
-        assert all(r.score >= 100.0 for r in results)
+        assert results == []
+        assert failures == []
 
 
 class TestScreenerDeterministicScoring:
     """Tests for deterministic scoring behavior."""
+
+    def _create_bullish_df(self) -> pd.DataFrame:
+        dates = pd.date_range("2024-03-15", periods=50, freq="h", tz="UTC")
+        close_prices = [100.0 + i * 0.2 for i in range(50)]
+        return pd.DataFrame(
+            {
+                "open": close_prices,
+                "high": [p + 1.0 for p in close_prices],
+                "low": [p - 1.0 for p in close_prices],
+                "close": close_prices,
+                "volume": [1000.0] * 50,
+            },
+            index=dates,
+        )
 
     def _create_df_with_known_rsi(self, rsi_value: float) -> pd.DataFrame:
         """Create a DataFrame that will produce a specific RSI value."""
@@ -314,7 +328,13 @@ class TestScreenerDeterministicScoring:
     def test_score_calculation_no_filters(self):
         """Default scoring when no filters specified."""
         screener = Screener(symbols=("BTC/USDT",), exchange="binance")
-        indicator_values = {"rsi": 25.0, "ema_7": 100.0, "ema_25": 99.0, "ema_50": 98.0, "volume_ratio": 1.0}
+        indicator_values = {
+            "rsi": 25.0,
+            "ema_7": 100.0,
+            "ema_25": 99.0,
+            "ema_50": 98.0,
+            "volume_ratio": 1.0,
+        }
         score = screener._calculate_score([], [], indicator_values)
         # With RSI oversold (25 < 30), score should be 50 + 20 = 70
         assert score == 85.0
@@ -340,6 +360,79 @@ class TestScreenerDeterministicScoring:
         score = screener._calculate_score(filters, filters_matched, indicator_values)
         # 2 out of 2 filters matched = 100%
         assert score == 100.0
+
+    def test_score_calculation_deduplicates_requested_filters(self):
+        """Duplicate requested filters should not inflate score."""
+        screener = Screener(symbols=("BTC/USDT",), exchange="binance")
+        filters = [
+            ScanFilter.RSI_OVERSOLD,
+            ScanFilter.RSI_OVERSOLD,
+            ScanFilter.TREND_BULLISH,
+        ]
+        filters_matched = ["rsi_oversold"]
+
+        score = screener._calculate_score(filters, filters_matched, {"rsi": 25.0})
+
+        assert score == 50.0
+
+    def test_momentum_does_not_match_trend_filters(self, monkeypatch):
+        """Momentum sign must not backfill trend filter matches."""
+
+        df = self._create_bullish_df()
+
+        class FakeIndicatorResult:
+            def __init__(self, values):
+                self.values = values
+
+        monkeypatch.setattr(
+            "tempest_mcp.screener.scanner.calculate_rsi_result",
+            lambda close: FakeIndicatorResult(
+                {"rsi": 50.0, "oversold": False, "overbought": False}
+            ),
+        )
+        monkeypatch.setattr(
+            "tempest_mcp.screener.scanner.calculate_ema_result",
+            lambda close, periods: FakeIndicatorResult(
+                {"ema_7": 100.0, "ema_25": 100.0, "ema_50": 100.0}
+            ),
+        )
+
+        screener = Screener(
+            symbols=("BTC/USDT",),
+            exchange="binance",
+            filters=[ScanFilter.TREND_BULLISH],
+        )
+        screener._adapter = DummyAdapter(df)
+
+        results, failures = screener.scan()
+
+        assert failures == []
+        assert len(results) == 1
+        assert results[0].filters_matched == []
+        assert results[0].score == 0.0
+
+    def test_volatility_filters_are_evaluated(self, monkeypatch):
+        """High/low volatility filters should participate in filter matching."""
+
+        df = self._create_bullish_df()
+        monkeypatch.setattr(
+            "tempest_mcp.screener.scanner.calculate_bollinger_width",
+            lambda prices: pd.Series([0.12], index=[prices.index[-1]]),
+        )
+
+        screener = Screener(
+            symbols=("BTC/USDT",),
+            exchange="binance",
+            filters=[ScanFilter.HIGH_VOLATILITY],
+        )
+        screener._adapter = DummyAdapter(df)
+
+        results, failures = screener.scan()
+
+        assert failures == []
+        assert len(results) == 1
+        assert results[0].filters_matched == ["high_volatility"]
+        assert results[0].score == 100.0
 
 
 class TestSessionBreakoutScan:
