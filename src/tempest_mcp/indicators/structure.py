@@ -1881,9 +1881,7 @@ def _select_latest_range(ranges: pd.DataFrame) -> dict | None:
     }
 
 
-def _select_latest_breakout_for_range(
-    breakouts: pd.DataFrame, range_id: int, ohlcv_index: pd.DatetimeIndex
-) -> dict | None:
+def _select_latest_breakout_for_range(breakouts: pd.DataFrame, range_id: int) -> dict | None:
     """Select the most recent breakout for a given range, or None if recency exceeded."""
     if len(breakouts) == 0:
         return None
@@ -2044,9 +2042,7 @@ def summarize_market_structure(
         return pd.DataFrame([row])[_SUMMARY_OUTPUT_COLUMNS]
 
     # Compose primitives
-    swings = detect_swing_points(
-        ohlcv, swing_window=swing_window, min_swing_pct=min_swing_pct
-    )
+    swings = detect_swing_points(ohlcv, swing_window=swing_window, min_swing_pct=min_swing_pct)
     structure = classify_market_structure(swings, equal_epsilon=equal_epsilon)
     ranges = detect_price_ranges(
         ohlcv,
@@ -2096,9 +2092,7 @@ def summarize_market_structure(
     # Extract latest breakout
     latest_breakout = None
     if latest_range is not None:
-        latest_breakout = _select_latest_breakout_for_range(
-            breakouts, latest_range["range_id"], ohlcv.index
-        )
+        latest_breakout = _select_latest_breakout_for_range(breakouts, latest_range["range_id"])
 
     # Compute derived evidence
     trend_up_confirmed = (
@@ -2128,11 +2122,15 @@ def summarize_market_structure(
     if latest_breakout is not None:
         breakout_ts = latest_breakout["breakout_ts"]
         bars_since_breakout = len(ohlcv) - ohlcv.index.get_loc(breakout_ts) - 1
-        if (latest_breakout["breakout_direction"] == "up" and
-            bars_since_breakout <= breakout_recency_bars):
+        if (
+            latest_breakout["breakout_direction"] == "up"
+            and bars_since_breakout <= breakout_recency_bars
+        ):
             recent_breakout_up = True
-        elif (latest_breakout["breakout_direction"] == "down" and
-            bars_since_breakout <= breakout_recency_bars):
+        elif (
+            latest_breakout["breakout_direction"] == "down"
+            and bars_since_breakout <= breakout_recency_bars
+        ):
             recent_breakout_down = True
 
     # Decision priority (strict order from design)

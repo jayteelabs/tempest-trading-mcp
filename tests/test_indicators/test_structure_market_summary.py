@@ -31,6 +31,25 @@ def _make_ohlcv(timestamps, opens, highs, lows, closes, volumes=None):
     return df
 
 
+def _with_terminal_bars(
+    ohlcv: pd.DataFrame,
+    terminal_closes: list[float],
+    *,
+    open_offset: float,
+    high_offset: float,
+    low_offset: float,
+) -> pd.DataFrame:
+    """Return a copy with the final bars replaced by deterministic values."""
+    updated = ohlcv.copy()
+    start_idx = len(updated) - len(terminal_closes)
+    for row_idx, close in enumerate(terminal_closes, start=start_idx):
+        updated.iloc[row_idx, updated.columns.get_loc("open")] = close + open_offset
+        updated.iloc[row_idx, updated.columns.get_loc("high")] = close + high_offset
+        updated.iloc[row_idx, updated.columns.get_loc("low")] = close - low_offset
+        updated.iloc[row_idx, updated.columns.get_loc("close")] = close
+    return updated
+
+
 def _ohlcv_bullish_trend():
     """Create a bullish trending OHLCV with clear HH/HL pattern and strong ADX.
 
@@ -40,52 +59,212 @@ def _ohlcv_bullish_trend():
     timestamps = pd.date_range("2024-01-01", periods=50, freq="h", tz="UTC")
     # Clear HH/HL pattern with increasing highs and lows
     opens = [
-        100, 101, 102, 101, 100,
-        102, 103, 104, 103, 102,
-        104, 105, 106, 105, 104,
-        106, 107, 108, 107, 106,
-        108, 109, 110, 109, 108,
-        110, 111, 112, 111, 110,
-        112, 113, 114, 113, 112,
-        114, 115, 116, 115, 114,
-        116, 117, 118, 117, 116,
-        118, 119, 120, 119, 118,
+        100,
+        101,
+        102,
+        101,
+        100,
+        102,
+        103,
+        104,
+        103,
+        102,
+        104,
+        105,
+        106,
+        105,
+        104,
+        106,
+        107,
+        108,
+        107,
+        106,
+        108,
+        109,
+        110,
+        109,
+        108,
+        110,
+        111,
+        112,
+        111,
+        110,
+        112,
+        113,
+        114,
+        113,
+        112,
+        114,
+        115,
+        116,
+        115,
+        114,
+        116,
+        117,
+        118,
+        117,
+        116,
+        118,
+        119,
+        120,
+        119,
+        118,
     ]
     highs = [
-        102, 103, 104, 103, 102,
-        104, 105, 106, 105, 104,
-        106, 107, 108, 107, 106,
-        108, 109, 110, 109, 108,
-        110, 111, 112, 111, 110,
-        112, 113, 114, 113, 112,
-        114, 115, 116, 115, 114,
-        116, 117, 118, 117, 116,
-        118, 119, 120, 119, 118,
-        120, 121, 122, 121, 120,
+        102,
+        103,
+        104,
+        103,
+        102,
+        104,
+        105,
+        106,
+        105,
+        104,
+        106,
+        107,
+        108,
+        107,
+        106,
+        108,
+        109,
+        110,
+        109,
+        108,
+        110,
+        111,
+        112,
+        111,
+        110,
+        112,
+        113,
+        114,
+        113,
+        112,
+        114,
+        115,
+        116,
+        115,
+        114,
+        116,
+        117,
+        118,
+        117,
+        116,
+        118,
+        119,
+        120,
+        119,
+        118,
+        120,
+        121,
+        122,
+        121,
+        120,
     ]
     lows = [
-        99, 100, 101, 100, 99,
-        101, 102, 103, 102, 101,
-        103, 104, 105, 104, 103,
-        105, 106, 107, 106, 105,
-        107, 108, 109, 108, 107,
-        109, 110, 111, 110, 109,
-        111, 112, 113, 112, 111,
-        113, 114, 115, 114, 113,
-        115, 116, 117, 116, 115,
-        117, 118, 119, 118, 117,
+        99,
+        100,
+        101,
+        100,
+        99,
+        101,
+        102,
+        103,
+        102,
+        101,
+        103,
+        104,
+        105,
+        104,
+        103,
+        105,
+        106,
+        107,
+        106,
+        105,
+        107,
+        108,
+        109,
+        108,
+        107,
+        109,
+        110,
+        111,
+        110,
+        109,
+        111,
+        112,
+        113,
+        112,
+        111,
+        113,
+        114,
+        115,
+        114,
+        113,
+        115,
+        116,
+        117,
+        116,
+        115,
+        117,
+        118,
+        119,
+        118,
+        117,
     ]
     closes = [
-        101, 102, 103, 102, 101,
-        103, 104, 105, 104, 103,
-        105, 106, 107, 106, 105,
-        107, 108, 109, 108, 107,
-        109, 110, 111, 110, 109,
-        111, 112, 113, 112, 111,
-        113, 114, 115, 114, 113,
-        115, 116, 117, 116, 115,
-        117, 118, 119, 118, 117,
-        119, 120, 121, 120, 119,
+        101,
+        102,
+        103,
+        102,
+        101,
+        103,
+        104,
+        105,
+        104,
+        103,
+        105,
+        106,
+        107,
+        106,
+        105,
+        107,
+        108,
+        109,
+        108,
+        107,
+        109,
+        110,
+        111,
+        110,
+        109,
+        111,
+        112,
+        113,
+        112,
+        111,
+        113,
+        114,
+        115,
+        114,
+        113,
+        115,
+        116,
+        117,
+        116,
+        115,
+        117,
+        118,
+        119,
+        118,
+        117,
+        119,
+        120,
+        121,
+        120,
+        119,
     ]
     volumes = [100] * 50
     return _make_ohlcv(timestamps, opens, highs, lows, closes, volumes)
@@ -95,52 +274,212 @@ def _ohlcv_bearish_trend():
     """Create a bearish trending OHLCV with clear LH/LL pattern."""
     timestamps = pd.date_range("2024-01-01", periods=50, freq="h", tz="UTC")
     opens = [
-        120, 119, 118, 119, 120,
-        118, 117, 116, 117, 118,
-        116, 115, 114, 115, 116,
-        114, 113, 112, 113, 114,
-        112, 111, 110, 111, 112,
-        110, 109, 108, 109, 110,
-        108, 107, 106, 107, 108,
-        106, 105, 104, 105, 106,
-        104, 103, 102, 103, 104,
-        102, 101, 100, 101, 102,
+        120,
+        119,
+        118,
+        119,
+        120,
+        118,
+        117,
+        116,
+        117,
+        118,
+        116,
+        115,
+        114,
+        115,
+        116,
+        114,
+        113,
+        112,
+        113,
+        114,
+        112,
+        111,
+        110,
+        111,
+        112,
+        110,
+        109,
+        108,
+        109,
+        110,
+        108,
+        107,
+        106,
+        107,
+        108,
+        106,
+        105,
+        104,
+        105,
+        106,
+        104,
+        103,
+        102,
+        103,
+        104,
+        102,
+        101,
+        100,
+        101,
+        102,
     ]
     highs = [
-        121, 120, 119, 120, 121,
-        119, 118, 117, 118, 119,
-        117, 116, 115, 116, 117,
-        115, 114, 113, 114, 115,
-        113, 112, 111, 112, 113,
-        111, 110, 109, 110, 111,
-        109, 108, 107, 108, 109,
-        107, 106, 105, 106, 107,
-        105, 104, 103, 104, 105,
-        103, 102, 101, 102, 103,
+        121,
+        120,
+        119,
+        120,
+        121,
+        119,
+        118,
+        117,
+        118,
+        119,
+        117,
+        116,
+        115,
+        116,
+        117,
+        115,
+        114,
+        113,
+        114,
+        115,
+        113,
+        112,
+        111,
+        112,
+        113,
+        111,
+        110,
+        109,
+        110,
+        111,
+        109,
+        108,
+        107,
+        108,
+        109,
+        107,
+        106,
+        105,
+        106,
+        107,
+        105,
+        104,
+        103,
+        104,
+        105,
+        103,
+        102,
+        101,
+        102,
+        103,
     ]
     lows = [
-        119, 118, 117, 118, 119,
-        117, 116, 115, 116, 117,
-        115, 114, 113, 114, 115,
-        113, 112, 111, 112, 113,
-        111, 110, 109, 110, 111,
-        109, 108, 107, 108, 109,
-        107, 106, 105, 106, 107,
-        105, 104, 103, 104, 105,
-        103, 102, 101, 102, 103,
-        101, 100, 99, 100, 101,
+        119,
+        118,
+        117,
+        118,
+        119,
+        117,
+        116,
+        115,
+        116,
+        117,
+        115,
+        114,
+        113,
+        114,
+        115,
+        113,
+        112,
+        111,
+        112,
+        113,
+        111,
+        110,
+        109,
+        110,
+        111,
+        109,
+        108,
+        107,
+        108,
+        109,
+        107,
+        106,
+        105,
+        106,
+        107,
+        105,
+        104,
+        103,
+        104,
+        105,
+        103,
+        102,
+        101,
+        102,
+        103,
+        101,
+        100,
+        99,
+        100,
+        101,
     ]
     closes = [
-        119, 118, 117, 118, 119,
-        117, 116, 115, 116, 117,
-        115, 114, 113, 114, 115,
-        113, 112, 111, 112, 113,
-        111, 110, 109, 110, 111,
-        109, 108, 107, 108, 109,
-        107, 106, 105, 106, 107,
-        105, 104, 103, 104, 105,
-        103, 102, 101, 102, 103,
-        101, 100, 99, 100, 101,
+        119,
+        118,
+        117,
+        118,
+        119,
+        117,
+        116,
+        115,
+        116,
+        117,
+        115,
+        114,
+        113,
+        114,
+        115,
+        113,
+        112,
+        111,
+        112,
+        113,
+        111,
+        110,
+        109,
+        110,
+        111,
+        109,
+        108,
+        107,
+        108,
+        109,
+        107,
+        106,
+        105,
+        106,
+        107,
+        105,
+        104,
+        103,
+        104,
+        105,
+        103,
+        102,
+        101,
+        102,
+        103,
+        101,
+        100,
+        99,
+        100,
+        101,
     ]
     volumes = [100] * 50
     return _make_ohlcv(timestamps, opens, highs, lows, closes, volumes)
@@ -166,12 +505,49 @@ def _ohlcv_ranging():
 
 def _ohlcv_breakout_up():
     """Create an OHLCV that breaks out upward from a range."""
+    return _with_terminal_bars(
+        _ohlcv_ranging(),
+        [102.5, 103.0, 103.5],
+        open_offset=-0.2,
+        high_offset=0.5,
+        low_offset=0.7,
+    )
+
+
+def _ohlcv_breakout_down():
+    """Create an OHLCV that breaks down from a range."""
+    return _with_terminal_bars(
+        _ohlcv_ranging(),
+        [97.5, 97.0, 96.5],
+        open_offset=0.2,
+        high_offset=0.7,
+        low_offset=0.5,
+    )
+
+
+def _ohlcv_transition():
+    """Create an OHLCV with mixed evidence that should remain transitional."""
     timestamps = pd.date_range("2024-01-01", periods=50, freq="h", tz="UTC")
-    # First 35 bars in tight range, then breakout
     opens = [100] * 35 + [102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116]
     highs = [101] * 35 + [103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117]
     lows = [99] * 35 + [101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115]
-    closes = [100.5] * 35 + [102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116]
+    closes = [100.5] * 35 + [
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108,
+        109,
+        110,
+        111,
+        112,
+        113,
+        114,
+        115,
+        116,
+    ]
     volumes = [100] * 50
     return _make_ohlcv(timestamps, opens, highs, lows, closes, volumes)
 
@@ -225,7 +601,9 @@ class TestSummarizeMarketStructureDeterminism:
         ohlcv = _ohlcv_bullish_trend()
         result1 = summarize_market_structure(ohlcv)
         result2 = summarize_market_structure(ohlcv)
-        pd.testing.assert_frame_equal(result1.reset_index(drop=True), result2.reset_index(drop=True))
+        pd.testing.assert_frame_equal(
+            result1.reset_index(drop=True), result2.reset_index(drop=True)
+        )
 
     def test_column_ordering_is_stable(self):
         """Column ordering must be stable across multiple calls."""
@@ -237,25 +615,25 @@ class TestSummarizeMarketStructureDeterminism:
 class TestSummarizeMarketStructureLabels:
     """Tests for correct label classification."""
 
-    def test_valid_labels_for_recognized_regimes(self):
-        """Labels must be from the expected set."""
-        valid_labels = {
-            "trending_up", "trending_down", "ranging",
-            "breakout_up", "breakout_down", "transition", "insufficient_data"
-        }
-
-        # Test all fixtures
-        for fixture_fn, _expected_contains in [
-            (_ohlcv_bullish_trend, "trending"),
-            (_ohlcv_bearish_trend, "trending"),
-            (_ohlcv_ranging, "rang"),
-            (_ohlcv_breakout_up, "breakout"),
-            (_ohlcv_insufficient_data, "insufficient"),
-        ]:
-            ohlcv = fixture_fn()
-            result = summarize_market_structure(ohlcv)
-            label = result["summary_label"].iloc[0]
-            assert label in valid_labels, f"Label {label} not in valid set for {fixture_fn.__name__}"
+    @pytest.mark.parametrize(
+        ("fixture_fn", "expected_label", "expected_rule"),
+        [
+            (_ohlcv_bullish_trend, "trending_up", "trending_up_rule"),
+            (_ohlcv_bearish_trend, "trending_down", "trending_down_rule"),
+            (_ohlcv_ranging, "ranging", "ranging_rule"),
+            (_ohlcv_breakout_up, "breakout_up", "breakout_up_rule"),
+            (_ohlcv_breakout_down, "breakout_down", "breakout_down_rule"),
+            (_ohlcv_transition, "transition", "transition_rule"),
+            (_ohlcv_insufficient_data, "insufficient_data", "insufficient_data_rule"),
+        ],
+    )
+    def test_expected_labels_and_decision_rules_for_regimes(
+        self, fixture_fn, expected_label, expected_rule
+    ):
+        """Each regime fixture must pin its exact summary label and decision rule."""
+        result = summarize_market_structure(fixture_fn())
+        assert result["summary_label"].iloc[0] == expected_label
+        assert result["decision_rule"].iloc[0] == expected_rule
 
     def test_insufficient_data_detected(self):
         """Window with insufficient data should be classified as insufficient_data."""
@@ -285,7 +663,9 @@ class TestSummarizeMarketStructureConfidence:
             ohlcv = fixture_fn()
             result = summarize_market_structure(ohlcv)
             confidence = result["confidence"].iloc[0]
-            assert 0.0 <= confidence <= 1.0, f"Confidence {confidence} out of range for {fixture_fn.__name__}"
+            assert 0.0 <= confidence <= 1.0, (
+                f"Confidence {confidence} out of range for {fixture_fn.__name__}"
+            )
 
 
 class TestSummarizeMarketStructureDecisionRules:
@@ -302,6 +682,31 @@ class TestSummarizeMarketStructureDecisionRules:
         ohlcv = _ohlcv_insufficient_data()
         result = summarize_market_structure(ohlcv)
         assert result["decision_rule"].iloc[0] == "insufficient_data_rule"
+
+    @pytest.mark.parametrize(
+        ("fixture_fn", "expected_label", "expected_direction"),
+        [
+            (_ohlcv_breakout_up, "breakout_up", "up"),
+            (_ohlcv_breakout_down, "breakout_down", "down"),
+        ],
+    )
+    def test_breakout_priority_and_recency_boundary(
+        self, fixture_fn, expected_label, expected_direction
+    ):
+        """Recent breakouts should beat active ranges until the recency boundary expires."""
+        ohlcv = fixture_fn()
+
+        recent = summarize_market_structure(ohlcv, breakout_recency_bars=2)
+        stale = summarize_market_structure(ohlcv, breakout_recency_bars=1)
+
+        assert recent["summary_label"].iloc[0] == expected_label
+        assert recent["decision_rule"].iloc[0] == f"{expected_label}_rule"
+        assert recent["range_status"].iloc[0] == "active"
+        assert recent["breakout_direction"].iloc[0] == expected_direction
+
+        assert stale["summary_label"].iloc[0] == "ranging"
+        assert stale["decision_rule"].iloc[0] == "ranging_rule"
+        assert stale["range_status"].iloc[0] == "active"
 
 
 class TestSummarizeMarketStructureADXFields:
@@ -333,6 +738,8 @@ class TestSummarizeMarketStructureADXFields:
         actual = result["di_spread"].iloc[0]
         if not (np.isnan(expected) and np.isnan(actual)):
             assert abs(expected - actual) < 1e-6
+        else:
+            assert np.isnan(actual)
 
 
 class TestSummarizeMarketStructureInvalidInput:
@@ -396,8 +803,7 @@ class TestSummarizeMarketStructureBoundary:
 
     def test_no_server_imports_in_structure_module(self):
         """structure.py must not import from tempest_mcp.server or tools."""
-        import tempest_mcp.indicators.structure as structure_module
-        module_file = structure_module.__file__
+        module_file = sys.modules[summarize_market_structure.__module__].__file__
         with open(module_file) as f:
             content = f.read()
         assert "tempest_mcp.server" not in content
