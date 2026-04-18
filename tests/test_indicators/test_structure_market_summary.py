@@ -14,7 +14,6 @@ from tempest_mcp.indicators.structure import (
     summarize_market_structure,
 )
 
-
 # =============================================================================
 # Test Fixtures — Properly Constructed to Trigger Swing Detection
 # =============================================================================
@@ -34,7 +33,7 @@ def _make_ohlcv(timestamps, opens, highs, lows, closes, volumes=None):
 
 def _ohlcv_bullish_trend():
     """Create a bullish trending OHLCV with clear HH/HL pattern and strong ADX.
-    
+
     Uses the pattern from test_structure_price_patterns.py but extended to 50 bars
     to satisfy ADX warmup requirements (adx_period * 2 = 28).
     """
@@ -244,9 +243,9 @@ class TestSummarizeMarketStructureLabels:
             "trending_up", "trending_down", "ranging",
             "breakout_up", "breakout_down", "transition", "insufficient_data"
         }
-        
+
         # Test all fixtures
-        for fixture_fn, expected_contains in [
+        for fixture_fn, _expected_contains in [
             (_ohlcv_bullish_trend, "trending"),
             (_ohlcv_bearish_trend, "trending"),
             (_ohlcv_ranging, "rang"),
