@@ -1177,6 +1177,22 @@ def _validate_equal_epsilon(equal_epsilon: float) -> None:
         raise ValueError("equal_epsilon must be a finite float >= 0.0")
 
 
+def _classify_trend_state(
+    latest_high_classification: str | None, latest_low_classification: str | None
+) -> str:
+    """Infer trend state from the most recent classified high/low pair."""
+    if latest_high_classification is None or latest_low_classification is None:
+        return "transition"
+
+    if latest_high_classification in ("HH", "EH") and latest_low_classification == "HL":
+        return "bullish"
+
+    if latest_high_classification == "LH" and latest_low_classification in ("LL", "EL"):
+        return "bearish"
+
+    return "range"
+
+
 def _validate_range_params(
     range_lookback: int,
     max_range_pct: float,
@@ -1438,25 +1454,21 @@ def classify_market_structure(
 
     result_df = pd.DataFrame(rows)
 
-    # Determine trend_state based on most recent high+low pair
-    # Get the latest classified high and low
-    latest_high = result_df[result_df["swing_type"] == "high"].sort_values("event_id").tail(1)
-    latest_low = result_df[result_df["swing_type"] == "low"].sort_values("event_id").tail(1)
+    latest_high_classification = None
+    latest_low_classification = None
+    trend_states = []
 
-    if len(latest_high) > 0 and len(latest_low) > 0:
-        high_class = latest_high.iloc[0]["classification"]
-        low_class = latest_low.iloc[0]["classification"]
-
-        if high_class in ("HH", "EH") and low_class == "HL":
-            current_trend = "bullish"
-        elif high_class == "LH" and low_class in ("LL", "EL"):
-            current_trend = "bearish"
+    for row in result_df.itertuples(index=False):
+        if row.swing_type == "high":
+            latest_high_classification = row.classification
         else:
-            current_trend = "range"
+            latest_low_classification = row.classification
 
-        result_df["trend_state"] = current_trend
-    else:
-        result_df["trend_state"] = "transition"
+        trend_states.append(
+            _classify_trend_state(latest_high_classification, latest_low_classification)
+        )
+
+    result_df["trend_state"] = trend_states
 
     return result_df[_STRUCTURE_OUTPUT_COLUMNS]
 
@@ -1507,7 +1519,7 @@ def detect_price_ranges(
         - range_width_pct: float
         - bars_evaluated: int
         - containment_ratio: float
-        - status: 'active', 'expired', 'broken_up', or 'broken_down'
+        - status: 'active', 'broken_up', or 'broken_down'
 
     Raises
     ------

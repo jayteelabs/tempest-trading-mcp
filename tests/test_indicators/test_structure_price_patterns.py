@@ -438,6 +438,101 @@ class TestClassifyMarketStructure:
         if len(result) > 0:
             assert set(result["trend_state"].unique()).issubset(valid_states)
 
+    def test_trend_state_tracks_structure_per_event(self):
+        """Test trend_state reflects the latest classified high/low at each event."""
+        swings = _make_swings(
+            [
+                {
+                    "swing_id": 1,
+                    "pivot_index": 1,
+                    "swing_type": "low",
+                    "pivot_ts": pd.Timestamp("2024-01-01T00:00:00Z"),
+                    "pivot_price": 100.0,
+                    "leg_start_ts": pd.Timestamp("2023-12-31T23:00:00Z"),
+                    "leg_start_price": 101.0,
+                    "leg_end_ts": pd.Timestamp("2024-01-01T00:00:00Z"),
+                    "leg_end_price": 100.0,
+                    "price_delta": -1.0,
+                    "pct_delta": 0.01,
+                },
+                {
+                    "swing_id": 2,
+                    "pivot_index": 2,
+                    "swing_type": "high",
+                    "pivot_ts": pd.Timestamp("2024-01-01T01:00:00Z"),
+                    "pivot_price": 110.0,
+                    "leg_start_ts": pd.Timestamp("2024-01-01T00:00:00Z"),
+                    "leg_start_price": 100.0,
+                    "leg_end_ts": pd.Timestamp("2024-01-01T01:00:00Z"),
+                    "leg_end_price": 110.0,
+                    "price_delta": 10.0,
+                    "pct_delta": 0.1,
+                },
+                {
+                    "swing_id": 3,
+                    "pivot_index": 3,
+                    "swing_type": "low",
+                    "pivot_ts": pd.Timestamp("2024-01-01T02:00:00Z"),
+                    "pivot_price": 101.0,
+                    "leg_start_ts": pd.Timestamp("2024-01-01T01:00:00Z"),
+                    "leg_start_price": 110.0,
+                    "leg_end_ts": pd.Timestamp("2024-01-01T02:00:00Z"),
+                    "leg_end_price": 101.0,
+                    "price_delta": -9.0,
+                    "pct_delta": 0.0818,
+                },
+                {
+                    "swing_id": 4,
+                    "pivot_index": 4,
+                    "swing_type": "high",
+                    "pivot_ts": pd.Timestamp("2024-01-01T03:00:00Z"),
+                    "pivot_price": 111.0,
+                    "leg_start_ts": pd.Timestamp("2024-01-01T02:00:00Z"),
+                    "leg_start_price": 101.0,
+                    "leg_end_ts": pd.Timestamp("2024-01-01T03:00:00Z"),
+                    "leg_end_price": 111.0,
+                    "price_delta": 10.0,
+                    "pct_delta": 0.099,
+                },
+                {
+                    "swing_id": 5,
+                    "pivot_index": 5,
+                    "swing_type": "low",
+                    "pivot_ts": pd.Timestamp("2024-01-01T04:00:00Z"),
+                    "pivot_price": 99.0,
+                    "leg_start_ts": pd.Timestamp("2024-01-01T03:00:00Z"),
+                    "leg_start_price": 111.0,
+                    "leg_end_ts": pd.Timestamp("2024-01-01T04:00:00Z"),
+                    "leg_end_price": 99.0,
+                    "price_delta": -12.0,
+                    "pct_delta": 0.1081,
+                },
+                {
+                    "swing_id": 6,
+                    "pivot_index": 6,
+                    "swing_type": "high",
+                    "pivot_ts": pd.Timestamp("2024-01-01T05:00:00Z"),
+                    "pivot_price": 109.0,
+                    "leg_start_ts": pd.Timestamp("2024-01-01T04:00:00Z"),
+                    "leg_start_price": 99.0,
+                    "leg_end_ts": pd.Timestamp("2024-01-01T05:00:00Z"),
+                    "leg_end_price": 109.0,
+                    "price_delta": 10.0,
+                    "pct_delta": 0.101,
+                },
+            ]
+        )
+
+        result = classify_market_structure(swings)
+
+        assert result["classification"].tolist() == ["HL", "HH", "LL", "LH"]
+        assert result["trend_state"].tolist() == [
+            "transition",
+            "bullish",
+            "range",
+            "bearish",
+        ]
+
     def test_equal_pivots_are_eh_el(self):
         """Test equal pivots are classified as EH/EL (not HH/LL)."""
         ohlcv = _ohlcv_equal_pivots()
@@ -641,7 +736,7 @@ class TestDetectPriceRanges:
         swings = detect_swing_points(ohlcv, min_swing_pct=0.01)
         result = detect_price_ranges(ohlcv, swings)
         if len(result) > 0:
-            valid_statuses = {"active", "expired", "broken_up", "broken_down"}
+            valid_statuses = {"active", "broken_up", "broken_down"}
             assert set(result["status"].unique()).issubset(valid_statuses)
 
     def test_range_high_greater_than_low(self):
