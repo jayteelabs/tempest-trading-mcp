@@ -533,6 +533,70 @@ class TestClassifyMarketStructure:
             "bearish",
         ]
 
+    def test_trend_state_marks_lh_plus_hl_as_transition(self):
+        """Test mixed lower-high/higher-low structure is treated as transition."""
+        swings = _make_swings(
+            [
+                {
+                    "swing_id": 1,
+                    "pivot_index": 1,
+                    "swing_type": "low",
+                    "pivot_ts": pd.Timestamp("2024-01-01T00:00:00Z"),
+                    "pivot_price": 100.0,
+                    "leg_start_ts": pd.Timestamp("2023-12-31T23:00:00Z"),
+                    "leg_start_price": 101.0,
+                    "leg_end_ts": pd.Timestamp("2024-01-01T00:00:00Z"),
+                    "leg_end_price": 100.0,
+                    "price_delta": -1.0,
+                    "pct_delta": 0.01,
+                },
+                {
+                    "swing_id": 2,
+                    "pivot_index": 2,
+                    "swing_type": "high",
+                    "pivot_ts": pd.Timestamp("2024-01-01T01:00:00Z"),
+                    "pivot_price": 110.0,
+                    "leg_start_ts": pd.Timestamp("2024-01-01T00:00:00Z"),
+                    "leg_start_price": 100.0,
+                    "leg_end_ts": pd.Timestamp("2024-01-01T01:00:00Z"),
+                    "leg_end_price": 110.0,
+                    "price_delta": 10.0,
+                    "pct_delta": 0.1,
+                },
+                {
+                    "swing_id": 3,
+                    "pivot_index": 3,
+                    "swing_type": "low",
+                    "pivot_ts": pd.Timestamp("2024-01-01T02:00:00Z"),
+                    "pivot_price": 101.0,
+                    "leg_start_ts": pd.Timestamp("2024-01-01T01:00:00Z"),
+                    "leg_start_price": 110.0,
+                    "leg_end_ts": pd.Timestamp("2024-01-01T02:00:00Z"),
+                    "leg_end_price": 101.0,
+                    "price_delta": -9.0,
+                    "pct_delta": 0.0818,
+                },
+                {
+                    "swing_id": 4,
+                    "pivot_index": 4,
+                    "swing_type": "high",
+                    "pivot_ts": pd.Timestamp("2024-01-01T03:00:00Z"),
+                    "pivot_price": 109.0,
+                    "leg_start_ts": pd.Timestamp("2024-01-01T02:00:00Z"),
+                    "leg_start_price": 101.0,
+                    "leg_end_ts": pd.Timestamp("2024-01-01T03:00:00Z"),
+                    "leg_end_price": 109.0,
+                    "price_delta": 8.0,
+                    "pct_delta": 0.0792,
+                },
+            ]
+        )
+
+        result = classify_market_structure(swings)
+
+        assert result["classification"].tolist() == ["HL", "LH"]
+        assert result["trend_state"].tolist() == ["transition", "transition"]
+
     def test_equal_pivots_are_eh_el(self):
         """Test equal pivots are classified as EH/EL (not HH/LL)."""
         ohlcv = _ohlcv_equal_pivots()
@@ -730,6 +794,211 @@ class TestDetectPriceRanges:
         with pytest.raises(ValueError, match="containment_ratio must be"):
             detect_price_ranges(ohlcv, swings, containment_ratio=1.5)
 
+    def test_containment_ratio_one_accepts_perfectly_contained_range(self):
+        """Test containment_ratio=1.0 accepts a perfectly contained range."""
+        idx = pd.date_range("2024-01-01", periods=4, freq="h", tz="UTC")
+        ohlcv = pd.DataFrame(
+            {
+                "open": [100.0, 100.0, 100.0, 100.0],
+                "high": [101.0, 100.5, 100.5, 101.0],
+                "low": [99.0, 99.0, 99.0, 99.0],
+                "close": [100.0, 100.0, 100.0, 100.0],
+                "volume": [100.0, 100.0, 100.0, 100.0],
+            },
+            index=idx,
+        )
+        swings = _make_swings(
+            [
+                {
+                    "swing_id": 1,
+                    "pivot_index": 1,
+                    "swing_type": "high",
+                    "pivot_ts": idx[0],
+                    "pivot_price": 101.0,
+                    "leg_start_ts": idx[0],
+                    "leg_start_price": 100.0,
+                    "leg_end_ts": idx[0],
+                    "leg_end_price": 101.0,
+                    "price_delta": 1.0,
+                    "pct_delta": 0.01,
+                },
+                {
+                    "swing_id": 2,
+                    "pivot_index": 2,
+                    "swing_type": "low",
+                    "pivot_ts": idx[1],
+                    "pivot_price": 99.0,
+                    "leg_start_ts": idx[1],
+                    "leg_start_price": 100.0,
+                    "leg_end_ts": idx[1],
+                    "leg_end_price": 99.0,
+                    "price_delta": -1.0,
+                    "pct_delta": 0.01,
+                },
+                {
+                    "swing_id": 3,
+                    "pivot_index": 3,
+                    "swing_type": "low",
+                    "pivot_ts": idx[2],
+                    "pivot_price": 99.2,
+                    "leg_start_ts": idx[2],
+                    "leg_start_price": 100.0,
+                    "leg_end_ts": idx[2],
+                    "leg_end_price": 99.2,
+                    "price_delta": -0.8,
+                    "pct_delta": 0.008,
+                },
+                {
+                    "swing_id": 4,
+                    "pivot_index": 4,
+                    "swing_type": "high",
+                    "pivot_ts": idx[3],
+                    "pivot_price": 101.0,
+                    "leg_start_ts": idx[3],
+                    "leg_start_price": 100.0,
+                    "leg_end_ts": idx[3],
+                    "leg_end_price": 101.0,
+                    "price_delta": 1.0,
+                    "pct_delta": 0.01,
+                },
+            ]
+        )
+
+        result = detect_price_ranges(
+            ohlcv,
+            swings,
+            containment_ratio=1.0,
+            boundary_buffer_pct=0.0,
+        )
+
+        assert len(result) == 1
+        assert result.iloc[0]["containment_ratio"] == 1.0
+
+    def test_ranges_with_same_boundaries_keep_distinct_endpoints(self):
+        """Test later ranges are preserved when boundaries match but end_ts differs."""
+        idx = pd.date_range("2024-01-01", periods=7, freq="h", tz="UTC")
+        ohlcv = pd.DataFrame(
+            {
+                "open": [100.0] * 7,
+                "high": [101.0] * 7,
+                "low": [99.0] * 7,
+                "close": [100.0] * 7,
+                "volume": [100.0] * 7,
+            },
+            index=idx,
+        )
+        swings = _make_swings(
+            [
+                {
+                    "swing_id": 1,
+                    "pivot_index": 1,
+                    "swing_type": "high",
+                    "pivot_ts": idx[0],
+                    "pivot_price": 101.0,
+                    "leg_start_ts": idx[0],
+                    "leg_start_price": 100.0,
+                    "leg_end_ts": idx[0],
+                    "leg_end_price": 101.0,
+                    "price_delta": 1.0,
+                    "pct_delta": 0.01,
+                },
+                {
+                    "swing_id": 2,
+                    "pivot_index": 2,
+                    "swing_type": "low",
+                    "pivot_ts": idx[1],
+                    "pivot_price": 99.0,
+                    "leg_start_ts": idx[1],
+                    "leg_start_price": 100.0,
+                    "leg_end_ts": idx[1],
+                    "leg_end_price": 99.0,
+                    "price_delta": -1.0,
+                    "pct_delta": 0.01,
+                },
+                {
+                    "swing_id": 3,
+                    "pivot_index": 3,
+                    "swing_type": "low",
+                    "pivot_ts": idx[2],
+                    "pivot_price": 99.2,
+                    "leg_start_ts": idx[2],
+                    "leg_start_price": 100.0,
+                    "leg_end_ts": idx[2],
+                    "leg_end_price": 99.2,
+                    "price_delta": -0.8,
+                    "pct_delta": 0.008,
+                },
+                {
+                    "swing_id": 4,
+                    "pivot_index": 4,
+                    "swing_type": "high",
+                    "pivot_ts": idx[3],
+                    "pivot_price": 101.0,
+                    "leg_start_ts": idx[3],
+                    "leg_start_price": 100.0,
+                    "leg_end_ts": idx[3],
+                    "leg_end_price": 101.0,
+                    "price_delta": 1.0,
+                    "pct_delta": 0.01,
+                },
+                {
+                    "swing_id": 5,
+                    "pivot_index": 5,
+                    "swing_type": "low",
+                    "pivot_ts": idx[4],
+                    "pivot_price": 99.1,
+                    "leg_start_ts": idx[4],
+                    "leg_start_price": 100.0,
+                    "leg_end_ts": idx[4],
+                    "leg_end_price": 99.1,
+                    "price_delta": -0.9,
+                    "pct_delta": 0.009,
+                },
+                {
+                    "swing_id": 6,
+                    "pivot_index": 6,
+                    "swing_type": "low",
+                    "pivot_ts": idx[5],
+                    "pivot_price": 99.3,
+                    "leg_start_ts": idx[5],
+                    "leg_start_price": 100.0,
+                    "leg_end_ts": idx[5],
+                    "leg_end_price": 99.3,
+                    "price_delta": -0.7,
+                    "pct_delta": 0.007,
+                },
+                {
+                    "swing_id": 7,
+                    "pivot_index": 7,
+                    "swing_type": "high",
+                    "pivot_ts": idx[6],
+                    "pivot_price": 100.8,
+                    "leg_start_ts": idx[6],
+                    "leg_start_price": 100.0,
+                    "leg_end_ts": idx[6],
+                    "leg_end_price": 100.8,
+                    "price_delta": 0.8,
+                    "pct_delta": 0.008,
+                },
+            ]
+        )
+
+        result = detect_price_ranges(
+            ohlcv,
+            swings,
+            containment_ratio=1.0,
+            boundary_buffer_pct=0.0,
+        )
+
+        same_boundary_ranges = result[
+            (result["range_high"] == 101.0) & (result["range_low"] == 99.0)
+        ].sort_values("end_ts")
+
+        assert same_boundary_ranges["end_ts"].tolist() == [idx[3], idx[6]]
+        assert same_boundary_ranges["range_id"].tolist() == sorted(
+            same_boundary_ranges["range_id"].tolist()
+        )
+
     def test_status_values(self):
         """Test status contains only valid values."""
         ohlcv = _ohlcv_range_bound()
@@ -890,9 +1159,7 @@ class TestIndicatorLayerBoundary:
 
     def test_structure_module_has_no_server_imports(self):
         """Test that structure.py does not import server or tools modules."""
-        import tempest_mcp.indicators.structure as structure_module
-
-        module_file = structure_module.__file__
+        module_file = detect_swing_points.__code__.co_filename
         with open(module_file) as f:
             content = f.read()
         # Should not have imports from these modules

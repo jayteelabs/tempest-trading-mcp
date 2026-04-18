@@ -1190,6 +1190,9 @@ def _classify_trend_state(
     if latest_high_classification == "LH" and latest_low_classification in ("LL", "EL"):
         return "bearish"
 
+    if latest_high_classification == "LH" and latest_low_classification == "HL":
+        return "transition"
+
     return "range"
 
 
@@ -1592,7 +1595,7 @@ def detect_price_ranges(
             ).sum()
             actual_containment = contained_bars / bars_evaluated if bars_evaluated > 0 else 0.0
 
-            if actual_containment < containment_ratio:
+            if actual_containment + 1e-9 < containment_ratio:
                 continue
 
             # Determine status based on current price position
@@ -1625,10 +1628,15 @@ def detect_price_ranges(
         return pd.DataFrame(columns=_RANGE_OUTPUT_COLUMNS)
 
     result_df = pd.DataFrame(rows)
-    # Deduplicate ranges by range_high/range_low boundaries, keep first occurrence
-    result_df = result_df.drop_duplicates(subset=["range_high", "range_low"], keep="first")
+    # Deduplicate only exact temporal boundary repeats; distinct ranges may legitimately
+    # share the same price boundaries while ending at different timestamps.
+    result_df = result_df.drop_duplicates(
+        subset=["start_ts", "end_ts", "range_high", "range_low"], keep="first"
+    )
+    result_df = result_df.sort_values(
+        ["start_ts", "end_ts", "range_high", "range_low"]
+    ).reset_index(drop=True)
     result_df["range_id"] = range(1, len(result_df) + 1)
-    result_df = result_df.sort_values("start_ts").reset_index(drop=True)
 
     return result_df[_RANGE_OUTPUT_COLUMNS]
 
