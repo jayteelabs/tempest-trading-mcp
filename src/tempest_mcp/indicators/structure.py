@@ -1789,3 +1789,404 @@ def detect_range_breakouts(
 
     result_df = pd.DataFrame(rows)
     return result_df[_BREAKOUT_OUTPUT_COLUMNS]
+
+
+# =============================================================================
+# Market Structure Summary Engine — Composition Layer
+# =============================================================================
+
+# Output column order for summarize_market_structure (pinned schema)
+_SUMMARY_OUTPUT_COLUMNS = [
+    "analysis_ts",
+    "window_start_ts",
+    "window_end_ts",
+    "summary_label",
+    "decision_rule",
+    "structure_event_ts",
+    "structure_classification",
+    "structure_trend_state",
+    "adx",
+    "plus_di",
+    "minus_di",
+    "di_spread",
+    "range_id",
+    "range_status",
+    "range_high",
+    "range_low",
+    "breakout_id",
+    "breakout_ts",
+    "breakout_direction",
+    "breakout_distance_pct",
+    "regime_strength",
+    "confidence",
+]
+
+
+def _validate_market_summary_params(
+    swing_window: int,
+    min_swing_pct: float,
+    equal_epsilon: float,
+    range_lookback: int,
+    max_range_pct: float,
+    range_containment_ratio: float,
+    range_boundary_buffer_pct: float,
+    breakout_confirm_bars: int,
+    breakout_buffer_pct: float,
+    adx_period: int,
+    adx_trend_threshold: float,
+    adx_range_ceiling: float,
+    di_spread_min: float,
+    breakout_recency_bars: int,
+) -> None:
+    """Validate all market summary parameters."""
+    _validate_swing_params(swing_window, min_swing_pct)
+    _validate_equal_epsilon(equal_epsilon)
+    _validate_range_params(
+        range_lookback, max_range_pct, range_containment_ratio, range_boundary_buffer_pct
+    )
+    _validate_breakout_params(breakout_confirm_bars, breakout_buffer_pct)
+
+    if not isinstance(adx_period, int) or adx_period < 1:
+        raise ValueError("adx_period must be an integer >= 1")
+    if not isinstance(adx_trend_threshold, Real) or not (0.0 <= adx_trend_threshold <= 100.0):
+        raise ValueError("adx_trend_threshold must be a float in [0.0, 100.0]")
+    if not isinstance(adx_range_ceiling, Real) or not (0.0 <= adx_range_ceiling <= 100.0):
+        raise ValueError("adx_range_ceiling must be a float in [0.0, 100.0]")
+    if not isinstance(di_spread_min, Real) or not (0.0 <= di_spread_min <= 100.0):
+        raise ValueError("di_spread_min must be a float in [0.0, 100.0]")
+    if not isinstance(breakout_recency_bars, int) or breakout_recency_bars < 1:
+        raise ValueError("breakout_recency_bars must be an integer >= 1")
+
+
+def _latest_finite(series: pd.Series, default: float = float("nan")) -> float:
+    """Return the last finite value in a series, or default if none found."""
+    finite_vals = series.dropna()
+    finite_vals = finite_vals[np.isfinite(finite_vals)]
+    if len(finite_vals) == 0:
+        return default
+    return float(finite_vals.iloc[-1])
+
+
+def _select_latest_range(ranges: pd.DataFrame) -> dict | None:
+    """Select the most recent range by end_ts."""
+    if len(ranges) == 0:
+        return None
+    ranges_sorted = ranges.sort_values("end_ts", ascending=False)
+    row = ranges_sorted.iloc[0]
+    return {
+        "range_id": int(row["range_id"]),
+        "range_status": row["status"],
+        "range_high": float(row["range_high"]),
+        "range_low": float(row["range_low"]),
+    }
+
+
+def _select_latest_breakout_for_range(
+    breakouts: pd.DataFrame, range_id: int, ohlcv_index: pd.DatetimeIndex
+) -> dict | None:
+    """Select the most recent breakout for a given range, or None if recency exceeded."""
+    if len(breakouts) == 0:
+        return None
+    range_breakouts = breakouts[breakouts["range_id"] == range_id]
+    if len(range_breakouts) == 0:
+        return None
+    latest = range_breakouts.sort_values("breakout_ts", ascending=False).iloc[0]
+    return {
+        "breakout_id": int(latest["breakout_id"]),
+        "breakout_ts": latest["breakout_ts"],
+        "breakout_direction": latest["direction"],
+        "breakout_distance_pct": float(latest["distance_pct"]),
+    }
+
+
+def summarize_market_structure(
+    ohlcv: pd.DataFrame,
+    *,
+    swing_window: int = 2,
+    min_swing_pct: float = 0.02,
+    equal_epsilon: float = 1e-9,
+    range_lookback: int = 20,
+    max_range_pct: float = 0.03,
+    range_containment_ratio: float = 0.8,
+    range_boundary_buffer_pct: float = 0.001,
+    breakout_confirm_bars: int = 1,
+    breakout_buffer_pct: float = 0.001,
+    adx_period: int = 14,
+    adx_trend_threshold: float = 25.0,
+    adx_range_ceiling: float = 20.0,
+    di_spread_min: float = 2.0,
+    breakout_recency_bars: int = 3,
+) -> pd.DataFrame:
+    """
+    Compose a deterministic market-structure summary from existing indicator primitives.
+
+    Consumes already-windowed OHLCV and composes:
+    - detect_swing_points(...)
+    - classify_market_structure(...)
+    - detect_price_ranges(...)
+    - detect_range_breakouts(...)
+    - calculate_adx(...) from the momentum engine
+
+    Returns a single-row DataFrame with the latest-regime summary covering
+    trend, range, and breakout states.
+
+    Parameters
+    ----------
+    ohlcv : pd.DataFrame
+        Windowed OHLCV data with UTC-aware DatetimeIndex and columns:
+        open, high, low, close, volume. Must be monotonically increasing
+        with no duplicates.
+    swing_window : int, optional
+        Window size for swing detection. Default is 2.
+    min_swing_pct : float, optional
+        Minimum percentage move to qualify as a swing. Default is 0.02 (2%).
+    equal_epsilon : float, optional
+        Tolerance for considering prices equal. Default is 1e-9.
+    range_lookback : int, optional
+        Number of bars to evaluate for range detection. Default is 20.
+    max_range_pct : float, optional
+        Maximum range width as percentage of range midpoint. Default is 0.03 (3%).
+    range_containment_ratio : float, optional
+        Minimum ratio of bars that must be within range boundaries. Default is 0.8.
+    range_boundary_buffer_pct : float, optional
+        Buffer around boundaries as percentage. Default is 0.001 (0.1%).
+    breakout_confirm_bars : int, optional
+        Number of consecutive bars required to confirm breakout. Default is 1.
+    breakout_buffer_pct : float, optional
+        Buffer above/below range boundaries for breakout detection. Default is 0.001 (0.1%).
+    adx_period : int, optional
+        ADX smoothing period. Default is 14.
+    adx_trend_threshold : float, optional
+        Minimum ADX level to confirm a trending regime. Default is 25.0.
+    adx_range_ceiling : float, optional
+        Maximum ADX level below which a ranging regime is confirmed. Default is 20.0.
+    di_spread_min : float, optional
+        Minimum DI+ / DI- spread to confirm directional trend. Default is 2.0.
+    breakout_recency_bars : int, optional
+        Maximum bars since breakout to still count as a recent breakout. Default is 3.
+
+    Returns
+    -------
+    pd.DataFrame
+        Single-row DataFrame with columns (in order):
+        1.  analysis_ts (pd.Timestamp): analysis timestamp (last bar in window)
+        2.  window_start_ts (pd.Timestamp): first bar timestamp in window
+        3.  window_end_ts (pd.Timestamp): last bar timestamp in window
+        4.  summary_label (str): trending_up|trending_down|ranging|breakout_up|
+           breakout_down|transition|insufficient_data
+        5.  decision_rule (str): breakout_up_rule|breakout_down_rule|ranging_rule|
+           trending_up_rule|trending_down_rule|transition_rule|insufficient_data_rule
+        6.  structure_event_ts (pd.Timestamp or pd.NaT)
+        7.  structure_classification (str): HH|HL|LH|LL|EH|EL|None
+        8.  structure_trend_state (str): bullish|bearish|range|transition|None
+        9.  adx (float)
+        10. plus_di (float)
+        11. minus_di (float)
+        12. di_spread (float = plus_di - minus_di)
+        13. range_id (int or pd.NA)
+        14. range_status (str): active|broken_up|broken_down|None
+        15. range_high (float)
+        16. range_low (float)
+        17. breakout_id (int or pd.NA)
+        18. breakout_ts (pd.Timestamp or pd.NaT)
+        19. breakout_direction (str): up|down|None
+        20. breakout_distance_pct (float)
+        21. regime_strength (float in [0, 100], derived from ADX)
+        22. confidence (float in [0.0, 1.0])
+
+    Raises
+    ------
+    ValueError
+        If OHLCV fails validation or any parameter is out of allowed range.
+    """
+    # Import ADX locally to avoid circular imports
+    from .momentum import calculate_adx
+
+    # Validate OHLCV first
+    _validate_ohlcv(ohlcv)
+
+    # Validate all parameters
+    _validate_market_summary_params(
+        swing_window,
+        min_swing_pct,
+        equal_epsilon,
+        range_lookback,
+        max_range_pct,
+        range_containment_ratio,
+        range_boundary_buffer_pct,
+        breakout_confirm_bars,
+        breakout_buffer_pct,
+        adx_period,
+        adx_trend_threshold,
+        adx_range_ceiling,
+        di_spread_min,
+        breakout_recency_bars,
+    )
+
+    # Insufficient data check
+    min_required = max(adx_period * 2, range_lookback, 2 * swing_window + 3)
+    if len(ohlcv) < min_required:
+        row = {col: float("nan") for col in _SUMMARY_OUTPUT_COLUMNS}
+        row["analysis_ts"] = ohlcv.index[-1]
+        row["window_start_ts"] = ohlcv.index[0]
+        row["window_end_ts"] = ohlcv.index[-1]
+        row["summary_label"] = "insufficient_data"
+        row["decision_rule"] = "insufficient_data_rule"
+        row["structure_classification"] = None
+        row["structure_trend_state"] = None
+        row["range_status"] = None
+        row["breakout_direction"] = None
+        row["confidence"] = 0.0
+        row["range_id"] = pd.NA
+        row["breakout_id"] = pd.NA
+        row["breakout_ts"] = pd.NaT
+        row["structure_event_ts"] = pd.NaT
+        return pd.DataFrame([row])[_SUMMARY_OUTPUT_COLUMNS]
+
+    # Compose primitives
+    swings = detect_swing_points(
+        ohlcv, swing_window=swing_window, min_swing_pct=min_swing_pct
+    )
+    structure = classify_market_structure(swings, equal_epsilon=equal_epsilon)
+    ranges = detect_price_ranges(
+        ohlcv,
+        swings,
+        range_lookback=range_lookback,
+        max_range_pct=max_range_pct,
+        containment_ratio=range_containment_ratio,
+        boundary_buffer_pct=range_boundary_buffer_pct,
+    )
+    breakouts = detect_range_breakouts(
+        ohlcv,
+        ranges,
+        breakout_confirm_bars=breakout_confirm_bars,
+        breakout_buffer_pct=breakout_buffer_pct,
+    )
+
+    # ADX calculation
+    adx_result = calculate_adx(
+        ohlcv["high"],
+        ohlcv["low"],
+        ohlcv["close"],
+        period=adx_period,
+    )
+    adx_series = adx_result["adx"]
+    plus_di_series = adx_result["plus_di"]
+    minus_di_series = adx_result["minus_di"]
+
+    # Extract latest ADX values
+    adx_val = _latest_finite(adx_series, float("nan"))
+    plus_di_val = _latest_finite(plus_di_series, float("nan"))
+    minus_di_val = _latest_finite(minus_di_series, float("nan"))
+    di_spread_val = plus_di_val - minus_di_val
+
+    # Extract latest structure classification
+    structure_event_ts = pd.NaT
+    structure_classification = None
+    structure_trend_state = None
+    if len(structure) > 0:
+        latest_structure = structure.sort_values("event_ts", ascending=False).iloc[0]
+        structure_event_ts = latest_structure["event_ts"]
+        structure_classification = latest_structure["classification"]
+        structure_trend_state = latest_structure["trend_state"]
+
+    # Extract latest range
+    latest_range = _select_latest_range(ranges)
+
+    # Extract latest breakout
+    latest_breakout = None
+    if latest_range is not None:
+        latest_breakout = _select_latest_breakout_for_range(
+            breakouts, latest_range["range_id"], ohlcv.index
+        )
+
+    # Compute derived evidence
+    trend_up_confirmed = (
+        structure_trend_state == "bullish"
+        and not np.isnan(adx_val)
+        and adx_val >= adx_trend_threshold
+        and not np.isnan(di_spread_val)
+        and di_spread_val >= di_spread_min
+    )
+    trend_down_confirmed = (
+        structure_trend_state == "bearish"
+        and not np.isnan(adx_val)
+        and adx_val >= adx_trend_threshold
+        and not np.isnan(di_spread_val)
+        and (-di_spread_val) >= di_spread_min
+    )
+    range_confirmed = (
+        latest_range is not None
+        and latest_range["range_status"] == "active"
+        and not np.isnan(adx_val)
+        and adx_val <= adx_range_ceiling
+    )
+
+    # Check recent breakout
+    recent_breakout_up = False
+    recent_breakout_down = False
+    if latest_breakout is not None:
+        breakout_ts = latest_breakout["breakout_ts"]
+        bars_since_breakout = len(ohlcv) - ohlcv.index.get_loc(breakout_ts) - 1
+        if (latest_breakout["breakout_direction"] == "up" and
+            bars_since_breakout <= breakout_recency_bars):
+            recent_breakout_up = True
+        elif (latest_breakout["breakout_direction"] == "down" and
+            bars_since_breakout <= breakout_recency_bars):
+            recent_breakout_down = True
+
+    # Decision priority (strict order from design)
+    if recent_breakout_up:
+        summary_label = "breakout_up"
+        decision_rule = "breakout_up_rule"
+        confidence = 0.85 if abs(latest_breakout["breakout_distance_pct"]) >= 0.003 else 0.75
+    elif recent_breakout_down:
+        summary_label = "breakout_down"
+        decision_rule = "breakout_down_rule"
+        confidence = 0.85 if abs(latest_breakout["breakout_distance_pct"]) >= 0.003 else 0.75
+    elif range_confirmed:
+        summary_label = "ranging"
+        decision_rule = "ranging_rule"
+        confidence = 0.70
+    elif trend_up_confirmed:
+        summary_label = "trending_up"
+        decision_rule = "trending_up_rule"
+        confidence = 0.80 if abs(di_spread_val) >= 5.0 else 0.70
+    elif trend_down_confirmed:
+        summary_label = "trending_down"
+        decision_rule = "trending_down_rule"
+        confidence = 0.80 if abs(di_spread_val) >= 5.0 else 0.70
+    else:
+        summary_label = "transition"
+        decision_rule = "transition_rule"
+        confidence = 0.40
+
+    # Build row
+    row = {
+        "analysis_ts": ohlcv.index[-1],
+        "window_start_ts": ohlcv.index[0],
+        "window_end_ts": ohlcv.index[-1],
+        "summary_label": summary_label,
+        "decision_rule": decision_rule,
+        "structure_event_ts": structure_event_ts,
+        "structure_classification": structure_classification,
+        "structure_trend_state": structure_trend_state,
+        "adx": adx_val,
+        "plus_di": plus_di_val,
+        "minus_di": minus_di_val,
+        "di_spread": di_spread_val,
+        "range_id": latest_range["range_id"] if latest_range else pd.NA,
+        "range_status": latest_range["range_status"] if latest_range else None,
+        "range_high": latest_range["range_high"] if latest_range else float("nan"),
+        "range_low": latest_range["range_low"] if latest_range else float("nan"),
+        "breakout_id": latest_breakout["breakout_id"] if latest_breakout else pd.NA,
+        "breakout_ts": latest_breakout["breakout_ts"] if latest_breakout else pd.NaT,
+        "breakout_direction": latest_breakout["breakout_direction"] if latest_breakout else None,
+        "breakout_distance_pct": (
+            latest_breakout["breakout_distance_pct"] if latest_breakout else float("nan")
+        ),
+        "regime_strength": adx_val if not np.isnan(adx_val) else float("nan"),
+        "confidence": confidence,
+    }
+
+    return pd.DataFrame([row])[_SUMMARY_OUTPUT_COLUMNS]

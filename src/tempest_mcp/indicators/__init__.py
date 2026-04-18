@@ -30,6 +30,7 @@ from .structure import (
     detect_price_ranges,
     detect_range_breakouts,
     detect_swing_points,
+    summarize_market_structure,
 )
 from .trend import (
     calculate_ema,
@@ -114,4 +115,5 @@ __all__ = [
     "classify_market_structure",
     "detect_price_ranges",
     "detect_range_breakouts",
+    "summarize_market_structure",
 ]
