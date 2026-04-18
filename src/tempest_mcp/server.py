@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import math
 import re
 import time
 from contextlib import asynccontextmanager
@@ -31,6 +32,7 @@ from tempest_mcp.tools import (
     screener_scan,
 )
 from tempest_mcp.tools.backtest_window import SUPPORTED_TIMEFRAMES
+from tempest_mcp.tools.screener_tools import MAX_SCAN_SYMBOLS, SUPPORTED_EXCHANGES
 
 # Server listens on port 9001 for HTTP/SSE transport
 # Binds to 127.0.0.1 — portmapped externally via Docker
@@ -407,7 +409,11 @@ TOOL_SCHEMAS: list[Tool] = [
                 "end_at": {"type": "string", "description": BACKTEST_DATETIME_DESCRIPTION},
                 "exchange": {"type": "string", "default": "binance"},
                 "bin_count": {"type": "integer", "default": 100, "minimum": 1, "maximum": 500},
-                "profile_type": {"type": "string", "enum": ["fixed", "dynamic"], "default": "fixed"},
+                "profile_type": {
+                    "type": "string",
+                    "enum": ["fixed", "dynamic"],
+                    "default": "fixed",
+                },
                 "dynamic_mode": {"type": "string", "enum": ["atr", "pct"]},
                 "atr_period": {"type": "integer", "default": 14},
                 "atr_mult": {"type": "number", "default": 1.0},
@@ -635,12 +641,30 @@ def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> str | None:
     if name == "screener_scan":
         symbols = arguments.get("symbols")
         if symbols is None:
-            return None
-        if not isinstance(symbols, list):
+            pass
+        elif not isinstance(symbols, list):
             return "symbols must be an array of strings"
-        for i, sym in enumerate(symbols):
-            if err := validate_symbol(sym, f"symbols[{i}]"):
-                return err
+        elif len(symbols) > MAX_SCAN_SYMBOLS:
+            return f"symbols must contain at most {MAX_SCAN_SYMBOLS} entries"
+        else:
+            for i, sym in enumerate(symbols):
+                if err := validate_symbol(sym, f"symbols[{i}]"):
+                    return err
+
+        min_score = arguments.get("min_score", 0.0)
+        if isinstance(min_score, bool) or not isinstance(min_score, (int, float)):
+            return "min_score must be a number"
+        if not math.isfinite(min_score):
+            return "min_score must be finite"
+        if min_score < 0 or min_score > 100:
+            return "min_score must be between 0 and 100"
+
+        exchange = arguments.get("exchange", "binance")
+        if not isinstance(exchange, str):
+            return "exchange must be a string"
+        if exchange.lower() not in SUPPORTED_EXCHANGES:
+            return f"exchange must be one of: {', '.join(sorted(SUPPORTED_EXCHANGES))}"
+
         return None
     return None
 
