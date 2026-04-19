@@ -1,6 +1,12 @@
 """MCP tool stubs — Phase 2 backtest tools. ENG-17."""
 
 from tempest_mcp.tools.analysis_tools import calculate_volume_profile, detect_order_blocks
+from tempest_mcp.tools.analytical_tools import (
+    calculate_fibonacci,
+    calculate_tpo,
+    detect_elliot_wave,
+    get_market_structure,
+)
 from tempest_mcp.tools.backtest_tools import (
     BACKTEST_TOOLS,
     backtest_strategy,
@@ -31,4 +37,9 @@ __all__ = [
     # Analysis tools (ENG-28)
     "calculate_volume_profile",
     "detect_order_blocks",
+    # Analytical tools (ENG-37)
+    "calculate_fibonacci",
+    "calculate_tpo",
+    "detect_elliot_wave",
+    "get_market_structure",
 ]
