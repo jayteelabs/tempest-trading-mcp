@@ -33,6 +33,12 @@ from tempest_mcp.tools import (
     screener_scan,
     session_breakout_scan,
 )
+from tempest_mcp.tools.analytical_tools import (
+    calculate_fibonacci,
+    calculate_tpo,
+    detect_elliot_wave,
+    get_market_structure,
+)
 from tempest_mcp.tools.backtest_window import SUPPORTED_TIMEFRAMES
 from tempest_mcp.tools.screener_tools import MAX_SCAN_SYMBOLS, SUPPORTED_EXCHANGES
 
@@ -81,6 +87,11 @@ TOOLS.update(BACKTEST_TOOLS)
 # Phase 2 analysis tools (ENG-28)
 TOOLS["calculate_volume_profile"] = calculate_volume_profile
 TOOLS["detect_order_blocks"] = detect_order_blocks
+# ENG-37 analytical tools
+TOOLS["calculate_fibonacci"] = calculate_fibonacci
+TOOLS["calculate_tpo"] = calculate_tpo
+TOOLS["detect_elliot_wave"] = detect_elliot_wave
+TOOLS["get_market_structure"] = get_market_structure
 
 # ── Tool Schemas (MCP protocol surface) ──────────────────────────────────────
 TOOL_SCHEMAS: list[Tool] = [
@@ -707,6 +718,9 @@ def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> str | None:
         return validate_symbol(arguments.get("symbol", ""), "symbol")
     # Phase 2 analysis tools (ENG-28) — validate symbol
     if name in ("calculate_volume_profile", "detect_order_blocks"):
+        return validate_symbol(arguments.get("symbol", ""), "symbol")
+    # ENG-37 analytical tools — validate symbol
+    if name in ("calculate_fibonacci", "calculate_tpo", "detect_elliot_wave", "get_market_structure"):
         return validate_symbol(arguments.get("symbol", ""), "symbol")
     # Legacy deprecated tool — still validate symbol for completeness
     if name == "backtest_strategy":
