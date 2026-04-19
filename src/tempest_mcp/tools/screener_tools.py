@@ -6,7 +6,15 @@ from typing import Any
 from tempest_mcp.config import ErrorCodes
 from tempest_mcp.logging_config import get_logger
 from tempest_mcp.models.indicator import SessionType
-from tempest_mcp.screener.scanner import DEFAULT_FILTER_PRESET, ScanFailure, ScanFilter, Screener
+from tempest_mcp.screener.scanner import (
+    DEFAULT_FILTER_PRESET,
+    ORDER_BLOCK_HORIZONS,
+    OrderBlockCandidate,
+    OrderBlockFailure,
+    ScanFailure,
+    ScanFilter,
+    Screener,
+)
 
 logger = get_logger(__name__)
 
@@ -70,9 +78,18 @@ def _validate_symbols(symbols: list[str] | None) -> str | None:
         return None
     if not isinstance(symbols, list):
         return "symbols must be an array of strings"
+    if len(symbols) == 0:
+        return "symbols must contain at least 1 entry"
     if len(symbols) > MAX_SCAN_SYMBOLS:
         return f"symbols must contain at most {MAX_SCAN_SYMBOLS} entries"
     return None
+
+
+def _normalize_symbols(symbols: list[str] | None) -> list[str] | None:
+    """Deduplicate explicit symbol lists while preserving request order."""
+    if symbols is None:
+        return None
+    return list(dict.fromkeys(symbols))
 
 
 def _validate_min_score(min_score: float) -> str | None:
@@ -160,6 +177,63 @@ def _serialize_scan_failure(failure: ScanFailure) -> dict[str, Any]:
     }
 
 
+def _validate_atr_period(atr_period: int) -> str | None:
+    """Validate atr_period parameter."""
+    if isinstance(atr_period, bool) or not isinstance(atr_period, int):
+        return "atr_period must be an integer"
+    if atr_period < 2 or atr_period > 200:
+        return "atr_period must be between 2 and 200"
+    return None
+
+
+def _validate_impulse_atr_mult(impulse_atr_mult: float) -> str | None:
+    """Validate impulse_atr_mult parameter."""
+    if isinstance(impulse_atr_mult, bool) or not isinstance(impulse_atr_mult, (int, float)):
+        return "impulse_atr_mult must be a number"
+    if not math.isfinite(impulse_atr_mult):
+        return "impulse_atr_mult must be finite"
+    if impulse_atr_mult <= 0 or impulse_atr_mult > 10:
+        return "impulse_atr_mult must be greater than 0 and at most 10"
+    return None
+
+
+def _validate_max_zone_age_bars(max_zone_age_bars: int) -> str | None:
+    """Validate max_zone_age_bars parameter."""
+    if isinstance(max_zone_age_bars, bool) or not isinstance(max_zone_age_bars, int):
+        return "max_zone_age_bars must be an integer"
+    if max_zone_age_bars < 1 or max_zone_age_bars > 500:
+        return "max_zone_age_bars must be between 1 and 500"
+    return None
+
+
+def _serialize_order_block_candidate(candidate: OrderBlockCandidate) -> dict[str, Any]:
+    """Serialize an OrderBlockCandidate to a JSON-serializable dict."""
+    return {
+        "symbol": candidate.symbol,
+        "exchange": candidate.exchange,
+        "timeframe": candidate.timeframe,
+        "window_days": candidate.window_days,
+        "timestamp": candidate.timestamp,
+        "price": candidate.price,
+        "zone_type": candidate.zone_type,
+        "zone_high": candidate.zone_high,
+        "zone_low": candidate.zone_low,
+        "freshness_candles": candidate.freshness_candles,
+        "score": candidate.score,
+    }
+
+
+def _serialize_order_block_failure(failure: OrderBlockFailure) -> dict[str, Any]:
+    """Serialize an OrderBlockFailure to a JSON-serializable dict."""
+    return {
+        "symbol": failure.symbol,
+        "exchange": failure.exchange,
+        "timeframe": failure.timeframe,
+        "window_days": failure.window_days,
+        "reason": failure.reason,
+    }
+
+
 async def screener_scan(
     symbols: list[str] | None = None,
     filters: list[str] | None = None,
@@ -208,12 +282,16 @@ async def screener_scan(
 
     # ── Execute scan ─────────────────────────────────────────────────────────
     try:
+        normalized_symbols = _normalize_symbols(symbols)
         screener = Screener(
-            symbols=tuple(symbols) if symbols else ("BTC/USDT", "ETH/USDT", "DOGE/USDT"),
+            symbols=tuple(normalized_symbols)
+            if normalized_symbols is not None
+            else ("BTC/USDT", "ETH/USDT", "DOGE/USDT"),
             exchange=normalized_exchange,
             filters=parsed_filters,
             min_score=min_score,
         )
+        effective_exchange = getattr(screener, "exchange", normalized_exchange)
 
         results, failures = screener.scan()
 
@@ -245,7 +323,7 @@ async def screener_scan(
     if success:
         response["data"] = {
             "tool": "screener_scan",
-            "exchange": normalized_exchange,
+            "exchange": effective_exchange,
             "applied_config": {
                 "filters": applied_filters,
                 "min_score": min_score,
@@ -343,14 +421,18 @@ async def session_breakout_scan(
 
     # ── Execute scan ─────────────────────────────────────────────────────────
     try:
+        normalized_symbols = _normalize_symbols(symbols)
         screener = Screener(
-            symbols=tuple(symbols) if symbols else ("BTC/USDT", "ETH/USDT", "DOGE/USDT"),
+            symbols=tuple(normalized_symbols)
+            if normalized_symbols is not None
+            else ("BTC/USDT", "ETH/USDT", "DOGE/USDT"),
             exchange=normalized_exchange,
         )
+        effective_exchange = getattr(screener, "exchange", normalized_exchange)
 
         results, failures = screener.session_breakout_scan(
             session=session_type,
-            symbols=symbols,
+            symbols=normalized_symbols,
             proximity_pct=proximity_pct,
             volume_multiplier=volume_multiplier,
         )
@@ -374,10 +456,10 @@ async def session_breakout_scan(
     if success:
         response["data"] = {
             "tool": "session_breakout_scan",
-            "exchange": normalized_exchange,
+            "exchange": effective_exchange,
             "applied_config": {
                 "session": normalized_session,
-                "symbols": symbols,
+                "symbols": normalized_symbols,
                 "proximity_pct": proximity_pct,
                 "volume_multiplier": volume_multiplier,
             },
@@ -393,10 +475,10 @@ async def session_breakout_scan(
         # Include failures in deterministic order
         response["data"] = {
             "tool": "session_breakout_scan",
-            "exchange": normalized_exchange,
+            "exchange": effective_exchange,
             "applied_config": {
                 "session": normalized_session,
-                "symbols": symbols,
+                "symbols": normalized_symbols,
                 "proximity_pct": proximity_pct,
                 "volume_multiplier": volume_multiplier,
             },
@@ -411,6 +493,146 @@ async def session_breakout_scan(
         "Tool completed: session_breakout_scan",
         success=success,
         result_count=len(results),
+        failure_count=len(failures),
+    )
+
+    return response
+
+
+async def order_block_screener_scan(
+    symbols: list[str] | None = None,
+    exchange: str = "binance",
+    atr_period: int = 14,
+    impulse_atr_mult: float = 1.0,
+    max_zone_age_bars: int = 20,
+) -> dict[str, Any]:
+    """Order-block screener — scan symbols for active order-block zones.
+
+    Evaluates symbols across two fixed horizons:
+    - day_trade pass: 1h timeframe over 1d window
+    - swing_trade pass: 4h timeframe over 7d window
+
+    Each (symbol, horizon) job emits one best candidate or one failure record.
+
+    Args:
+        symbols: List of trading symbols to scan (e.g., ["BTC/USDT", "ETH/USDT"]).
+                 If None, uses default symbols from config.
+        exchange: Exchange to scan (default: binance).
+        atr_period: ATR period for order-block detection (default: 14, range 2-200).
+        impulse_atr_mult: Body size must be >= impulse_atr_mult * ATR (default: 1.0, range >0 to 10).
+        max_zone_age_bars: Max age of zone before expiration (default: 20, range 1-500).
+
+    Returns:
+        Dict with success/error envelope:
+        - success: True if at least one candidate exists
+        - data: Contains tool, exchange, applied_config, candidates, failures (on success)
+        - error: Contains code and message (on full failure)
+    """
+    logger.info(
+        "Tool invoked: order_block_screener_scan",
+        symbols=symbols,
+        exchange=exchange,
+        atr_period=atr_period,
+        impulse_atr_mult=impulse_atr_mult,
+        max_zone_age_bars=max_zone_age_bars,
+    )
+
+    # ── Validate symbols ─────────────────────────────────────────────────────
+    if symbol_error := _validate_symbols(symbols):
+        return _error_response(ErrorCodes.INVALID_PARAMETER, symbol_error)
+
+    # ── Validate exchange ────────────────────────────────────────────────────
+    normalized_exchange, exchange_error = _validate_exchange(exchange)
+    if exchange_error:
+        return _error_response(ErrorCodes.INVALID_PARAMETER, exchange_error)
+
+    # ── Validate atr_period ──────────────────────────────────────────────────
+    if atr_error := _validate_atr_period(atr_period):
+        return _error_response(ErrorCodes.INVALID_PARAMETER, atr_error)
+
+    # ── Validate impulse_atr_mult ─────────────────────────────────────────────
+    if impulse_error := _validate_impulse_atr_mult(impulse_atr_mult):
+        return _error_response(ErrorCodes.INVALID_PARAMETER, impulse_error)
+
+    # ── Validate max_zone_age_bars ────────────────────────────────────────────
+    if age_error := _validate_max_zone_age_bars(max_zone_age_bars):
+        return _error_response(ErrorCodes.INVALID_PARAMETER, age_error)
+
+    # ── Execute scan ─────────────────────────────────────────────────────────
+    try:
+        normalized_symbols = _normalize_symbols(symbols)
+        screener = Screener(
+            symbols=tuple(normalized_symbols)
+            if normalized_symbols is not None
+            else ("BTC/USDT", "ETH/USDT", "DOGE/USDT"),
+            exchange=normalized_exchange,
+        )
+        effective_exchange = getattr(screener, "exchange", normalized_exchange)
+
+        candidates, failures = screener.order_block_scan(
+            symbols=normalized_symbols,
+            atr_period=atr_period,
+            impulse_atr_mult=impulse_atr_mult,
+            max_zone_age_bars=max_zone_age_bars,
+        )
+
+    except Exception as e:
+        logger.error("Order-block screener scan failed", error=str(e))
+        return _error_response(
+            ErrorCodes.INTERNAL_ERROR,
+            "Unable to complete order-block screener scan",
+        )
+
+    # ── Determine success/failure ────────────────────────────────────────────
+    has_candidates = len(candidates) > 0
+    has_failures = len(failures) > 0
+    success = has_candidates or not has_failures
+
+    # Build applied config showing fixed horizons
+    applied_horizons = [{"timeframe": tf, "window_days": wd} for tf, wd in ORDER_BLOCK_HORIZONS]
+
+    response: dict[str, Any] = {
+        "success": success,
+    }
+
+    if success:
+        response["data"] = {
+            "tool": "order_block_screener_scan",
+            "exchange": effective_exchange,
+            "applied_config": {
+                "symbols": normalized_symbols,
+                "atr_period": atr_period,
+                "impulse_atr_mult": impulse_atr_mult,
+                "max_zone_age_bars": max_zone_age_bars,
+                "horizons": applied_horizons,
+            },
+            "candidates": [_serialize_order_block_candidate(c) for c in candidates],
+            "failures": [_serialize_order_block_failure(f) for f in failures],
+        }
+    else:
+        # Full failure - deterministic error response
+        response["error"] = {
+            "code": ErrorCodes.DATA_SOURCE_ERROR,
+            "message": "All symbol/horizon jobs failed",
+        }
+        response["data"] = {
+            "tool": "order_block_screener_scan",
+            "exchange": effective_exchange,
+            "applied_config": {
+                "symbols": normalized_symbols,
+                "atr_period": atr_period,
+                "impulse_atr_mult": impulse_atr_mult,
+                "max_zone_age_bars": max_zone_age_bars,
+                "horizons": applied_horizons,
+            },
+            "candidates": [],
+            "failures": [_serialize_order_block_failure(f) for f in failures],
+        }
+
+    logger.info(
+        "Tool completed: order_block_screener_scan",
+        success=success,
+        candidate_count=len(candidates),
         failure_count=len(failures),
     )
 

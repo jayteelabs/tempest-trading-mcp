@@ -59,6 +59,82 @@ class ScanFailure:
     reason: str  # e.g., "empty_ohlcv", "indicator_error", "fetch_error"
 
 
+# ── Order Block Screener (ENG-36) ─────────────────────────────────────────────
+
+
+@dataclass
+class OrderBlockCandidate:
+    """Represents one best order-block candidate per (symbol, horizon) job."""
+
+    symbol: str
+    exchange: str
+    timeframe: str
+    window_days: int
+    timestamp: float
+    price: float
+    zone_type: str  # "bullish" | "bearish"
+    zone_high: float
+    zone_low: float
+    freshness_candles: int
+    score: float  # higher = fresher, range [0, 1]
+
+
+@dataclass
+class OrderBlockFailure:
+    """Represents a per-(symbol, horizon) failure during order-block scanning."""
+
+    symbol: str
+    exchange: str
+    timeframe: str
+    window_days: int
+    reason: str  # e.g., "data_unavailable", "insufficient_bars", "no_active_order_blocks", "order_block_validation_failed", "internal_error"
+
+
+# Fixed horizons for order-block screener (non-configurable in v1)
+# Each entry: (timeframe, window_days)
+ORDER_BLOCK_HORIZONS: list[tuple[str, int]] = [
+    ("1h", 1),  # day_trade pass
+    ("4h", 7),  # swing_trade pass
+]
+
+# Horizon priority for deterministic tie-breaking
+# Lower value = higher priority (swing trade preferred on score ties)
+_HORIZON_PRIORITY: dict[tuple[str, int], int] = {
+    ("4h", 7): 0,  # swing trade - preferred
+    ("1h", 1): 1,  # day trade
+}
+
+# Fixed horizon candle counts used by the order-block screener contract.
+_HORIZON_WINDOW_BARS: dict[tuple[str, int], int] = {
+    ("1h", 1): 24,
+    ("4h", 7): 42,
+}
+
+
+def _dedupe_symbols(symbols: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    """Deduplicate symbols deterministically while preserving order."""
+    return tuple(dict.fromkeys(symbols))
+
+
+def _resolve_symbols(
+    requested_symbols: list[str] | None,
+    default_symbols: tuple[str, ...],
+) -> list[str]:
+    """Resolve explicit/default symbols with deterministic deduplication."""
+    if requested_symbols is None:
+        return list(default_symbols)
+    return list(dict.fromkeys(requested_symbols))
+
+
+def _required_order_block_bars(
+    timeframe: str,
+    window_days: int,
+    atr_period: int,
+) -> int:
+    """Return the deterministic bar requirement for a fixed screener horizon."""
+    return max(_HORIZON_WINDOW_BARS.get((timeframe, window_days), 0), atr_period, 4)
+
+
 @dataclass
 class Screener:
     symbols: tuple[str, ...] = ("BTC/USDT", "ETH/USDT", "DOGE/USDT")
@@ -71,8 +147,7 @@ class Screener:
         config = get_config()
         if self.symbols == ("BTC/USDT", "ETH/USDT", "DOGE/USDT"):
             self.symbols = config.screener_symbols
-        if self.exchange == "binance":
-            self.exchange = config.default_exchange
+        self.symbols = _dedupe_symbols(self.symbols)
         if self.filters:
             self.filters = list(dict.fromkeys(self.filters))
 
@@ -94,7 +169,7 @@ class Screener:
         returns partial success with results + failures. Full failure (empty results
         with failures) only when nothing usable comes back.
         """
-        symbols_to_scan = symbols or list(self.symbols)
+        symbols_to_scan = _resolve_symbols(symbols, self.symbols)
 
         # Use default preset when filters is empty
         effective_filters = self.filters if self.filters else DEFAULT_FILTER_PRESET
@@ -369,7 +444,7 @@ class Screener:
         """
         from tempest_mcp.indicators.session_levels import detect_pdh_pdl, detect_session_levels
 
-        symbols_to_scan = symbols or list(self.symbols)
+        symbols_to_scan = _resolve_symbols(symbols, self.symbols)
         results: list[ScanResult] = []
         failures: list[ScanFailure] = []
 
@@ -457,14 +532,18 @@ class Screener:
                 if session_high > 0:
                     if current_price > session_high:
                         append_match("session_high_breakout", filters_matched)
-                    elif proximity_pct > 0 and current_price >= session_high * (1 - proximity_pct / 100):
+                    elif proximity_pct > 0 and current_price >= session_high * (
+                        1 - proximity_pct / 100
+                    ):
                         append_match("session_high_near_breakout", filters_matched)
 
                 # Session low breakout / near-breakout
                 if session_low > 0:
                     if current_price < session_low:
                         append_match("session_low_breakout", filters_matched)
-                    elif proximity_pct > 0 and current_price <= session_low * (1 + proximity_pct / 100):
+                    elif proximity_pct > 0 and current_price <= session_low * (
+                        1 + proximity_pct / 100
+                    ):
                         append_match("session_low_near_breakout", filters_matched)
 
                 # PDH breakout / near-breakout
@@ -558,3 +637,218 @@ class Screener:
         failures.sort(key=lambda f: (f.symbol, f.exchange))
 
         return results, failures
+
+    def order_block_scan(
+        self,
+        symbols: list[str] | None = None,
+        atr_period: int = 14,
+        impulse_atr_mult: float = 1.0,
+        max_zone_age_bars: int = 20,
+    ) -> tuple[list[OrderBlockCandidate], list[OrderBlockFailure]]:
+        """Execute order-block screener across symbols and fixed horizons.
+
+        Each symbol is evaluated across two fixed horizons:
+        - day_trade pass: 1h timeframe over 1d window
+        - swing_trade pass: 4h timeframe over 7d window
+
+        For each (symbol, horizon) job, emits either one best candidate
+        (deterministic best zone selection) or one failure record.
+
+        Args:
+            symbols: List of symbols to scan. Defaults to screener's configured universe.
+            atr_period: ATR period for order-block detection (default 14).
+            impulse_atr_mult: Impulse ATR multiplier (default 1.0).
+            max_zone_age_bars: Max zone age in bars (default 20).
+
+        Returns:
+            Tuple of (candidates, failures) where:
+            - candidates: List of OrderBlockCandidate sorted by (-score, horizon_priority, symbol, exchange)
+            - failures: List of OrderBlockFailure sorted by (symbol, exchange, timeframe, window_days, reason)
+        """
+        from tempest_mcp.strategies.backtest_order_blocks import detect_active_order_blocks
+
+        symbols_to_scan = _resolve_symbols(symbols, self.symbols)
+        candidates: list[OrderBlockCandidate] = []
+        failures: list[OrderBlockFailure] = []
+
+        logger.info(
+            "Starting order-block scan",
+            symbols=len(symbols_to_scan),
+            horizons=ORDER_BLOCK_HORIZONS,
+        )
+
+        for symbol in symbols_to_scan:
+            for timeframe, window_days in ORDER_BLOCK_HORIZONS:
+                bar_limit = _required_order_block_bars(timeframe, window_days, atr_period)
+
+                try:
+                    df = self.adapter.fetch_ohlcv_live(symbol, timeframe=timeframe, limit=bar_limit)
+
+                    if df.empty:
+                        failures.append(
+                            OrderBlockFailure(
+                                symbol=symbol,
+                                exchange=self.exchange,
+                                timeframe=timeframe,
+                                window_days=window_days,
+                                reason="data_unavailable",
+                            )
+                        )
+                        continue
+
+                    if len(df) < bar_limit:
+                        failures.append(
+                            OrderBlockFailure(
+                                symbol=symbol,
+                                exchange=self.exchange,
+                                timeframe=timeframe,
+                                window_days=window_days,
+                                reason="insufficient_bars",
+                            )
+                        )
+                        continue
+
+                except Exception as e:
+                    logger.warning(
+                        "OHLCV fetch failed for order-block scan",
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        error=str(e),
+                    )
+                    failures.append(
+                        OrderBlockFailure(
+                            symbol=symbol,
+                            exchange=self.exchange,
+                            timeframe=timeframe,
+                            window_days=window_days,
+                            reason="data_unavailable",
+                        )
+                    )
+                    continue
+
+                try:
+                    active_zones = detect_active_order_blocks(
+                        df,
+                        atr_period=atr_period,
+                        impulse_atr_mult=impulse_atr_mult,
+                        max_zone_age_bars=max_zone_age_bars,
+                    )
+                except ValueError as e:
+                    logger.warning(
+                        "Order-block validation failed",
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        error=str(e),
+                    )
+                    failures.append(
+                        OrderBlockFailure(
+                            symbol=symbol,
+                            exchange=self.exchange,
+                            timeframe=timeframe,
+                            window_days=window_days,
+                            reason="order_block_validation_failed",
+                        )
+                    )
+                    continue
+                except Exception as e:
+                    logger.warning(
+                        "Order-block detection error",
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        error=str(e),
+                    )
+                    failures.append(
+                        OrderBlockFailure(
+                            symbol=symbol,
+                            exchange=self.exchange,
+                            timeframe=timeframe,
+                            window_days=window_days,
+                            reason="internal_error",
+                        )
+                    )
+                    continue
+
+                if not active_zones:
+                    failures.append(
+                        OrderBlockFailure(
+                            symbol=symbol,
+                            exchange=self.exchange,
+                            timeframe=timeframe,
+                            window_days=window_days,
+                            reason="no_active_order_blocks",
+                        )
+                    )
+                    continue
+
+                # Select deterministic best zone:
+                # 1. lowest freshness_candles (fresher preferred)
+                # 2. latest timestamp (higher index = later)
+                # 3. zone_type lexical ("bearish" < "bullish") as final tie-break
+                best_zone = min(
+                    active_zones,
+                    key=lambda z: (
+                        z["freshness_candles"],
+                        -pd.Timestamp(z["date"]).value,
+                        z["type"],
+                    ),
+                )
+
+                # Compute score: higher = fresher
+                # score = round(max(0, max_zone_age_bars - freshness) / max_zone_age_bars, 6)
+                score = round(
+                    max(0, max_zone_age_bars - best_zone["freshness_candles"]) / max_zone_age_bars,
+                    6,
+                )
+
+                # Current price from last bar
+                close_prices = df["close"].tolist()
+                current_price = close_prices[-1]
+                latest_ts = df.index[-1]
+                timestamp = (
+                    latest_ts.timestamp() if hasattr(latest_ts, "timestamp") else float(latest_ts)
+                )
+
+                candidates.append(
+                    OrderBlockCandidate(
+                        symbol=symbol,
+                        exchange=self.exchange,
+                        timeframe=timeframe,
+                        window_days=window_days,
+                        timestamp=timestamp,
+                        price=current_price,
+                        zone_type=best_zone["type"],
+                        zone_high=best_zone["zone_high"],
+                        zone_low=best_zone["zone_low"],
+                        freshness_candles=best_zone["freshness_candles"],
+                        score=score,
+                    )
+                )
+
+        # Deterministic candidate ordering: (-score, horizon_priority, symbol, exchange)
+        candidates.sort(
+            key=lambda c: (
+                -c.score,
+                _HORIZON_PRIORITY.get((c.timeframe, c.window_days), 99),
+                c.symbol,
+                c.exchange,
+            )
+        )
+
+        # Deterministic failure ordering: (symbol, exchange, timeframe, window_days, reason)
+        failures.sort(
+            key=lambda f: (
+                f.symbol,
+                f.exchange,
+                f.timeframe,
+                f.window_days,
+                f.reason,
+            )
+        )
+
+        logger.info(
+            "Order-block scan complete",
+            candidates=len(candidates),
+            failures=len(failures),
+        )
+
+        return candidates, failures

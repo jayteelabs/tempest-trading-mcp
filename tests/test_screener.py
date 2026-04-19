@@ -1,5 +1,7 @@
 """Tests for screener engine."""
 
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
 
@@ -110,6 +112,27 @@ class TestScreenerInit:
         )
         assert len(screener.filters) == 2
         assert ScanFilter.RSI_OVERSOLD in screener.filters
+
+    def test_init_dedupes_symbols_preserving_order(self):
+        screener = Screener(
+            symbols=("BTC/USDT", "ETH/USDT", "BTC/USDT", "DOGE/USDT"),
+            exchange="binance",
+        )
+
+        assert screener.symbols == ("BTC/USDT", "ETH/USDT", "DOGE/USDT")
+
+    def test_init_does_not_remap_binance_exchange(self, monkeypatch):
+        monkeypatch.setattr(
+            "tempest_mcp.screener.scanner.get_config",
+            lambda: SimpleNamespace(
+                screener_symbols=("BTC/USDT", "ETH/USDT", "DOGE/USDT"),
+                default_exchange="kraken",
+            ),
+        )
+
+        screener = Screener(symbols=("SOL/USDT",), exchange="binance")
+
+        assert screener.exchange == "binance"
 
 
 class TestScreenerScan:
@@ -707,7 +730,9 @@ class TestSessionBreakoutScan:
             },
         )
 
-        results, failures = screener.session_breakout_scan(SessionType.NEW_YORK, volume_multiplier=2.5)
+        results, failures = screener.session_breakout_scan(
+            SessionType.NEW_YORK, volume_multiplier=2.5
+        )
 
         assert failures == []
         assert [r.symbol for r in results] == ["BBB/USDT", "AAA/USDT"]
@@ -805,10 +830,12 @@ class TestSessionBreakoutScan:
         )
 
         results1, _ = screener.session_breakout_scan(
-            SessionType.NEW_YORK, proximity_pct=0.0  # Strict - no proximity
+            SessionType.NEW_YORK,
+            proximity_pct=0.0,  # Strict - no proximity
         )
         results2, _ = screener.session_breakout_scan(
-            SessionType.NEW_YORK, proximity_pct=1.0  # Lenient - 1%
+            SessionType.NEW_YORK,
+            proximity_pct=1.0,  # Lenient - 1%
         )
 
         assert results1[0].filters_matched == []
@@ -892,9 +919,7 @@ class TestSessionBreakoutScan:
             },
         )
 
-        results, failures = screener.session_breakout_scan(
-            SessionType.NEW_YORK, proximity_pct=1.0
-        )
+        results, failures = screener.session_breakout_scan(SessionType.NEW_YORK, proximity_pct=1.0)
 
         assert failures == []
         assert len(results) == 1
@@ -940,3 +965,108 @@ class TestScreenerEdgeCases:
             index=dates,
         )
         return df
+
+
+class TestOrderBlockScan:
+    """Tests for order-block scan engine behavior."""
+
+    def _create_df(self, periods: int = 80) -> pd.DataFrame:
+        dates = pd.date_range("2024-03-15", periods=periods, freq="h", tz="UTC")
+        prices = [100.0 + i * 0.1 for i in range(periods)]
+        return pd.DataFrame(
+            {
+                "open": prices,
+                "high": [p + 1.0 for p in prices],
+                "low": [p - 1.0 for p in prices],
+                "close": prices,
+                "volume": [1000.0] * periods,
+            },
+            index=dates,
+        )
+
+    def test_order_block_scan_prefers_latest_timestamp_on_freshness_tie(self, monkeypatch):
+        df = self._create_df()
+
+        class RecordingAdapter(DummyAdapter):
+            def __init__(self, df):
+                super().__init__(df)
+
+        screener = Screener(symbols=("BTC/USDT",), exchange="binance")
+        screener._adapter = RecordingAdapter(df)
+
+        monkeypatch.setattr(
+            "tempest_mcp.strategies.backtest_order_blocks.detect_active_order_blocks",
+            lambda *_args, **_kwargs: [
+                {
+                    "type": "bullish",
+                    "zone_high": 101.0,
+                    "zone_low": 99.0,
+                    "freshness_candles": 2,
+                    "date": "2024-03-15T10:00:00+00:00",
+                },
+                {
+                    "type": "bearish",
+                    "zone_high": 202.0,
+                    "zone_low": 200.0,
+                    "freshness_candles": 2,
+                    "date": "2024-03-15T11:00:00+00:00",
+                },
+            ],
+        )
+
+        candidates, failures = screener.order_block_scan()
+
+        assert failures == []
+        assert len(candidates) == 2
+        assert all(candidate.zone_high == 202.0 for candidate in candidates)
+        assert all(candidate.zone_type == "bearish" for candidate in candidates)
+
+    def test_order_block_scan_uses_fixed_horizon_bar_limits(self, monkeypatch):
+        df = self._create_df()
+
+        class RecordingAdapter(DummyAdapter):
+            def __init__(self, df):
+                super().__init__(df)
+                self.calls: list[tuple[str, int]] = []
+
+            def fetch_ohlcv_live(self, symbol: str, timeframe: str = "1h", limit: int = 100):
+                self.calls.append((timeframe, limit))
+                return self.df
+
+        adapter = RecordingAdapter(df)
+        screener = Screener(symbols=("BTC/USDT",), exchange="binance")
+        screener._adapter = adapter
+
+        monkeypatch.setattr(
+            "tempest_mcp.strategies.backtest_order_blocks.detect_active_order_blocks",
+            lambda *_args, **_kwargs: [],
+        )
+
+        screener.order_block_scan(atr_period=14)
+
+        assert adapter.calls == [("1h", 24), ("4h", 42)]
+
+    def test_order_block_scan_expands_bar_limit_for_large_atr_period(self, monkeypatch):
+        df = self._create_df(periods=120)
+
+        class RecordingAdapter(DummyAdapter):
+            def __init__(self, df):
+                super().__init__(df)
+                self.calls: list[tuple[str, int]] = []
+
+            def fetch_ohlcv_live(self, symbol: str, timeframe: str = "1h", limit: int = 100):
+                self.calls.append((timeframe, limit))
+                return self.df
+
+        adapter = RecordingAdapter(df)
+        screener = Screener(symbols=("BTC/USDT",), exchange="binance")
+        screener._adapter = adapter
+
+        monkeypatch.setattr(
+            "tempest_mcp.strategies.backtest_order_blocks.detect_active_order_blocks",
+            lambda *_args, **_kwargs: [],
+        )
+
+        screener.order_block_scan(atr_period=60)
+
+        assert adapter.calls == [("1h", 60), ("4h", 60)]

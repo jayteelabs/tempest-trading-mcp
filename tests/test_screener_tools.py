@@ -234,26 +234,29 @@ class TestScreenerScanTool:
         }
 
     @pytest.mark.asyncio
-    async def test_screener_scan_empty_symbols_uses_defaults(self, monkeypatch):
-        """Empty symbols should use default symbols from config."""
+    async def test_screener_scan_rejects_empty_symbols(self):
+        result = await screener_scan(symbols=[], filters=[])
 
+        assert result == {
+            "success": False,
+            "error": {"code": 1004, "message": "symbols must contain at least 1 entry"},
+        }
+
+    @pytest.mark.asyncio
+    async def test_screener_scan_reports_effective_exchange(self, monkeypatch):
         class FakeScreener:
-            last_symbols = None
-
             def __init__(self, symbols, exchange, filters, min_score):
-                type(self).last_symbols = symbols
+                self.exchange = "bybit"
 
             def scan(self):
-                return [], []
+                return ([], [])
 
         monkeypatch.setattr("tempest_mcp.tools.screener_tools.Screener", FakeScreener)
 
-        result = await screener_scan(symbols=[], filters=[])
+        result = await screener_scan(symbols=["BTC/USDT"], exchange="binance")
 
         assert result["success"] is True
-        assert result["data"]["results"] == []
-        assert result["data"]["failures"] == []
-        assert FakeScreener.last_symbols == ("BTC/USDT", "ETH/USDT", "DOGE/USDT")
+        assert result["data"]["exchange"] == "bybit"
 
     @pytest.mark.asyncio
     async def test_screener_scan_internal_errors_are_sanitized(self, monkeypatch):
@@ -315,7 +318,11 @@ class TestSessionBreakoutScanTool:
                             exchange="binance",
                             timestamp=1.0,
                             price=51000.0,
-                            filters_matched=["session_high_breakout", "pdh_breakout", "volume_confirmation"],
+                            filters_matched=[
+                                "session_high_breakout",
+                                "pdh_breakout",
+                                "volume_confirmation",
+                            ],
                             indicator_values={
                                 "session_high": 50000.0,
                                 "session_low": 49000.0,
@@ -332,9 +339,7 @@ class TestSessionBreakoutScanTool:
                     [],
                 )
 
-        monkeypatch.setattr(
-            "tempest_mcp.tools.screener_tools.Screener", FakeScreener
-        )
+        monkeypatch.setattr("tempest_mcp.tools.screener_tools.Screener", FakeScreener)
 
         result = await screener_tools.session_breakout_scan(
             session="ny",
@@ -370,6 +375,15 @@ class TestSessionBreakoutScanTool:
         assert result["error"]["code"] == 1004  # INVALID_PARAMETER
 
     @pytest.mark.asyncio
+    async def test_session_breakout_scan_rejects_empty_symbols(self):
+        result = await screener_tools.session_breakout_scan(session="ny", symbols=[])
+
+        assert result == {
+            "success": False,
+            "error": {"code": 1004, "message": "symbols must contain at least 1 entry"},
+        }
+
+    @pytest.mark.asyncio
     async def test_session_breakout_scan_new_york_alias(self, monkeypatch):
         """'new_york' should be accepted as alias for 'ny'."""
         from tempest_mcp.models.indicator import SessionType
@@ -388,9 +402,7 @@ class TestSessionBreakoutScanTool:
                 captured["volume_multiplier"] = volume_multiplier
                 return ([], [])
 
-        monkeypatch.setattr(
-            "tempest_mcp.tools.screener_tools.Screener", FakeScreener
-        )
+        monkeypatch.setattr("tempest_mcp.tools.screener_tools.Screener", FakeScreener)
 
         result = await screener_tools.session_breakout_scan(
             session="new_york",
@@ -489,9 +501,7 @@ class TestSessionBreakoutScanTool:
                     ],
                 )
 
-        monkeypatch.setattr(
-            "tempest_mcp.tools.screener_tools.Screener", FakeScreener
-        )
+        monkeypatch.setattr("tempest_mcp.tools.screener_tools.Screener", FakeScreener)
 
         result = await screener_tools.session_breakout_scan(
             session="ny",
@@ -557,9 +567,7 @@ class TestSessionBreakoutScanTool:
                     ],
                 )
 
-        monkeypatch.setattr(
-            "tempest_mcp.tools.screener_tools.Screener", FakeScreener
-        )
+        monkeypatch.setattr("tempest_mcp.tools.screener_tools.Screener", FakeScreener)
 
         result = await screener_tools.session_breakout_scan(
             session="ny",
@@ -594,9 +602,7 @@ class TestSessionBreakoutScanTool:
             def session_breakout_scan(self, session, symbols, proximity_pct, volume_multiplier):
                 raise RuntimeError("sensitive network error")
 
-        monkeypatch.setattr(
-            "tempest_mcp.tools.screener_tools.Screener", ExplodingScreener
-        )
+        monkeypatch.setattr("tempest_mcp.tools.screener_tools.Screener", ExplodingScreener)
 
         result = await screener_tools.session_breakout_scan(
             session="ny",
@@ -684,3 +690,435 @@ class TestSessionBreakoutScanValidation:
         from tempest_mcp.tools.screener_tools import _validate_volume_multiplier
 
         assert _validate_volume_multiplier(-1.0) is not None
+
+
+class TestOrderBlockScreenerScanTool:
+    """Tests for order_block_screener_scan tool function — ENG-36."""
+
+    @pytest.mark.asyncio
+    async def test_order_block_screener_scan_returns_success_envelope(self, monkeypatch):
+        """order_block_screener_scan should return deterministic success envelope."""
+        from tempest_mcp.screener.scanner import OrderBlockCandidate
+
+        class FakeScreener:
+            last_init = None
+
+            def __init__(self, symbols, exchange):
+                type(self).last_init = {"symbols": symbols, "exchange": exchange}
+
+            def order_block_scan(self, symbols, atr_period, impulse_atr_mult, max_zone_age_bars):
+                return (
+                    [
+                        OrderBlockCandidate(
+                            symbol="BTC/USDT",
+                            exchange="binance",
+                            timeframe="1h",
+                            window_days=1,
+                            timestamp=1.0,
+                            price=50000.0,
+                            zone_type="bullish",
+                            zone_high=49500.0,
+                            zone_low=49000.0,
+                            freshness_candles=5,
+                            score=0.75,
+                        )
+                    ],
+                    [],
+                )
+
+        monkeypatch.setattr("tempest_mcp.tools.screener_tools.Screener", FakeScreener)
+
+        result = await screener_tools.order_block_screener_scan(
+            symbols=["BTC/USDT"],
+            exchange="binance",
+            atr_period=14,
+            impulse_atr_mult=1.0,
+            max_zone_age_bars=20,
+        )
+
+        assert result["success"] is True
+        assert result["data"]["tool"] == "order_block_screener_scan"
+        assert result["data"]["exchange"] == "binance"
+        assert result["data"]["applied_config"]["atr_period"] == 14
+        assert result["data"]["applied_config"]["impulse_atr_mult"] == 1.0
+        assert result["data"]["applied_config"]["max_zone_age_bars"] == 20
+        # Fixed horizons should be visible in applied config
+        assert "horizons" in result["data"]["applied_config"]
+        assert {"timeframe": "1h", "window_days": 1} in result["data"]["applied_config"]["horizons"]
+        assert {"timeframe": "4h", "window_days": 7} in result["data"]["applied_config"]["horizons"]
+        assert len(result["data"]["candidates"]) == 1
+        assert result["data"]["candidates"][0]["zone_type"] == "bullish"
+        assert result["data"]["candidates"][0]["score"] == 0.75
+
+    @pytest.mark.asyncio
+    async def test_order_block_screener_scan_candidate_top_level_fields(self, monkeypatch):
+        """Candidates expose all top-level fields as per ENG-36 contract."""
+        from tempest_mcp.screener.scanner import OrderBlockCandidate
+
+        class FakeScreener:
+            def __init__(self, symbols, exchange):
+                pass
+
+            def order_block_scan(self, symbols, atr_period, impulse_atr_mult, max_zone_age_bars):
+                return (
+                    [
+                        OrderBlockCandidate(
+                            symbol="BTC/USDT",
+                            exchange="binance",
+                            timeframe="4h",
+                            window_days=7,
+                            timestamp=1.0,
+                            price=50000.0,
+                            zone_type="bearish",
+                            zone_high=50500.0,
+                            zone_low=50000.0,
+                            freshness_candles=3,
+                            score=0.85,
+                        )
+                    ],
+                    [],
+                )
+
+        monkeypatch.setattr("tempest_mcp.tools.screener_tools.Screener", FakeScreener)
+
+        result = await screener_tools.order_block_screener_scan(symbols=["BTC/USDT"])
+
+        c = result["data"]["candidates"][0]
+        required_fields = {
+            "symbol",
+            "exchange",
+            "timeframe",
+            "window_days",
+            "timestamp",
+            "price",
+            "zone_type",
+            "zone_high",
+            "zone_low",
+            "freshness_candles",
+            "score",
+        }
+        assert required_fields.issubset(c.keys()), f"Missing: {required_fields - c.keys()}"
+
+    @pytest.mark.asyncio
+    async def test_order_block_screener_scan_failure_top_level_fields(self, monkeypatch):
+        """Partial success (candidates + failures) exposes all top-level fields on failure rows."""
+        from tempest_mcp.screener.scanner import OrderBlockCandidate, OrderBlockFailure
+
+        class FakeScreener:
+            def __init__(self, symbols, exchange):
+                pass
+
+            def order_block_scan(self, symbols, atr_period, impulse_atr_mult, max_zone_age_bars):
+                # Return one candidate + one failure to exercise partial-success shape
+                candidate = OrderBlockCandidate(
+                    symbol="BTC/USDT",
+                    exchange="binance",
+                    timeframe="4h",
+                    window_days=7,
+                    timestamp=1234567890.0,
+                    price=50000.0,
+                    zone_type="bullish",
+                    zone_high=50500.0,
+                    zone_low=49500.0,
+                    freshness_candles=10,
+                    score=0.85,
+                )
+                failure = OrderBlockFailure(
+                    symbol="ETH/USDT",
+                    exchange="binance",
+                    timeframe="1h",
+                    window_days=1,
+                    reason="no_active_order_blocks",
+                )
+                return ([candidate], [failure])
+
+        monkeypatch.setattr("tempest_mcp.tools.screener_tools.Screener", FakeScreener)
+
+        result = await screener_tools.order_block_screener_scan(symbols=["BTC/USDT", "ETH/USDT"])
+
+        # Partial success: we have candidates, so success=True
+        assert result["success"] is True
+        assert len(result["data"]["candidates"]) == 1
+        assert len(result["data"]["failures"]) == 1
+
+        # Failure row must expose all top-level fields as per ENG-36 contract
+        f = result["data"]["failures"][0]
+        required_fields = {"symbol", "exchange", "timeframe", "window_days", "reason"}
+        assert required_fields.issubset(f.keys()), f"Missing: {required_fields - f.keys()}"
+
+    @pytest.mark.asyncio
+    async def test_order_block_screener_scan_full_failure_envelope(self, monkeypatch):
+        """Full failure returns success:false with DATA_SOURCE_ERROR."""
+        from tempest_mcp.screener.scanner import OrderBlockFailure
+
+        class FakeScreener:
+            def __init__(self, symbols, exchange):
+                pass
+
+            def order_block_scan(self, symbols, atr_period, impulse_atr_mult, max_zone_age_bars):
+                return (
+                    [],
+                    [
+                        OrderBlockFailure(
+                            symbol="BTC/USDT",
+                            exchange="binance",
+                            timeframe="1h",
+                            window_days=1,
+                            reason="data_unavailable",
+                        )
+                    ],
+                )
+
+        monkeypatch.setattr("tempest_mcp.tools.screener_tools.Screener", FakeScreener)
+
+        result = await screener_tools.order_block_screener_scan(symbols=["BTC/USDT"])
+
+        assert result["success"] is False
+        assert result["error"]["code"] == 3000  # DATA_SOURCE_ERROR
+        assert result["data"]["candidates"] == []
+        assert len(result["data"]["failures"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_order_block_screener_scan_invalid_atr_period(self):
+        """Invalid atr_period returns error envelope."""
+        result = await screener_tools.order_block_screener_scan(
+            symbols=["BTC/USDT"],
+            atr_period=1,  # too low, min is 2
+        )
+
+        assert result["success"] is False
+        assert result["error"]["code"] == 1004  # INVALID_PARAMETER
+
+    @pytest.mark.asyncio
+    async def test_order_block_screener_scan_invalid_impulse_atr_mult(self):
+        """Invalid impulse_atr_mult returns error envelope."""
+        result = await screener_tools.order_block_screener_scan(
+            symbols=["BTC/USDT"],
+            impulse_atr_mult=0.0,  # must be > 0
+        )
+
+        assert result["success"] is False
+        assert result["error"]["code"] == 1004
+
+    @pytest.mark.asyncio
+    async def test_order_block_screener_scan_invalid_max_zone_age_bars(self):
+        """Invalid max_zone_age_bars returns error envelope."""
+        result = await screener_tools.order_block_screener_scan(
+            symbols=["BTC/USDT"],
+            max_zone_age_bars=501,  # too high, max is 500
+        )
+
+        assert result["success"] is False
+        assert result["error"]["code"] == 1004
+
+    @pytest.mark.asyncio
+    async def test_order_block_screener_scan_unknown_exchange(self):
+        """Unknown exchange returns error envelope."""
+        result = await screener_tools.order_block_screener_scan(
+            symbols=["BTC/USDT"],
+            exchange="invalid_exchange",
+        )
+
+        assert result["success"] is False
+        assert "exchange" in result["error"]["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_order_block_screener_scan_symbols_cap(self):
+        """Exceeding symbol cap returns error envelope."""
+        result = await screener_tools.order_block_screener_scan(
+            symbols=["BTC/USDT"] * 30,  # over MAX_SCAN_SYMBOLS of 25
+        )
+
+        assert result["success"] is False
+        assert result["error"]["code"] == 1004
+
+    @pytest.mark.asyncio
+    async def test_order_block_screener_scan_rejects_empty_symbols(self):
+        result = await screener_tools.order_block_screener_scan(symbols=[])
+
+        assert result == {
+            "success": False,
+            "error": {"code": 1004, "message": "symbols must contain at least 1 entry"},
+        }
+
+    @pytest.mark.asyncio
+    async def test_order_block_screener_scan_dedupes_symbols_before_scan(self, monkeypatch):
+        captured: dict[str, object] = {}
+
+        class FakeScreener:
+            def __init__(self, symbols, exchange):
+                captured["symbols"] = symbols
+                captured["exchange"] = exchange
+                self.exchange = exchange
+
+            def order_block_scan(self, symbols, atr_period, impulse_atr_mult, max_zone_age_bars):
+                captured["symbols_arg"] = symbols
+                return ([], [])
+
+        monkeypatch.setattr("tempest_mcp.tools.screener_tools.Screener", FakeScreener)
+
+        result = await screener_tools.order_block_screener_scan(
+            symbols=["BTC/USDT", "ETH/USDT", "BTC/USDT"],
+        )
+
+        assert result["success"] is True
+        assert captured["symbols"] == ("BTC/USDT", "ETH/USDT")
+        assert captured["symbols_arg"] == ["BTC/USDT", "ETH/USDT"]
+        assert result["data"]["applied_config"]["symbols"] == ["BTC/USDT", "ETH/USDT"]
+
+    @pytest.mark.asyncio
+    async def test_order_block_screener_scan_reports_effective_exchange(self, monkeypatch):
+        class FakeScreener:
+            def __init__(self, symbols, exchange):
+                self.exchange = "coinbase"
+
+            def order_block_scan(self, symbols, atr_period, impulse_atr_mult, max_zone_age_bars):
+                return ([], [])
+
+        monkeypatch.setattr("tempest_mcp.tools.screener_tools.Screener", FakeScreener)
+
+        result = await screener_tools.order_block_screener_scan(
+            symbols=["BTC/USDT"],
+            exchange="binance",
+        )
+
+        assert result["success"] is True
+        assert result["data"]["exchange"] == "coinbase"
+
+    @pytest.mark.asyncio
+    async def test_order_block_screener_scan_internal_error_sanitized(self, monkeypatch):
+        """Internal errors are sanitized."""
+
+        class ExplodingScreener:
+            def __init__(self, symbols, exchange):
+                pass
+
+            def order_block_scan(self, symbols, atr_period, impulse_atr_mult, max_zone_age_bars):
+                raise RuntimeError("sensitive network error")
+
+        monkeypatch.setattr("tempest_mcp.tools.screener_tools.Screener", ExplodingScreener)
+
+        result = await screener_tools.order_block_screener_scan(symbols=["BTC/USDT"])
+
+        assert result["success"] is False
+        assert result["error"]["code"] == 9000  # INTERNAL_ERROR
+        assert "sensitive" not in result["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_order_block_screener_scan_partial_success_includes_failures(self, monkeypatch):
+        """Partial success includes both candidates and failures."""
+        from tempest_mcp.screener.scanner import OrderBlockCandidate, OrderBlockFailure
+
+        class FakeScreener:
+            def __init__(self, symbols, exchange):
+                pass
+
+            def order_block_scan(self, symbols, atr_period, impulse_atr_mult, max_zone_age_bars):
+                return (
+                    [
+                        OrderBlockCandidate(
+                            symbol="BTC/USDT",
+                            exchange="binance",
+                            timeframe="1h",
+                            window_days=1,
+                            timestamp=1.0,
+                            price=50000.0,
+                            zone_type="bullish",
+                            zone_high=49500.0,
+                            zone_low=49000.0,
+                            freshness_candles=5,
+                            score=0.75,
+                        )
+                    ],
+                    [
+                        OrderBlockFailure(
+                            symbol="ETH/USDT",
+                            exchange="binance",
+                            timeframe="4h",
+                            window_days=7,
+                            reason="no_active_order_blocks",
+                        )
+                    ],
+                )
+
+        monkeypatch.setattr("tempest_mcp.tools.screener_tools.Screener", FakeScreener)
+
+        result = await screener_tools.order_block_screener_scan(
+            symbols=["BTC/USDT", "ETH/USDT"],
+        )
+
+        assert result["success"] is True
+        assert len(result["data"]["candidates"]) == 1
+        assert len(result["data"]["failures"]) == 1
+
+
+class TestOrderBlockScreenerScanValidation:
+    """Tests for order_block_screener_scan argument validation — ENG-36."""
+
+    def test_validate_atr_period_accepts_valid(self):
+        """_validate_atr_period accepts valid values."""
+        from tempest_mcp.tools.screener_tools import _validate_atr_period
+
+        assert _validate_atr_period(14) is None
+        assert _validate_atr_period(2) is None
+        assert _validate_atr_period(200) is None
+
+    def test_validate_atr_period_rejects_too_low(self):
+        """_validate_atr_period rejects values below 2."""
+        from tempest_mcp.tools.screener_tools import _validate_atr_period
+
+        assert _validate_atr_period(1) is not None
+
+    def test_validate_atr_period_rejects_too_high(self):
+        """_validate_atr_period rejects values above 200."""
+        from tempest_mcp.tools.screener_tools import _validate_atr_period
+
+        assert _validate_atr_period(201) is not None
+
+    def test_validate_atr_period_rejects_non_int(self):
+        """_validate_atr_period rejects non-integer types."""
+        from tempest_mcp.tools.screener_tools import _validate_atr_period
+
+        assert _validate_atr_period("14") is not None
+        assert _validate_atr_period(14.0) is not None
+
+    def test_validate_impulse_atr_mult_accepts_valid(self):
+        """_validate_impulse_atr_mult accepts valid values."""
+        from tempest_mcp.tools.screener_tools import _validate_impulse_atr_mult
+
+        assert _validate_impulse_atr_mult(1.0) is None
+        assert _validate_impulse_atr_mult(0.1) is None
+        assert _validate_impulse_atr_mult(10.0) is None
+
+    def test_validate_impulse_atr_mult_rejects_zero_or_negative(self):
+        """_validate_impulse_atr_mult rejects zero and negative."""
+        from tempest_mcp.tools.screener_tools import _validate_impulse_atr_mult
+
+        assert _validate_impulse_atr_mult(0.0) is not None
+        assert _validate_impulse_atr_mult(-1.0) is not None
+
+    def test_validate_impulse_atr_mult_rejects_above_10(self):
+        """_validate_impulse_atr_mult rejects values above 10."""
+        from tempest_mcp.tools.screener_tools import _validate_impulse_atr_mult
+
+        assert _validate_impulse_atr_mult(10.1) is not None
+
+    def test_validate_max_zone_age_bars_accepts_valid(self):
+        """_validate_max_zone_age_bars accepts valid values."""
+        from tempest_mcp.tools.screener_tools import _validate_max_zone_age_bars
+
+        assert _validate_max_zone_age_bars(1) is None
+        assert _validate_max_zone_age_bars(20) is None
+        assert _validate_max_zone_age_bars(500) is None
+
+    def test_validate_max_zone_age_bars_rejects_zero(self):
+        """_validate_max_zone_age_bars rejects zero."""
+        from tempest_mcp.tools.screener_tools import _validate_max_zone_age_bars
+
+        assert _validate_max_zone_age_bars(0) is not None
+
+    def test_validate_max_zone_age_bars_rejects_above_500(self):
+        """_validate_max_zone_age_bars rejects values above 500."""
+        from tempest_mcp.tools.screener_tools import _validate_max_zone_age_bars
+
+        assert _validate_max_zone_age_bars(501) is not None
