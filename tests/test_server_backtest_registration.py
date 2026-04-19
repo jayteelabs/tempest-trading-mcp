@@ -2,6 +2,8 @@
 
 import math
 
+import pytest
+
 from tempest_mcp.server import (
     TOOL_SCHEMAS,
     TOOLS,
@@ -1035,3 +1037,336 @@ class TestOrderBlockScreenerScanValidateArguments:
         )
 
         assert result == "symbols must contain at least 1 entry"
+
+
+class TestEng37ToolsInRegistry:
+    """Tests that ENG-37 analytical tools are registered in TOOLS."""
+
+    def test_all_four_tools_in_tools(self):
+        """All 4 ENG-37 tools are registered in TOOLS."""
+        from tempest_mcp.server import TOOLS
+
+        for tool_name in (
+            "calculate_fibonacci",
+            "calculate_tpo",
+            "detect_elliot_wave",
+            "get_market_structure",
+        ):
+            assert tool_name in TOOLS, f"{tool_name} not found in TOOLS"
+
+
+class TestEng37ToolsInSchemas:
+    """Tests that ENG-37 analytical tools are listed in TOOL_SCHEMAS."""
+
+    def test_all_four_tools_in_schemas(self):
+        """All 4 ENG-37 tools are listed in TOOL_SCHEMAS."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        schema_names = {tool.name for tool in TOOL_SCHEMAS}
+        for tool_name in (
+            "calculate_fibonacci",
+            "calculate_tpo",
+            "detect_elliot_wave",
+            "get_market_structure",
+        ):
+            assert tool_name in schema_names, f"{tool_name} not in TOOL_SCHEMAS"
+
+
+class TestEng37SharedWindowContract:
+    """Tests that ENG-37 tools follow the shared backtest-window naming contract."""
+
+    @pytest.mark.parametrize(
+        "tool_name",
+        [
+            "calculate_fibonacci",
+            "calculate_tpo",
+            "detect_elliot_wave",
+            "get_market_structure",
+        ],
+    )
+    def test_has_symbol(self, tool_name):
+        """Tool has symbol param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == tool_name:
+                props = tool.inputSchema.get("properties", {})
+                assert "symbol" in props
+
+    @pytest.mark.parametrize(
+        "tool_name",
+        [
+            "calculate_fibonacci",
+            "calculate_tpo",
+            "detect_elliot_wave",
+            "get_market_structure",
+        ],
+    )
+    def test_has_timeframe(self, tool_name):
+        """Tool has timeframe param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == tool_name:
+                props = tool.inputSchema.get("properties", {})
+                assert "timeframe" in props
+
+    @pytest.mark.parametrize(
+        "tool_name",
+        [
+            "calculate_fibonacci",
+            "calculate_tpo",
+            "detect_elliot_wave",
+            "get_market_structure",
+        ],
+    )
+    def test_has_start_at(self, tool_name):
+        """Tool has start_at param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == tool_name:
+                props = tool.inputSchema.get("properties", {})
+                assert "start_at" in props
+
+    @pytest.mark.parametrize(
+        "tool_name",
+        [
+            "calculate_fibonacci",
+            "calculate_tpo",
+            "detect_elliot_wave",
+            "get_market_structure",
+        ],
+    )
+    def test_has_end_at(self, tool_name):
+        """Tool has end_at param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == tool_name:
+                props = tool.inputSchema.get("properties", {})
+                assert "end_at" in props
+
+    def test_all_use_timeframe_enum(self):
+        """All ENG-37 tools use the shared SUPPORTED_TIMEFRAMES enum."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+        from tempest_mcp.tools.backtest_window import SUPPORTED_TIMEFRAMES
+
+        for tool_name in (
+            "calculate_fibonacci",
+            "calculate_tpo",
+            "detect_elliot_wave",
+            "get_market_structure",
+        ):
+            for tool in TOOL_SCHEMAS:
+                if tool.name == tool_name:
+                    tf = tool.inputSchema.get("properties", {}).get("timeframe", {})
+                    assert tf.get("enum") == list(SUPPORTED_TIMEFRAMES)
+
+
+class TestEng37ValidateToolArguments:
+    """Tests for validate_tool_arguments with ENG-37 tools."""
+
+    @pytest.mark.parametrize(
+        "tool_name",
+        [
+            "calculate_fibonacci",
+            "calculate_tpo",
+            "detect_elliot_wave",
+            "get_market_structure",
+        ],
+    )
+    def test_valid_symbol_passes(self, tool_name):
+        """Valid symbol returns None for all ENG-37 tools."""
+        from tempest_mcp.server import validate_tool_arguments
+
+        result = validate_tool_arguments(tool_name, {"symbol": "BTC/USDT"})
+        assert result is None, f"{tool_name} should accept valid symbol BTC/USDT"
+
+    @pytest.mark.parametrize(
+        "tool_name",
+        [
+            "calculate_fibonacci",
+            "calculate_tpo",
+            "detect_elliot_wave",
+            "get_market_structure",
+        ],
+    )
+    def test_empty_symbol_fails(self, tool_name):
+        """Empty symbol returns error for all ENG-37 tools."""
+        from tempest_mcp.server import validate_tool_arguments
+
+        result = validate_tool_arguments(tool_name, {"symbol": ""})
+        assert result is not None, f"{tool_name} should reject empty symbol"
+        assert "empty" in result.lower()
+
+    @pytest.mark.parametrize(
+        "tool_name",
+        [
+            "calculate_fibonacci",
+            "calculate_tpo",
+            "detect_elliot_wave",
+            "get_market_structure",
+        ],
+    )
+    def test_invalid_symbol_format_fails(self, tool_name):
+        """Invalid symbol format returns error for all ENG-37 tools."""
+        from tempest_mcp.server import validate_tool_arguments
+
+        result = validate_tool_arguments(tool_name, {"symbol": "INVALID@SYMBOL"})
+        assert result is not None, f"{tool_name} should reject invalid symbol format"
+
+
+class TestEng37ToolSpecificSchemas:
+    """Tests for ENG-37 tool-specific schema parameters."""
+
+    def test_calculate_fibonacci_has_swing_high(self):
+        """calculate_fibonacci has swing_high param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "calculate_fibonacci":
+                props = tool.inputSchema.get("properties", {})
+                assert "swing_high" in props
+
+    def test_calculate_fibonacci_has_swing_low(self):
+        """calculate_fibonacci has swing_low param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "calculate_fibonacci":
+                props = tool.inputSchema.get("properties", {})
+                assert "swing_low" in props
+
+    def test_calculate_fibonacci_has_output_mode(self):
+        """calculate_fibonacci has output_mode param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "calculate_fibonacci":
+                props = tool.inputSchema.get("properties", {})
+                assert "output_mode" in props
+
+    def test_calculate_fibonacci_output_mode_enum(self):
+        """calculate_fibonacci output_mode enum is ['retracement', 'extension']."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "calculate_fibonacci":
+                props = tool.inputSchema.get("properties", {})
+                assert props["output_mode"]["enum"] == ["retracement", "extension"]
+
+    def test_calculate_fibonacci_has_trend_direction(self):
+        """calculate_fibonacci has trend_direction param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "calculate_fibonacci":
+                props = tool.inputSchema.get("properties", {})
+                assert "trend_direction" in props
+
+    def test_calculate_fibonacci_trend_direction_enum(self):
+        """calculate_fibonacci trend_direction enum is ['bullish', 'bearish']."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "calculate_fibonacci":
+                props = tool.inputSchema.get("properties", {})
+                assert props["trend_direction"]["enum"] == ["bullish", "bearish"]
+
+    def test_calculate_tpo_has_row_size(self):
+        """calculate_tpo has row_size param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "calculate_tpo":
+                props = tool.inputSchema.get("properties", {})
+                assert "row_size" in props
+
+    def test_calculate_tpo_has_value_area_pct(self):
+        """calculate_tpo has value_area_pct param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "calculate_tpo":
+                props = tool.inputSchema.get("properties", {})
+                assert "value_area_pct" in props
+
+    def test_detect_elliot_wave_has_swing_window(self):
+        """detect_elliot_wave has swing_window param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "detect_elliot_wave":
+                props = tool.inputSchema.get("properties", {})
+                assert "swing_window" in props
+
+    def test_detect_elliot_wave_has_min_swing_pct(self):
+        """detect_elliot_wave has min_swing_pct param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "detect_elliot_wave":
+                props = tool.inputSchema.get("properties", {})
+                assert "min_swing_pct" in props
+
+    def test_detect_elliot_wave_has_include_rejected(self):
+        """detect_elliot_wave has include_rejected param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "detect_elliot_wave":
+                props = tool.inputSchema.get("properties", {})
+                assert "include_rejected" in props
+
+    def test_get_market_structure_has_swing_window(self):
+        """get_market_structure has swing_window param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "get_market_structure":
+                props = tool.inputSchema.get("properties", {})
+                assert "swing_window" in props
+
+    def test_get_market_structure_has_adx_period(self):
+        """get_market_structure has adx_period param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "get_market_structure":
+                props = tool.inputSchema.get("properties", {})
+                assert "adx_period" in props
+
+    def test_get_market_structure_has_breakout_confirm_bars(self):
+        """get_market_structure has breakout_confirm_bars param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "get_market_structure":
+                props = tool.inputSchema.get("properties", {})
+                assert "breakout_confirm_bars" in props
+
+    def test_no_backtest_only_params_in_eng37_tools(self):
+        """ENG-37 tools do NOT expose backtest-only params."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        backtest_only = {
+            "trade_style",
+            "initial_capital",
+            "atr_multiplier",
+            "risk_reward_ratio",
+            "confirmation_enabled",
+        }
+        for tool_name in (
+            "calculate_fibonacci",
+            "calculate_tpo",
+            "detect_elliot_wave",
+            "get_market_structure",
+        ):
+            for tool in TOOL_SCHEMAS:
+                if tool.name == tool_name:
+                    props = tool.inputSchema.get("properties", {})
+                    for param in backtest_only:
+                        assert param not in props, (
+                            f"{tool_name} should not have backtest-only param {param}"
+                        )
