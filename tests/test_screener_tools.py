@@ -3,6 +3,7 @@
 import pytest
 
 from tempest_mcp.screener.scanner import ScanFailure, ScanResult
+from tempest_mcp.tools import screener_tools
 from tempest_mcp.tools.screener_tools import (
     FILTER_VALUE_MAP,
     MAX_SCAN_SYMBOLS,
@@ -288,3 +289,398 @@ class TestScreenerScanEnvelope:
         assert "error" in result
         assert "code" in result["error"]
         assert "message" in result["error"]
+
+
+class TestSessionBreakoutScanTool:
+    """Tests for session_breakout_scan tool function — ENG-35."""
+
+    @pytest.mark.asyncio
+    async def test_session_breakout_scan_returns_success_envelope(self, monkeypatch):
+        """session_breakout_scan should return deterministic success envelope."""
+
+        class FakeScreener:
+            last_init: dict | None = None
+
+            def __init__(self, symbols, exchange):
+                type(self).last_init = {
+                    "symbols": symbols,
+                    "exchange": exchange,
+                }
+
+            def session_breakout_scan(self, session, symbols, proximity_pct, volume_multiplier):
+                return (
+                    [
+                        ScanResult(
+                            symbol="BTC/USDT",
+                            exchange="binance",
+                            timestamp=1.0,
+                            price=51000.0,
+                            filters_matched=["session_high_breakout", "pdh_breakout", "volume_confirmation"],
+                            indicator_values={
+                                "session_high": 50000.0,
+                                "session_low": 49000.0,
+                                "session_bars": 10,
+                                "previous_day_high": 50500.0,
+                                "previous_day_low": 49500.0,
+                                "volume_confirmed": 1.0,
+                                "volume_multiplier": 2.0,
+                                "proximity_pct": 1.0,
+                            },
+                            score=100.0,
+                        )
+                    ],
+                    [],
+                )
+
+        monkeypatch.setattr(
+            "tempest_mcp.tools.screener_tools.Screener", FakeScreener
+        )
+
+        result = await screener_tools.session_breakout_scan(
+            session="ny",
+            symbols=["BTC/USDT"],
+            exchange="binance",
+            proximity_pct=1.0,
+            volume_multiplier=2.0,
+        )
+
+        assert result["success"] is True
+        assert result["data"]["tool"] == "session_breakout_scan"
+        assert result["data"]["exchange"] == "binance"
+        assert result["data"]["applied_config"]["session"] == "ny"
+        assert result["data"]["applied_config"]["proximity_pct"] == 1.0
+        assert result["data"]["applied_config"]["volume_multiplier"] == 2.0
+        assert len(result["data"]["results"]) == 1
+        assert result["data"]["results"][0]["filters_matched"] == [
+            "session_high_breakout",
+            "pdh_breakout",
+            "volume_confirmation",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_session_breakout_scan_invalid_session(self):
+        """Invalid session type should return error envelope."""
+        result = await screener_tools.session_breakout_scan(
+            session="invalid_session",
+            symbols=["BTC/USDT"],
+        )
+
+        assert result["success"] is False
+        assert "error" in result
+        assert result["error"]["code"] == 1004  # INVALID_PARAMETER
+
+    @pytest.mark.asyncio
+    async def test_session_breakout_scan_new_york_alias(self, monkeypatch):
+        """'new_york' should be accepted as alias for 'ny'."""
+        from tempest_mcp.models.indicator import SessionType
+
+        captured = {}
+
+        class FakeScreener:
+            def __init__(self, symbols, exchange):
+                captured["symbols"] = symbols
+                captured["exchange"] = exchange
+
+            def session_breakout_scan(self, session, symbols, proximity_pct, volume_multiplier):
+                captured["session"] = session
+                captured["symbols_arg"] = symbols
+                captured["proximity_pct"] = proximity_pct
+                captured["volume_multiplier"] = volume_multiplier
+                return ([], [])
+
+        monkeypatch.setattr(
+            "tempest_mcp.tools.screener_tools.Screener", FakeScreener
+        )
+
+        result = await screener_tools.session_breakout_scan(
+            session="new_york",
+            symbols=["BTC/USDT"],
+        )
+
+        assert result["success"] is True
+        assert captured["session"] == SessionType.NEW_YORK
+        assert captured["symbols"] == ("BTC/USDT",)
+        assert captured["symbols_arg"] == ["BTC/USDT"]
+        assert captured["proximity_pct"] == 1.0
+        assert captured["volume_multiplier"] == 2.0
+
+    @pytest.mark.asyncio
+    async def test_session_breakout_scan_invalid_proximity_pct(self):
+        """Invalid proximity_pct should return error envelope."""
+        result = await screener_tools.session_breakout_scan(
+            session="ny",
+            symbols=["BTC/USDT"],
+            proximity_pct="not_a_number",
+        )
+
+        assert result["success"] is False
+        assert "error" in result
+        assert result["error"]["code"] == 1004
+
+    @pytest.mark.asyncio
+    async def test_session_breakout_scan_negative_proximity_pct(self):
+        """Negative proximity_pct should return error envelope."""
+        result = await screener_tools.session_breakout_scan(
+            session="ny",
+            symbols=["BTC/USDT"],
+            proximity_pct=-1.0,
+        )
+
+        assert result["success"] is False
+        assert "proximity_pct" in result["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_session_breakout_scan_invalid_volume_multiplier(self):
+        """Invalid volume_multiplier should return error envelope."""
+        result = await screener_tools.session_breakout_scan(
+            session="ny",
+            symbols=["BTC/USDT"],
+            volume_multiplier=float("inf"),
+        )
+
+        assert result["success"] is False
+        assert "error" in result
+
+    @pytest.mark.asyncio
+    async def test_session_breakout_scan_unknown_exchange(self):
+        """Unknown exchange should return error envelope."""
+        result = await screener_tools.session_breakout_scan(
+            session="ny",
+            symbols=["BTC/USDT"],
+            exchange="unknown_exchange",
+        )
+
+        assert result["success"] is False
+        assert "exchange" in result["error"]["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_session_breakout_scan_partial_success(self, monkeypatch):
+        """Partial success should return results + failures."""
+
+        class FakeScreener:
+            def __init__(self, symbols, exchange):
+                pass
+
+            def session_breakout_scan(self, session, symbols, proximity_pct, volume_multiplier):
+                return (
+                    [
+                        ScanResult(
+                            symbol="BBB/USDT",
+                            exchange="binance",
+                            timestamp=1.0,
+                            price=79.0,
+                            filters_matched=["pdl_breakout", "volume_confirmation"],
+                            indicator_values={},
+                            score=30.0,
+                        ),
+                        ScanResult(
+                            symbol="AAA/USDT",
+                            exchange="binance",
+                            timestamp=2.0,
+                            price=101.0,
+                            filters_matched=["session_high_breakout"],
+                            indicator_values={},
+                            score=30.0,
+                        ),
+                    ],
+                    [
+                        ScanFailure(symbol="AAA/USDT", exchange="binance", reason="empty_ohlcv"),
+                        ScanFailure(symbol="ZZZ/USDT", exchange="binance", reason="fetch_error"),
+                    ],
+                )
+
+        monkeypatch.setattr(
+            "tempest_mcp.tools.screener_tools.Screener", FakeScreener
+        )
+
+        result = await screener_tools.session_breakout_scan(
+            session="ny",
+            symbols=["BTC/USDT", "ETH/USDT"],
+        )
+
+        assert result["success"] is True
+        assert result["data"]["results"] == [
+            {
+                "symbol": "BBB/USDT",
+                "exchange": "binance",
+                "timestamp": 1.0,
+                "price": 79.0,
+                "filters_matched": ["pdl_breakout", "volume_confirmation"],
+                "indicator_values": {},
+                "score": 30.0,
+            },
+            {
+                "symbol": "AAA/USDT",
+                "exchange": "binance",
+                "timestamp": 2.0,
+                "price": 101.0,
+                "filters_matched": ["session_high_breakout"],
+                "indicator_values": {},
+                "score": 30.0,
+            },
+        ]
+        assert result["data"]["failures"] == [
+            {
+                "symbol": "AAA/USDT",
+                "exchange": "binance",
+                "reason": "empty_ohlcv",
+            },
+            {
+                "symbol": "ZZZ/USDT",
+                "exchange": "binance",
+                "reason": "fetch_error",
+            },
+        ]
+
+    @pytest.mark.asyncio
+    async def test_session_breakout_scan_full_failure(self, monkeypatch):
+        """Full failure should return deterministic error response."""
+
+        class FakeScreener:
+            def __init__(self, symbols, exchange):
+                pass
+
+            def session_breakout_scan(self, session, symbols, proximity_pct, volume_multiplier):
+                return (
+                    [],
+                    [
+                        ScanFailure(
+                            symbol="ZZZ/USDT",
+                            exchange="binance",
+                            reason="fetch_error",
+                        ),
+                        ScanFailure(
+                            symbol="AAA/USDT",
+                            exchange="binance",
+                            reason="empty_ohlcv",
+                        ),
+                    ],
+                )
+
+        monkeypatch.setattr(
+            "tempest_mcp.tools.screener_tools.Screener", FakeScreener
+        )
+
+        result = await screener_tools.session_breakout_scan(
+            session="ny",
+            symbols=["BTC/USDT"],
+        )
+
+        assert result["success"] is False
+        assert "error" in result
+        assert result["error"]["code"] == 3000  # DATA_SOURCE_ERROR
+        assert result["data"]["results"] == []
+        assert result["data"]["failures"] == [
+            {
+                "symbol": "AAA/USDT",
+                "exchange": "binance",
+                "reason": "empty_ohlcv",
+            },
+            {
+                "symbol": "ZZZ/USDT",
+                "exchange": "binance",
+                "reason": "fetch_error",
+            },
+        ]
+
+    @pytest.mark.asyncio
+    async def test_session_breakout_scan_internal_error_sanitized(self, monkeypatch):
+        """Internal errors should be sanitized."""
+
+        class ExplodingScreener:
+            def __init__(self, symbols, exchange):
+                pass
+
+            def session_breakout_scan(self, session, symbols, proximity_pct, volume_multiplier):
+                raise RuntimeError("sensitive network error")
+
+        monkeypatch.setattr(
+            "tempest_mcp.tools.screener_tools.Screener", ExplodingScreener
+        )
+
+        result = await screener_tools.session_breakout_scan(
+            session="ny",
+            symbols=["BTC/USDT"],
+        )
+
+        assert result["success"] is False
+        assert result["error"]["code"] == 9000  # INTERNAL_ERROR
+        assert "sensitive" not in result["error"]["message"]
+
+
+class TestSessionBreakoutScanValidation:
+    """Tests for session_breakout_scan argument validation — ENG-35."""
+
+    def test_validate_session_accepts_asia(self):
+        """_validate_session should accept 'asia'."""
+        from tempest_mcp.tools.screener_tools import _validate_session
+
+        normalized, error = _validate_session("asia")
+        assert normalized == "asia"
+        assert error is None
+
+    def test_validate_session_accepts_london(self):
+        """_validate_session should accept 'london'."""
+        from tempest_mcp.tools.screener_tools import _validate_session
+
+        normalized, error = _validate_session("london")
+        assert normalized == "london"
+        assert error is None
+
+    def test_validate_session_accepts_ny(self):
+        """_validate_session should accept 'ny'."""
+        from tempest_mcp.tools.screener_tools import _validate_session
+
+        normalized, error = _validate_session("ny")
+        assert normalized == "ny"
+        assert error is None
+
+    def test_validate_session_normalizes_new_york(self):
+        """_validate_session should normalize 'new_york' to 'ny'."""
+        from tempest_mcp.tools.screener_tools import _validate_session
+
+        normalized, error = _validate_session("new_york")
+        assert normalized == "ny"
+        assert error is None
+
+    def test_validate_session_rejects_invalid(self):
+        """_validate_session should reject invalid session types."""
+        from tempest_mcp.tools.screener_tools import _validate_session
+
+        normalized, error = _validate_session("invalid")
+        assert normalized is None
+        assert error is not None
+
+    def test_validate_proximity_pct_accepts_valid(self):
+        """_validate_proximity_pct should accept valid values."""
+        from tempest_mcp.tools.screener_tools import _validate_proximity_pct
+
+        assert _validate_proximity_pct(0.0) is None
+        assert _validate_proximity_pct(1.0) is None
+        assert _validate_proximity_pct(100.0) is None
+
+    def test_validate_proximity_pct_rejects_negative(self):
+        """_validate_proximity_pct should reject negative values."""
+        from tempest_mcp.tools.screener_tools import _validate_proximity_pct
+
+        assert _validate_proximity_pct(-0.1) is not None
+
+    def test_validate_proximity_pct_rejects_over_100(self):
+        """_validate_proximity_pct should reject values over 100."""
+        from tempest_mcp.tools.screener_tools import _validate_proximity_pct
+
+        assert _validate_proximity_pct(101.0) is not None
+
+    def test_validate_volume_multiplier_accepts_valid(self):
+        """_validate_volume_multiplier should accept valid values."""
+        from tempest_mcp.tools.screener_tools import _validate_volume_multiplier
+
+        assert _validate_volume_multiplier(0.0) is None
+        assert _validate_volume_multiplier(1.0) is None
+        assert _validate_volume_multiplier(2.0) is None
+
+    def test_validate_volume_multiplier_rejects_negative(self):
+        """_validate_volume_multiplier should reject negative values."""
+        from tempest_mcp.tools.screener_tools import _validate_volume_multiplier
+
+        assert _validate_volume_multiplier(-1.0) is not None

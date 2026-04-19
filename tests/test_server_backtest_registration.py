@@ -699,3 +699,159 @@ class TestOrderBlocksAnalyticalBoundary:
             if tool.name == "detect_order_blocks":
                 props = tool.inputSchema.get("properties", {})
                 assert "initial_capital" not in props
+
+
+class TestSessionBreakoutScanRegistration:
+    """Tests for session_breakout_scan server registration — ENG-35."""
+
+    def test_session_breakout_scan_in_tools(self):
+        """session_breakout_scan is registered in TOOLS."""
+        from tempest_mcp.server import TOOLS
+
+        assert "session_breakout_scan" in TOOLS
+
+    def test_session_breakout_scan_in_schemas(self):
+        """session_breakout_scan is listed in TOOL_SCHEMAS."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        schema_names = {tool.name for tool in TOOL_SCHEMAS}
+        assert "session_breakout_scan" in schema_names
+
+    def test_session_breakout_scan_schema_has_session_required(self):
+        """session_breakout_scan schema has session as required param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "session_breakout_scan":
+                props = tool.inputSchema.get("properties", {})
+                assert "session" in props
+                assert "session" in tool.inputSchema.get("required", [])
+
+    def test_session_breakout_scan_schema_has_optional_symbols(self):
+        """session_breakout_scan schema has symbols as optional param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "session_breakout_scan":
+                props = tool.inputSchema.get("properties", {})
+                assert "symbols" in props
+
+    def test_session_breakout_scan_schema_has_optional_exchange(self):
+        """session_breakout_scan schema has exchange as optional param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "session_breakout_scan":
+                props = tool.inputSchema.get("properties", {})
+                assert "exchange" in props
+                assert props["exchange"].get("default") == "binance"
+
+    def test_session_breakout_scan_schema_has_proximity_pct(self):
+        """session_breakout_scan schema has proximity_pct with default 1.0."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "session_breakout_scan":
+                props = tool.inputSchema.get("properties", {})
+                assert "proximity_pct" in props
+                assert props["proximity_pct"].get("default") == 1.0
+
+    def test_session_breakout_scan_schema_has_volume_multiplier(self):
+        """session_breakout_scan schema has volume_multiplier with default 2.0."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "session_breakout_scan":
+                props = tool.inputSchema.get("properties", {})
+                assert "volume_multiplier" in props
+                assert props["volume_multiplier"].get("default") == 2.0
+
+
+class TestSessionBreakoutScanValidateArguments:
+    """Tests for validate_tool_arguments with session_breakout_scan — ENG-35."""
+
+    def test_session_breakout_scan_requires_session(self):
+        """session_breakout_scan returns error when session is missing."""
+        from tempest_mcp.server import validate_tool_arguments
+
+        result = validate_tool_arguments("session_breakout_scan", {})
+        assert result is not None
+        assert "session" in result.lower()
+
+    def test_session_breakout_scan_accepts_valid_session(self):
+        """session_breakout_scan accepts valid session values."""
+        from tempest_mcp.server import validate_tool_arguments
+
+        for session in ("asia", "london", "ny", "new_york"):
+            result = validate_tool_arguments(
+                "session_breakout_scan",
+                {"session": session},
+            )
+            assert result is None, f"Failed for session={session}"
+
+    def test_session_breakout_scan_rejects_invalid_session(self):
+        """session_breakout_scan rejects invalid session values."""
+        from tempest_mcp.server import validate_tool_arguments
+
+        result = validate_tool_arguments(
+            "session_breakout_scan",
+            {"session": "invalid"},
+        )
+        assert result is not None
+        assert "session" in result.lower()
+
+    def test_session_breakout_scan_validates_proximity_pct_range(self):
+        """session_breakout_scan validates proximity_pct range."""
+        from tempest_mcp.server import validate_tool_arguments
+
+        result = validate_tool_arguments(
+            "session_breakout_scan",
+            {"session": "ny", "proximity_pct": -1.0},
+        )
+        assert result is not None
+        assert "proximity_pct" in result.lower()
+
+    def test_session_breakout_scan_validates_volume_multiplier_non_negative(self):
+        """session_breakout_scan validates volume_multiplier non-negative."""
+        from tempest_mcp.server import validate_tool_arguments
+
+        result = validate_tool_arguments(
+            "session_breakout_scan",
+            {"session": "ny", "volume_multiplier": -1.0},
+        )
+        assert result is not None
+        assert "volume_multiplier" in result.lower()
+
+    def test_session_breakout_scan_validates_exchange(self):
+        """session_breakout_scan validates exchange."""
+        from tempest_mcp.server import validate_tool_arguments
+
+        result = validate_tool_arguments(
+            "session_breakout_scan",
+            {"session": "ny", "exchange": "invalid_exchange"},
+        )
+        assert result is not None
+        assert "exchange" in result.lower()
+
+    def test_session_breakout_scan_validates_symbols_list(self):
+        """session_breakout_scan validates symbols list."""
+        from tempest_mcp.server import validate_tool_arguments
+
+        result = validate_tool_arguments(
+            "session_breakout_scan",
+            {"session": "ny", "symbols": "not_a_list"},
+        )
+        assert result is not None
+        assert "symbols" in result.lower()
+
+    def test_session_breakout_scan_validates_symbols_cap(self):
+        """session_breakout_scan validates symbols list max size."""
+        from tempest_mcp.server import validate_tool_arguments
+        from tempest_mcp.tools.screener_tools import MAX_SCAN_SYMBOLS
+
+        result = validate_tool_arguments(
+            "session_breakout_scan",
+            {"session": "ny", "symbols": ["BTC/USDT"] * (MAX_SCAN_SYMBOLS + 1)},
+        )
+        assert result is not None
+        assert "symbols" in result.lower()
