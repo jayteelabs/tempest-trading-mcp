@@ -1,16 +1,20 @@
-"""Screener MCP tool implementation — ENG-34."""
+"""Screener MCP tool implementation — ENG-34/ENG-35."""
 
 import math
 from typing import Any
 
 from tempest_mcp.config import ErrorCodes
 from tempest_mcp.logging_config import get_logger
+from tempest_mcp.models.indicator import SessionType
 from tempest_mcp.screener.scanner import DEFAULT_FILTER_PRESET, ScanFailure, ScanFilter, Screener
 
 logger = get_logger(__name__)
 
 SUPPORTED_EXCHANGES = frozenset({"binance", "bybit", "coinbase", "kraken"})
 MAX_SCAN_SYMBOLS = 25
+
+# Session types for session_breakout_scan
+SUPPORTED_SESSIONS = frozenset({"asia", "london", "ny"})
 
 
 # Map of filter string values to ScanFilter enums
@@ -88,6 +92,50 @@ def _validate_exchange(exchange: str) -> tuple[str | None, str | None]:
     if normalized_exchange not in SUPPORTED_EXCHANGES:
         return None, f"exchange must be one of: {', '.join(sorted(SUPPORTED_EXCHANGES))}"
     return normalized_exchange, None
+
+
+def _validate_session(session: str) -> tuple[str | None, str | None]:
+    """Validate and normalize session type.
+
+    Args:
+        session: Session string (asia, london, ny, or new_york alias)
+
+    Returns:
+        Tuple of (normalized_session, error_message)
+        - normalized_session: 'asia', 'london', or 'ny' (new_york normalized)
+        - error_message: None if valid, error string if invalid
+    """
+    if not isinstance(session, str):
+        return None, "session must be a string"
+    normalized = session.lower()
+    # Handle new_york alias
+    if normalized == "new_york":
+        normalized = "ny"
+    if normalized not in SUPPORTED_SESSIONS:
+        return None, f"session must be one of: {', '.join(sorted(SUPPORTED_SESSIONS))}"
+    return normalized, None
+
+
+def _validate_proximity_pct(proximity_pct: float) -> str | None:
+    """Validate proximity_pct parameter."""
+    if isinstance(proximity_pct, bool) or not isinstance(proximity_pct, (int, float)):
+        return "proximity_pct must be a number"
+    if not math.isfinite(proximity_pct):
+        return "proximity_pct must be finite"
+    if proximity_pct < 0 or proximity_pct > 100:
+        return "proximity_pct must be between 0 and 100"
+    return None
+
+
+def _validate_volume_multiplier(volume_multiplier: float) -> str | None:
+    """Validate volume_multiplier parameter."""
+    if isinstance(volume_multiplier, bool) or not isinstance(volume_multiplier, (int, float)):
+        return "volume_multiplier must be a number"
+    if not math.isfinite(volume_multiplier):
+        return "volume_multiplier must be finite"
+    if volume_multiplier < 0:
+        return "volume_multiplier must be non-negative"
+    return None
 
 
 def _serialize_scan_result(result: Any) -> dict[str, Any]:
@@ -214,6 +262,153 @@ async def screener_scan(
 
     logger.info(
         "Tool completed: screener_scan",
+        success=success,
+        result_count=len(results),
+        failure_count=len(failures),
+    )
+
+    return response
+
+
+async def session_breakout_scan(
+    session: str,
+    symbols: list[str] | None = None,
+    exchange: str = "binance",
+    proximity_pct: float = 1.0,
+    volume_multiplier: float = 2.0,
+) -> dict[str, Any]:
+    """Session breakout screener — scan symbols for session breakout patterns.
+
+    Evaluates symbols against the requested session (asia, london, ny) using
+    detect_session_levels() for session high/low and detect_pdh_pdl() for
+    previous-day context. Breakout/proximity flags are computed against both
+    session and PDH/PDL levels, with volume confirmation.
+
+    Args:
+        session: Session type (required). Valid values: asia, london, ny.
+                 Accepts 'new_york' as an alias for 'ny'.
+        symbols: List of trading symbols to scan (e.g., ["BTC/USDT", "ETH/USDT"]).
+                 If None, uses default symbols from config.
+        exchange: Exchange to scan (default: binance).
+        proximity_pct: Percentage threshold for near-breakout detection (default: 1.0).
+                       Price within proximity_pct% of session high/low is flagged
+                       as near-breakout.
+        volume_multiplier: Volume threshold multiplier for confirmation (default: 2.0).
+                           Current volume must be >= volume_multiplier * prior_window_avg.
+
+    Returns:
+        Dict with success/error envelope:
+        - success: True if at least one symbol was scanned successfully
+        - data: Contains tool, exchange, applied_config, results, failures (on success)
+        - error: Contains code and message (on failure)
+    """
+    logger.info(
+        "Tool invoked: session_breakout_scan",
+        session=session,
+        symbols=symbols,
+        exchange=exchange,
+        proximity_pct=proximity_pct,
+        volume_multiplier=volume_multiplier,
+    )
+
+    # ── Validate session ─────────────────────────────────────────────────────
+    normalized_session, session_error = _validate_session(session)
+    if session_error:
+        return _error_response(ErrorCodes.INVALID_PARAMETER, session_error)
+
+    # ── Validate symbols ─────────────────────────────────────────────────────
+    if symbol_error := _validate_symbols(symbols):
+        return _error_response(ErrorCodes.INVALID_PARAMETER, symbol_error)
+
+    # ── Validate exchange ────────────────────────────────────────────────────
+    normalized_exchange, exchange_error = _validate_exchange(exchange)
+    if exchange_error:
+        return _error_response(ErrorCodes.INVALID_PARAMETER, exchange_error)
+
+    # ── Validate proximity_pct ───────────────────────────────────────────────
+    if proximity_error := _validate_proximity_pct(proximity_pct):
+        return _error_response(ErrorCodes.INVALID_PARAMETER, proximity_error)
+
+    # ── Validate volume_multiplier ──────────────────────────────────────────
+    if volume_error := _validate_volume_multiplier(volume_multiplier):
+        return _error_response(ErrorCodes.INVALID_PARAMETER, volume_error)
+
+    # ── Map session string to SessionType enum ──────────────────────────────
+    session_type_map = {
+        "asia": SessionType.ASIA,
+        "london": SessionType.LONDON,
+        "ny": SessionType.NEW_YORK,
+    }
+    session_type = session_type_map[normalized_session]
+
+    # ── Execute scan ─────────────────────────────────────────────────────────
+    try:
+        screener = Screener(
+            symbols=tuple(symbols) if symbols else ("BTC/USDT", "ETH/USDT", "DOGE/USDT"),
+            exchange=normalized_exchange,
+        )
+
+        results, failures = screener.session_breakout_scan(
+            session=session_type,
+            symbols=symbols,
+            proximity_pct=proximity_pct,
+            volume_multiplier=volume_multiplier,
+        )
+
+    except Exception as e:
+        logger.error("Session breakout scan failed", error=str(e))
+        return _error_response(
+            ErrorCodes.INTERNAL_ERROR,
+            "Unable to complete session breakout scan",
+        )
+
+    # ── Determine success/failure ────────────────────────────────────────────
+    has_results = len(results) > 0
+    has_failures = len(failures) > 0
+    success = has_results or not has_failures
+
+    response: dict[str, Any] = {
+        "success": success,
+    }
+
+    if success:
+        response["data"] = {
+            "tool": "session_breakout_scan",
+            "exchange": normalized_exchange,
+            "applied_config": {
+                "session": normalized_session,
+                "symbols": symbols,
+                "proximity_pct": proximity_pct,
+                "volume_multiplier": volume_multiplier,
+            },
+            "results": [_serialize_scan_result(r) for r in results],
+            "failures": [_serialize_scan_failure(f) for f in failures],
+        }
+    else:
+        # Full failure - deterministic error response
+        response["error"] = {
+            "code": ErrorCodes.DATA_SOURCE_ERROR,
+            "message": "All symbols failed to scan",
+        }
+        # Include failures in deterministic order
+        response["data"] = {
+            "tool": "session_breakout_scan",
+            "exchange": normalized_exchange,
+            "applied_config": {
+                "session": normalized_session,
+                "symbols": symbols,
+                "proximity_pct": proximity_pct,
+                "volume_multiplier": volume_multiplier,
+            },
+            "results": [],
+            "failures": sorted(
+                [_serialize_scan_failure(f) for f in failures],
+                key=lambda x: (x["symbol"], x["exchange"]),
+            ),
+        }
+
+    logger.info(
+        "Tool completed: session_breakout_scan",
         success=success,
         result_count=len(results),
         failure_count=len(failures),

@@ -30,6 +30,7 @@ from tempest_mcp.tools import (
     fetch_ticker,
     indicator_rsi,
     screener_scan,
+    session_breakout_scan,
 )
 from tempest_mcp.tools.backtest_window import SUPPORTED_TIMEFRAMES
 from tempest_mcp.tools.screener_tools import MAX_SCAN_SYMBOLS, SUPPORTED_EXCHANGES
@@ -69,6 +70,7 @@ TOOLS: dict[str, Any] = {
     "fetch_orderbook": fetch_orderbook,
     "indicator_rsi": indicator_rsi,
     "screener_scan": screener_scan,
+    "session_breakout_scan": session_breakout_scan,
     # Legacy backtest_strategy (deprecated — deterministic error response)
     "backtest_strategy": backtest_strategy,
 }
@@ -396,6 +398,22 @@ TOOL_SCHEMAS: list[Tool] = [
             },
         },
     ),
+    # ── Session breakout screener (ENG-35) ─────────────────────────────────────────
+    Tool(
+        name="session_breakout_scan",
+        description="Session breakout screener. Evaluates symbols for session breakout/proximity patterns against session high/low and previous-day high/low.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session": {"type": "string", "description": "Session type: asia, london, ny (new_york accepted as alias for ny)"},
+                "symbols": {"type": "array", "items": {"type": "string"}, "nullable": True},
+                "exchange": {"type": "string", "default": "binance"},
+                "proximity_pct": {"type": "number", "default": 1.0, "description": "Near-breakout threshold as percentage"},
+                "volume_multiplier": {"type": "number", "default": 2.0, "description": "Volume confirmation multiplier"},
+            },
+            "required": ["session"],
+        },
+    ),
     # ── Analysis tools (ENG-28) ──────────────────────────────────────────────────
     Tool(
         name="calculate_volume_profile",
@@ -664,6 +682,52 @@ def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> str | None:
             return "exchange must be a string"
         if exchange.lower() not in SUPPORTED_EXCHANGES:
             return f"exchange must be one of: {', '.join(sorted(SUPPORTED_EXCHANGES))}"
+
+        return None
+    # Session breakout screener (ENG-35)
+    if name == "session_breakout_scan":
+        session = arguments.get("session")
+        if session is None:
+            return "session is required"
+        if not isinstance(session, str):
+            return "session must be a string"
+        normalized_session = session.lower()
+        if normalized_session == "new_york":
+            normalized_session = "ny"
+        if normalized_session not in ("asia", "london", "ny"):
+            return "session must be one of: asia, london, ny"
+
+        symbols = arguments.get("symbols")
+        if symbols is not None:
+            if not isinstance(symbols, list):
+                return "symbols must be an array of strings"
+            if len(symbols) > MAX_SCAN_SYMBOLS:
+                return f"symbols must contain at most {MAX_SCAN_SYMBOLS} entries"
+            for i, sym in enumerate(symbols):
+                if err := validate_symbol(sym, f"symbols[{i}]"):
+                    return err
+
+        exchange = arguments.get("exchange", "binance")
+        if not isinstance(exchange, str):
+            return "exchange must be a string"
+        if exchange.lower() not in SUPPORTED_EXCHANGES:
+            return f"exchange must be one of: {', '.join(sorted(SUPPORTED_EXCHANGES))}"
+
+        proximity_pct = arguments.get("proximity_pct", 1.0)
+        if isinstance(proximity_pct, bool) or not isinstance(proximity_pct, (int, float)):
+            return "proximity_pct must be a number"
+        if not math.isfinite(proximity_pct):
+            return "proximity_pct must be finite"
+        if proximity_pct < 0 or proximity_pct > 100:
+            return "proximity_pct must be between 0 and 100"
+
+        volume_multiplier = arguments.get("volume_multiplier", 2.0)
+        if isinstance(volume_multiplier, bool) or not isinstance(volume_multiplier, (int, float)):
+            return "volume_multiplier must be a number"
+        if not math.isfinite(volume_multiplier):
+            return "volume_multiplier must be finite"
+        if volume_multiplier < 0:
+            return "volume_multiplier must be non-negative"
 
         return None
     return None

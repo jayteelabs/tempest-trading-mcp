@@ -341,29 +341,182 @@ class Screener:
             return min(100, match_ratio * 100)
 
     def session_breakout_scan(
-        self, session: SessionType, symbols: list[str] | None = None
-    ) -> list[ScanResult]:
-        from tempest_mcp.indicators.session_levels import detect_session_levels
+        self,
+        session: SessionType,
+        symbols: list[str] | None = None,
+        proximity_pct: float = 1.0,
+        volume_multiplier: float = 2.0,
+    ) -> tuple[list[ScanResult], list[ScanFailure]]:
+        """Execute session breakout scan across symbols.
+
+        Evaluates symbols against the requested session (asia, london, ny) using
+        detect_session_levels() for session high/low and detect_pdh_pdl() for
+        previous-day context. Breakout/proximity flags are computed against both
+        session and PDH/PDL levels, with volume confirmation.
+
+        Args:
+            session: Session type (asia, london, ny). Accepts 'new_york' alias normalized to 'ny'.
+            symbols: List of symbols to scan. Defaults to screener's configured symbol universe.
+            proximity_pct: Percentage threshold for near-breakout detection (default 1.0).
+                Price within proximity_pct% of session high/low is flagged as near-breakout.
+            volume_multiplier: Volume threshold multiplier for confirmation (default 2.0).
+                Current volume must be >= volume_multiplier * prior_window_avg.
+
+        Returns:
+            Tuple of (results, failures) where:
+            - results: List of ScanResult sorted by (-score, -len(filters_matched), symbol, exchange)
+            - failures: List of ScanFailure for symbols that could not be scanned
+        """
+        from tempest_mcp.indicators.session_levels import detect_pdh_pdl, detect_session_levels
 
         symbols_to_scan = symbols or list(self.symbols)
-        results = []
+        results: list[ScanResult] = []
+        failures: list[ScanFailure] = []
+
+        # Fixed filter name order for deterministic filters_matched ordering
+        FILTER_ORDER = (
+            "session_high_breakout",
+            "session_high_near_breakout",
+            "session_low_breakout",
+            "session_low_near_breakout",
+            "pdh_breakout",
+            "pdh_near_breakout",
+            "pdl_breakout",
+            "pdl_near_breakout",
+            "volume_confirmation",
+        )
+
         for symbol in symbols_to_scan:
             try:
                 df = self.adapter.fetch_ohlcv_live(symbol, timeframe="1h", limit=48)
                 if df.empty:
+                    failures.append(
+                        ScanFailure(
+                            symbol=symbol,
+                            exchange=self.exchange,
+                            reason="empty_ohlcv",
+                        )
+                    )
                     continue
+
                 close = df["close"].tolist()
-                session_key = session.value
-                session_result = detect_session_levels(df, session_key)
+                volume = df["volume"].tolist()
                 current_price = close[-1]
-                filters_matched = []
-                session_high = float(session_result.get("high", 0.0) or 0.0)
-                session_low = float(session_result.get("low", 0.0) or 0.0)
-                if session_high > 0 and current_price > session_high:
-                    filters_matched.append(f"{session_key}_high_breakout")
-                if session_low > 0 and current_price < session_low:
-                    filters_matched.append(f"{session_key}_low_breakout")
-                score = 80.0 if filters_matched else 0.0
+                session_key = session.value
+
+                # ── Session levels ───────────────────────────────────────────────
+                session_result = detect_session_levels(df, session_key)
+                session_high = float(session_result.get("high") or 0.0)
+                session_low = float(session_result.get("low") or 0.0)
+                session_bars = session_result.get("bars", 0)
+
+                if session_bars == 0:
+                    failures.append(
+                        ScanFailure(
+                            symbol=symbol,
+                            exchange=self.exchange,
+                            reason="insufficient_session_data",
+                        )
+                    )
+                    continue
+
+                # ── PDH/PDL context ──────────────────────────────────────────────
+                pdh_pdl_result = detect_pdh_pdl(df)
+                pdh = float(pdh_pdl_result.get("previous_day_high") or 0.0)
+                pdl = float(pdh_pdl_result.get("previous_day_low") or 0.0)
+                pdh_position = pdh_pdl_result.get("position", "insufficient_data")
+
+                if pdh_position == "insufficient_data":
+                    failures.append(
+                        ScanFailure(
+                            symbol=symbol,
+                            exchange=self.exchange,
+                            reason="insufficient_pdh_pdl_data",
+                        )
+                    )
+                    continue
+
+                # ── Breakout / Proximity checks ───────────────────────────────────
+                filters_matched: list[str] = []
+
+                def append_match(filter_name: str, matched_list: list[str]) -> None:
+                    """Append filter in fixed order (no duplicates)."""
+                    if filter_name not in matched_list:
+                        # Insert at correct position to maintain deterministic ordering
+                        target_idx = FILTER_ORDER.index(filter_name)
+                        inserted = False
+                        for i, existing in enumerate(matched_list):
+                            if FILTER_ORDER.index(existing) > target_idx:
+                                matched_list.insert(i, filter_name)
+                                inserted = True
+                                break
+                        if not inserted:
+                            matched_list.append(filter_name)
+
+                # Session high breakout / near-breakout
+                if session_high > 0:
+                    if current_price > session_high:
+                        append_match("session_high_breakout", filters_matched)
+                    elif proximity_pct > 0 and current_price >= session_high * (1 - proximity_pct / 100):
+                        append_match("session_high_near_breakout", filters_matched)
+
+                # Session low breakout / near-breakout
+                if session_low > 0:
+                    if current_price < session_low:
+                        append_match("session_low_breakout", filters_matched)
+                    elif proximity_pct > 0 and current_price <= session_low * (1 + proximity_pct / 100):
+                        append_match("session_low_near_breakout", filters_matched)
+
+                # PDH breakout / near-breakout
+                if pdh > 0:
+                    if current_price > pdh:
+                        append_match("pdh_breakout", filters_matched)
+                    elif proximity_pct > 0 and current_price >= pdh * (1 - proximity_pct / 100):
+                        append_match("pdh_near_breakout", filters_matched)
+
+                # PDL breakout / near-breakout
+                if pdl > 0:
+                    if current_price < pdl:
+                        append_match("pdl_breakout", filters_matched)
+                    elif proximity_pct > 0 and current_price <= pdl * (1 + proximity_pct / 100):
+                        append_match("pdl_near_breakout", filters_matched)
+
+                # ── Volume confirmation ───────────────────────────────────────────
+                lookback = min(20, len(volume))
+                volume_confirmed = False
+                if lookback >= 5:
+                    avg_volume = sum(volume[-lookback:-1]) / (lookback - 1)
+                    current_volume = volume[-1]
+                    if avg_volume > 0 and current_volume >= avg_volume * volume_multiplier:
+                        append_match("volume_confirmation", filters_matched)
+                        volume_confirmed = True
+
+                # ── Score calculation ───────────────────────────────────────────
+                # Breakout = 30pts each, near-breakout = 15pts each, volume = 10pts
+                # Max score = 100, min score = 0
+                score = 0.0
+                for f in filters_matched:
+                    if f == "session_high_breakout":
+                        score += 30.0
+                    elif f == "session_low_breakout":
+                        score += 30.0
+                    elif f == "pdh_breakout":
+                        score += 20.0
+                    elif f == "pdl_breakout":
+                        score += 20.0
+                    elif f == "session_high_near_breakout":
+                        score += 15.0
+                    elif f == "session_low_near_breakout":
+                        score += 15.0
+                    elif f == "pdh_near_breakout":
+                        score += 10.0
+                    elif f == "pdl_near_breakout":
+                        score += 10.0
+                    elif f == "volume_confirmation":
+                        score += 10.0
+
+                score = min(100.0, max(0.0, score))
+
                 latest_ts = df.index[-1]
                 results.append(
                     ScanResult(
@@ -377,12 +530,31 @@ class Screener:
                         indicator_values={
                             "session_high": session_high,
                             "session_low": session_low,
-                            "current_price": current_price,
+                            "session_bars": session_bars,
+                            "previous_day_high": pdh,
+                            "previous_day_low": pdl,
+                            "volume_confirmed": float(volume_confirmed),
+                            "volume_multiplier": volume_multiplier,
+                            "proximity_pct": proximity_pct,
                         },
                         score=score,
                     )
                 )
+
             except Exception as e:
                 logger.warning("Session scan failed", symbol=symbol, error=str(e))
-        results.sort(key=lambda r: r.score, reverse=True)
-        return results
+                failures.append(
+                    ScanFailure(
+                        symbol=symbol,
+                        exchange=self.exchange,
+                        reason="fetch_error",
+                    )
+                )
+
+        # Deterministic sorting: (-score, -len(filters_matched), symbol, exchange)
+        results.sort(key=lambda r: (-r.score, -len(r.filters_matched), r.symbol, r.exchange))
+
+        # Sort failures deterministically: (symbol, exchange)
+        failures.sort(key=lambda f: (f.symbol, f.exchange))
+
+        return results, failures
