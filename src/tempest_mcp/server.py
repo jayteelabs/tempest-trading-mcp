@@ -29,6 +29,7 @@ from tempest_mcp.tools import (
     fetch_orderbook,
     fetch_ticker,
     indicator_rsi,
+    order_block_screener_scan,
     screener_scan,
     session_breakout_scan,
 )
@@ -71,6 +72,7 @@ TOOLS: dict[str, Any] = {
     "indicator_rsi": indicator_rsi,
     "screener_scan": screener_scan,
     "session_breakout_scan": session_breakout_scan,
+    "order_block_screener_scan": order_block_screener_scan,
     # Legacy backtest_strategy (deprecated — deterministic error response)
     "backtest_strategy": backtest_strategy,
 }
@@ -391,7 +393,12 @@ TOOL_SCHEMAS: list[Tool] = [
         inputSchema={
             "type": "object",
             "properties": {
-                "symbols": {"type": "array", "items": {"type": "string"}, "nullable": True},
+                "symbols": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "nullable": True,
+                },
                 "filters": {"type": "array", "items": {"type": "string"}, "nullable": True},
                 "min_score": {"type": "number", "default": 0.0},
                 "exchange": {"type": "string", "default": "binance"},
@@ -405,13 +412,61 @@ TOOL_SCHEMAS: list[Tool] = [
         inputSchema={
             "type": "object",
             "properties": {
-                "session": {"type": "string", "description": "Session type: asia, london, ny (new_york accepted as alias for ny)"},
-                "symbols": {"type": "array", "items": {"type": "string"}, "nullable": True},
+                "session": {
+                    "type": "string",
+                    "description": "Session type: asia, london, ny (new_york accepted as alias for ny)",
+                },
+                "symbols": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "nullable": True,
+                },
                 "exchange": {"type": "string", "default": "binance"},
-                "proximity_pct": {"type": "number", "default": 1.0, "description": "Near-breakout threshold as percentage"},
-                "volume_multiplier": {"type": "number", "default": 2.0, "description": "Volume confirmation multiplier"},
+                "proximity_pct": {
+                    "type": "number",
+                    "default": 1.0,
+                    "description": "Near-breakout threshold as percentage",
+                },
+                "volume_multiplier": {
+                    "type": "number",
+                    "default": 2.0,
+                    "description": "Volume confirmation multiplier",
+                },
             },
             "required": ["session"],
+        },
+    ),
+    # ── Order-block screener (ENG-36) ────────────────────────────────────────────────
+    Tool(
+        name="order_block_screener_scan",
+        description="Order-block screener. Scans symbols across fixed horizons (1h/1d and 4h/7d) for active order-block zones. Returns one best candidate per (symbol, horizon) job.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "symbols": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "nullable": True,
+                },
+                "exchange": {"type": "string", "default": "binance"},
+                "atr_period": {
+                    "type": "integer",
+                    "default": 14,
+                    "description": "ATR period for order-block detection (range 2-200)",
+                },
+                "impulse_atr_mult": {
+                    "type": "number",
+                    "default": 1.0,
+                    "description": "Body size must be >= impulse_atr_mult * ATR (range >0 to 10)",
+                },
+                "max_zone_age_bars": {
+                    "type": "integer",
+                    "default": 20,
+                    "description": "Max zone age in bars (range 1-500)",
+                },
+            },
         },
     ),
     # ── Analysis tools (ENG-28) ──────────────────────────────────────────────────
@@ -662,6 +717,8 @@ def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> str | None:
             pass
         elif not isinstance(symbols, list):
             return "symbols must be an array of strings"
+        elif len(symbols) == 0:
+            return "symbols must contain at least 1 entry"
         elif len(symbols) > MAX_SCAN_SYMBOLS:
             return f"symbols must contain at most {MAX_SCAN_SYMBOLS} entries"
         else:
@@ -701,6 +758,8 @@ def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> str | None:
         if symbols is not None:
             if not isinstance(symbols, list):
                 return "symbols must be an array of strings"
+            if len(symbols) == 0:
+                return "symbols must contain at least 1 entry"
             if len(symbols) > MAX_SCAN_SYMBOLS:
                 return f"symbols must contain at most {MAX_SCAN_SYMBOLS} entries"
             for i, sym in enumerate(symbols):
@@ -728,6 +787,47 @@ def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> str | None:
             return "volume_multiplier must be finite"
         if volume_multiplier < 0:
             return "volume_multiplier must be non-negative"
+
+        return None
+    # Order-block screener (ENG-36)
+    if name == "order_block_screener_scan":
+        symbols = arguments.get("symbols")
+        if symbols is not None:
+            if not isinstance(symbols, list):
+                return "symbols must be an array of strings"
+            if len(symbols) == 0:
+                return "symbols must contain at least 1 entry"
+            if len(symbols) > MAX_SCAN_SYMBOLS:
+                return f"symbols must contain at most {MAX_SCAN_SYMBOLS} entries"
+            for i, sym in enumerate(symbols):
+                if err := validate_symbol(sym, f"symbols[{i}]"):
+                    return err
+
+        exchange = arguments.get("exchange", "binance")
+        if not isinstance(exchange, str):
+            return "exchange must be a string"
+        if exchange.lower() not in SUPPORTED_EXCHANGES:
+            return f"exchange must be one of: {', '.join(sorted(SUPPORTED_EXCHANGES))}"
+
+        atr_period = arguments.get("atr_period", 14)
+        if isinstance(atr_period, bool) or not isinstance(atr_period, int):
+            return "atr_period must be an integer"
+        if atr_period < 2 or atr_period > 200:
+            return "atr_period must be between 2 and 200"
+
+        impulse_atr_mult = arguments.get("impulse_atr_mult", 1.0)
+        if isinstance(impulse_atr_mult, bool) or not isinstance(impulse_atr_mult, (int, float)):
+            return "impulse_atr_mult must be a number"
+        if not math.isfinite(impulse_atr_mult):
+            return "impulse_atr_mult must be finite"
+        if impulse_atr_mult <= 0 or impulse_atr_mult > 10:
+            return "impulse_atr_mult must be greater than 0 and at most 10"
+
+        max_zone_age_bars = arguments.get("max_zone_age_bars", 20)
+        if isinstance(max_zone_age_bars, bool) or not isinstance(max_zone_age_bars, int):
+            return "max_zone_age_bars must be an integer"
+        if max_zone_age_bars < 1 or max_zone_age_bars > 500:
+            return "max_zone_age_bars must be between 1 and 500"
 
         return None
     return None

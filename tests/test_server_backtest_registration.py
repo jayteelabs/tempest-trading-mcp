@@ -208,6 +208,15 @@ class TestValidateToolArguments:
 class TestScreenerValidateToolArguments:
     """Tests for screener-specific validation in validate_tool_arguments."""
 
+    def test_screener_schema_rejects_empty_symbol_arrays(self):
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "screener_scan":
+                props = tool.inputSchema.get("properties", {})
+                assert props["symbols"].get("minItems") == 1
+                break
+        else:
+            raise AssertionError("screener_scan schema not found")
+
     def test_screener_symbols_are_capped(self):
         result = validate_tool_arguments(
             "screener_scan",
@@ -231,10 +240,10 @@ class TestScreenerValidateToolArguments:
 
         assert result == "exchange must be one of: binance, bybit, coinbase, kraken"
 
-    def test_screener_empty_symbols_remain_valid(self):
+    def test_screener_empty_symbols_are_rejected(self):
         result = validate_tool_arguments("screener_scan", {"symbols": []})
 
-        assert result is None
+        assert result == "symbols must contain at least 1 entry"
 
 
 class TestPDHSchemaParams:
@@ -735,6 +744,7 @@ class TestSessionBreakoutScanRegistration:
             if tool.name == "session_breakout_scan":
                 props = tool.inputSchema.get("properties", {})
                 assert "symbols" in props
+                assert props["symbols"].get("minItems") == 1
 
     def test_session_breakout_scan_schema_has_optional_exchange(self):
         """session_breakout_scan schema has exchange as optional param."""
@@ -855,3 +865,173 @@ class TestSessionBreakoutScanValidateArguments:
         )
         assert result is not None
         assert "symbols" in result.lower()
+
+    def test_session_breakout_scan_rejects_empty_symbols(self):
+        result = validate_tool_arguments(
+            "session_breakout_scan",
+            {"session": "ny", "symbols": []},
+        )
+
+        assert result == "symbols must contain at least 1 entry"
+
+
+class TestOrderBlockScreenerScanRegistration:
+    """Tests for order_block_screener_scan server registration — ENG-36."""
+
+    def test_order_block_screener_scan_in_tools(self):
+        """order_block_screener_scan is registered in TOOLS."""
+        from tempest_mcp.server import TOOLS
+
+        assert "order_block_screener_scan" in TOOLS
+
+    def test_order_block_screener_scan_in_schemas(self):
+        """order_block_screener_scan is listed in TOOL_SCHEMAS."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        schema_names = {tool.name for tool in TOOL_SCHEMAS}
+        assert "order_block_screener_scan" in schema_names
+
+    def test_order_block_screener_scan_schema_has_optional_symbols(self):
+        """order_block_screener_scan schema has symbols as optional param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "order_block_screener_scan":
+                props = tool.inputSchema.get("properties", {})
+                assert "symbols" in props
+                assert props["symbols"].get("minItems") == 1
+
+    def test_order_block_screener_scan_schema_has_optional_exchange(self):
+        """order_block_screener_scan schema has exchange as optional param with default binance."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "order_block_screener_scan":
+                props = tool.inputSchema.get("properties", {})
+                assert "exchange" in props
+                assert props["exchange"].get("default") == "binance"
+
+    def test_order_block_screener_scan_schema_has_atr_period(self):
+        """order_block_screener_scan schema has atr_period with default 14."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "order_block_screener_scan":
+                props = tool.inputSchema.get("properties", {})
+                assert "atr_period" in props
+                assert props["atr_period"].get("default") == 14
+
+    def test_order_block_screener_scan_schema_has_impulse_atr_mult(self):
+        """order_block_screener_scan schema has impulse_atr_mult with default 1.0."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "order_block_screener_scan":
+                props = tool.inputSchema.get("properties", {})
+                assert "impulse_atr_mult" in props
+                assert props["impulse_atr_mult"].get("default") == 1.0
+
+    def test_order_block_screener_scan_schema_has_max_zone_age_bars(self):
+        """order_block_screener_scan schema has max_zone_age_bars with default 20."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "order_block_screener_scan":
+                props = tool.inputSchema.get("properties", {})
+                assert "max_zone_age_bars" in props
+                assert props["max_zone_age_bars"].get("default") == 20
+
+
+class TestOrderBlockScreenerScanValidateArguments:
+    """Tests for validate_tool_arguments with order_block_screener_scan — ENG-36."""
+
+    def test_order_block_screener_scan_accepts_valid_arguments(self):
+        """order_block_screener_scan accepts valid arguments."""
+        result = validate_tool_arguments(
+            "order_block_screener_scan",
+            {"symbols": ["BTC/USDT"], "exchange": "binance", "atr_period": 14},
+        )
+        assert result is None
+
+    def test_order_block_screener_scan_validates_atr_period_range(self):
+        """order_block_screener_scan validates atr_period range."""
+        result = validate_tool_arguments(
+            "order_block_screener_scan",
+            {"atr_period": 1},
+        )
+        assert result is not None
+        assert "atr_period" in result.lower()
+
+        result = validate_tool_arguments(
+            "order_block_screener_scan",
+            {"atr_period": 201},
+        )
+        assert result is not None
+        assert "atr_period" in result.lower()
+
+    def test_order_block_screener_scan_validates_impulse_atr_mult_range(self):
+        """order_block_screener_scan validates impulse_atr_mult range."""
+        result = validate_tool_arguments(
+            "order_block_screener_scan",
+            {"impulse_atr_mult": 0.0},
+        )
+        assert result is not None
+        assert "impulse_atr_mult" in result.lower()
+
+        result = validate_tool_arguments(
+            "order_block_screener_scan",
+            {"impulse_atr_mult": 11.0},
+        )
+        assert result is not None
+
+    def test_order_block_screener_scan_validates_max_zone_age_bars_range(self):
+        """order_block_screener_scan validates max_zone_age_bars range."""
+        result = validate_tool_arguments(
+            "order_block_screener_scan",
+            {"max_zone_age_bars": 0},
+        )
+        assert result is not None
+        assert "max_zone_age_bars" in result.lower()
+
+        result = validate_tool_arguments(
+            "order_block_screener_scan",
+            {"max_zone_age_bars": 501},
+        )
+        assert result is not None
+
+    def test_order_block_screener_scan_validates_exchange(self):
+        """order_block_screener_scan validates exchange."""
+        result = validate_tool_arguments(
+            "order_block_screener_scan",
+            {"exchange": "invalid_exchange"},
+        )
+        assert result is not None
+        assert "exchange" in result.lower()
+
+    def test_order_block_screener_scan_validates_symbols_list(self):
+        """order_block_screener_scan validates symbols list."""
+        result = validate_tool_arguments(
+            "order_block_screener_scan",
+            {"symbols": "not_a_list"},
+        )
+        assert result is not None
+        assert "symbols" in result.lower()
+
+    def test_order_block_screener_scan_validates_symbols_cap(self):
+        """order_block_screener_scan validates symbols list max size."""
+        from tempest_mcp.tools.screener_tools import MAX_SCAN_SYMBOLS
+
+        result = validate_tool_arguments(
+            "order_block_screener_scan",
+            {"symbols": ["BTC/USDT"] * (MAX_SCAN_SYMBOLS + 1)},
+        )
+        assert result is not None
+        assert "symbols" in result.lower()
+
+    def test_order_block_screener_scan_rejects_empty_symbols(self):
+        result = validate_tool_arguments(
+            "order_block_screener_scan",
+            {"symbols": []},
+        )
+
+        assert result == "symbols must contain at least 1 entry"

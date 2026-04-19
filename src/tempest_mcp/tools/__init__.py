@@ -7,7 +7,11 @@ from tempest_mcp.tools.backtest_tools import (
 )
 from tempest_mcp.tools.indicator_tools import indicator_rsi
 from tempest_mcp.tools.market_tools import fetch_klines, fetch_orderbook, fetch_ticker
-from tempest_mcp.tools.screener_tools import screener_scan, session_breakout_scan
+from tempest_mcp.tools.screener_tools import (
+    order_block_screener_scan,
+    screener_scan,
+    session_breakout_scan,
+)
 
 __all__ = [
     # Market tools
@@ -21,6 +25,7 @@ __all__ = [
     # Screener tools
     "screener_scan",
     "session_breakout_scan",  # ENG-35
+    "order_block_screener_scan",  # ENG-36
     # Backtest tool registry for server registration
     "BACKTEST_TOOLS",
     # Analysis tools (ENG-28)
