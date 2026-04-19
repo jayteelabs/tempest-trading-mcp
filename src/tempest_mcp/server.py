@@ -587,6 +587,8 @@ TOOL_SCHEMAS: list[Tool] = [
                 "wave2_retrace_band": {
                     "type": "array",
                     "items": {"type": "number"},
+                    "minItems": 2,
+                    "maxItems": 2,
                     "description": "Acceptable retracement range for wave 2 as [min, max]",
                 },
                 "wave3_extension_min": {"type": "number", "default": 1.0},
@@ -594,12 +596,16 @@ TOOL_SCHEMAS: list[Tool] = [
                 "waveb_retrace_band": {
                     "type": "array",
                     "items": {"type": "number"},
+                    "minItems": 2,
+                    "maxItems": 2,
                     "description": "Acceptable retracement range for wave B as [min, max]",
                 },
                 "wavec_extension_min": {"type": "number", "default": 1.0},
                 "degree_thresholds": {
                     "type": "array",
                     "items": {"type": "number"},
+                    "minItems": 2,
+                    "maxItems": 2,
                     "description": "Thresholds for degree classification as [micro_max, minor_max]",
                 },
                 "include_rejected": {"type": "boolean", "default": True},

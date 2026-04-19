@@ -554,14 +554,34 @@ async def detect_elliot_wave(
     if not isinstance(min_swing_pct, (int, float)) or not (0.0 < min_swing_pct < 1.0):
         return _validation_error("min_swing_pct must be a float in (0.0, 1.0)")
 
-    # 2. Validate wave params
-    if wave2_retrace_band is not None:
-        if not isinstance(wave2_retrace_band, tuple) or len(wave2_retrace_band) != 2:
-            return _validation_error("wave2_retrace_band must be a tuple of (min, max)")
-        if not (0.0 < wave2_retrace_band[0] < wave2_retrace_band[1] < 1.0):
-            return _validation_error(
-                "wave2_retrace_band values must satisfy 0 < min < max < 1"
-            )
+    # 2. Validate and coerce wave band/threshold params (accept list or tuple, coerce to tuple)
+    def _coerce_pair(
+        value: Any,
+        field_name: str,
+        validate_range: tuple[float, float] | None = None,
+    ) -> tuple[float, float] | None:
+        """Coerce list-or-tuple to tuple, validate length==2 and optional numeric range."""
+        if value is None:
+            return None
+        if not isinstance(value, (list, tuple)):
+            return _validation_error(f"{field_name} must be a list or tuple of (min, max)")
+        if len(value) != 2:
+            return _validation_error(f"{field_name} must have exactly 2 elements (min, max)")
+        try:
+            coerced = (float(value[0]), float(value[1]))
+        except (TypeError, ValueError):
+            return _validation_error(f"{field_name} values must be numeric")
+        if validate_range is not None:
+            lo, hi = validate_range
+            if not (lo < coerced[0] < coerced[1] < hi):
+                return _validation_error(
+                    f"{field_name} values must satisfy {lo} < min < max < {hi}"
+                )
+        return coerced
+
+    wave2_retrace_band = _coerce_pair(wave2_retrace_band, "wave2_retrace_band", validate_range=(0.0, 1.0))
+    if isinstance(wave2_retrace_band, dict):  # error envelope returned
+        return wave2_retrace_band
 
     if not isinstance(wave3_extension_min, (int, float)) or wave3_extension_min < 0.0:
         return _validation_error("wave3_extension_min must be a non-negative number")
@@ -569,26 +589,20 @@ async def detect_elliot_wave(
     if not isinstance(wave4_retrace_max, (int, float)) or not (0.0 < wave4_retrace_max < 1.0):
         return _validation_error("wave4_retrace_max must be a float in (0.0, 1.0)")
 
-    if waveb_retrace_band is not None:
-        if not isinstance(waveb_retrace_band, tuple) or len(waveb_retrace_band) != 2:
-            return _validation_error("waveb_retrace_band must be a tuple of (min, max)")
-        if not (0.0 < waveb_retrace_band[0] < waveb_retrace_band[1] < 1.0):
-            return _validation_error(
-                "waveb_retrace_band values must satisfy 0 < min < max < 1"
-            )
+    waveb_retrace_band = _coerce_pair(waveb_retrace_band, "waveb_retrace_band", validate_range=(0.0, 1.0))
+    if isinstance(waveb_retrace_band, dict):  # error envelope returned
+        return waveb_retrace_band
 
     if not isinstance(wavec_extension_min, (int, float)) or wavec_extension_min < 0.0:
         return _validation_error("wavec_extension_min must be a non-negative number")
 
-    if degree_thresholds is not None:
-        if not isinstance(degree_thresholds, tuple) or len(degree_thresholds) != 2:
-            return _validation_error(
-                "degree_thresholds must be a tuple of (micro_max, minor_max)"
-            )
-        if not (0.0 < degree_thresholds[0] < degree_thresholds[1]):
-            return _validation_error(
-                "degree_thresholds must satisfy 0 < micro_max < minor_max"
-            )
+    degree_thresholds = _coerce_pair(degree_thresholds, "degree_thresholds", validate_range=(0.0, float("inf")))
+    if isinstance(degree_thresholds, dict):  # error envelope returned
+        return degree_thresholds
+    if degree_thresholds is not None and not (0.0 < degree_thresholds[0] < degree_thresholds[1]):
+        return _validation_error(
+            "degree_thresholds must satisfy 0 < micro_max < minor_max"
+        )
 
     # 3. Parse shared window args
     try:

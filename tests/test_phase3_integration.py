@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import math
 import warnings
-from datetime import timedelta, timezone
 
 import ccxt
 import numpy as np
@@ -55,25 +54,41 @@ def _fetch_live_ohlcv_with_retry(
 ) -> pd.DataFrame:
     """Fetch live OHLCV with bounded retry for transient upstream failures.
 
+    Treats empty DataFrames as transient (CCXT can return empty df on rate-limit
+    or network hiccups without throwing). Retries bounded times, then skips with
+    a loud warning if no usable data arrives.
     Skips with a loud diagnostic warning only when failure is clearly transient
-    (exchange unavailable, rate-limited, timeout, network instability).
+    (exchange unavailable, rate-limited, timeout, network instability, empty df).
     Hard-fails on contract/sanity violations once data is fetched.
     """
     adapter = get_live_adapter()
-    last_exception: Exception | None = None
+    last_transient: str | None = None
 
     for attempt in range(1, max_retries + 1):
         try:
             df = adapter.fetch_ohlcv_live(symbol, timeframe=timeframe, limit=limit)
+            # Treat empty DataFrame as transient — CCXT can return empty df on
+            # rate-limit or network hiccups without throwing an exception.
+            if df.empty:
+                raise _EmptyDataFrameTranscient("fetch_ohlcv_live returned empty DataFrame")
             _assert_ohlcv_contract(df, symbol, timeframe)
             return df
         except AssertionError:
             raise
+        except _EmptyDataFrameTranscient as exc:
+            last_transient = str(exc)
+            if attempt < max_retries:
+                warnings.warn(
+                    f"[{symbol} {timeframe}] Attempt {attempt}/{max_retries} failed: "
+                    f"empty DataFrame (transient). Retrying...",
+                    stacklevel=2,
+                )
+            continue
         except Exception as exc:  # noqa: BLE001
             if not isinstance(exc, TRANSIENT_FETCH_EXCEPTIONS):
                 raise
 
-            last_exception = exc
+            last_transient = f"{type(exc).__name__}: {exc}"
             if attempt < max_retries:
                 warnings.warn(
                     f"[{symbol} {timeframe}] Attempt {attempt}/{max_retries} failed: "
@@ -82,12 +97,15 @@ def _fetch_live_ohlcv_with_retry(
                 )
             continue
 
-    exc_class = type(last_exception).__name__ if last_exception else "Unknown"
-    exc_msg = str(last_exception) if last_exception else "no exception details"
     raise pytest.skip.Exception(
         f"[{symbol} {timeframe}] Bounded retries ({max_retries}) exhausted. "
-        f"Skipping due to transient upstream CCXT instability: {exc_class}: {exc_msg}"
+        f"Skipping due to transient upstream CCXT instability: {last_transient or 'unknown'}"
     )
+
+
+class _EmptyDataFrameTranscient(Exception):
+    """Sentinel marking an empty DataFrame from fetch_ohlcv_live as transient."""
+    pass
 
 
 def _assert_ohlcv_contract(df: pd.DataFrame, symbol: str, timeframe: str) -> None:
