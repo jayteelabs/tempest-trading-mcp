@@ -15,7 +15,7 @@ Generated: 2026-04-13
 
 ## Conventions
 - Error handling: custom exception hierarchy plus empty-result fallback in adapters
-- Module structure: `src/tempest_mcp/` package with `data/`, `tools/`, `models/`, `indicators/`
+- Module structure: `src/tempest_mcp/` package with `data/`, `tools/`, `models/`, `indicators/`, `sentiment/`
 - Naming: snake_case modules/functions, dataclasses in `models/`
 - Tests: `tests/` with focused adapter/indicator/backtest modules; some tests marked `integration`
 
