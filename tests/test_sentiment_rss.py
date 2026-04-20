@@ -80,6 +80,11 @@ class TestExtractBaseToken:
         assert _extract_base_token("BTCUSD") == "BTC"
         assert _extract_base_token("ETHUSD") == "ETH"
 
+    def test_extended_quote_pairs(self):
+        assert _extract_base_token("SOLUSDC") == "SOL"
+        assert _extract_base_token("XRPFDUSD") == "XRP"
+        assert _extract_base_token("ADATUSD") == "ADA"
+
     def test_btc_pair(self):
         assert _extract_base_token("ETHBTC") == "ETH"
 
@@ -121,6 +126,15 @@ class TestSymbolMatchesText:
 
     def test_doge_alias_match(self):
         assert _symbol_matches_text("DOGE", "DOGE", "Dogecoin community grows")
+
+    def test_solana_alias_match(self):
+        assert _symbol_matches_text("SOL", "SOL", "Solana ecosystem expands")
+
+    def test_cardano_alias_match(self):
+        assert _symbol_matches_text("ADA", "ADA", "Cardano roadmap update")
+
+    def test_ripple_alias_match(self):
+        assert _symbol_matches_text("XRP", "XRP", "Ripple sees renewed attention")
 
     def test_description_matching(self):
         assert _symbol_matches_text("BTC", "BTC", "Bitcoin is moving")
@@ -439,6 +453,22 @@ class TestRSSSentimentAnalyzerError:
         assert result["status"] == "no_results"
         assert result["items"] == []
 
+    def test_later_feed_failure_preserves_earlier_matches(self):
+        import httpx
+
+        analyzer = RSSSentimentAnalyzer(feeds=("https://feed1.com/rss", "https://feed2.com/rss"))
+
+        def fake_fetch(feed_url):
+            if feed_url == "https://feed1.com/rss":
+                return [make_rss_entry("BTC strength returns")]
+            raise httpx.TimeoutException("timeout")
+
+        with patch.object(analyzer, "_fetch_and_parse_feed", side_effect=fake_fetch):
+            result = analyzer.analyze("BTC")
+
+        assert result["status"] == "ok"
+        assert [item["title"] for item in result["items"]] == ["BTC strength returns"]
+
     def test_http_errors_return_error_but_programming_errors_surface(self):
         analyzer = RSSSentimentAnalyzer(feeds=("https://example.com/rss",))
 
@@ -497,6 +527,16 @@ class TestRSSSentimentAnalyzerError:
         assert result["status"] == "ok"
         assert result["symbol"] == "BTC"
         assert [item["title"] for item in result["items"]] == ["BTC momentum returns"]
+
+    def test_altcoin_aliases_match_common_quote_pairs(self):
+        analyzer = RSSSentimentAnalyzer(feeds=("https://example.com/rss",))
+        entries = [make_rss_entry("Solana ecosystem momentum builds")]
+
+        with patch.object(analyzer, "_fetch_and_parse_feed", return_value=entries):
+            result = analyzer.analyze("SOLUSDC")
+
+        assert result["status"] == "ok"
+        assert [item["title"] for item in result["items"]] == ["Solana ecosystem momentum builds"]
 
 
 class TestRSSSentimentAnalyzerBoostBehavior:

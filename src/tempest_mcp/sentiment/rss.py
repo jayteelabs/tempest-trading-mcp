@@ -26,10 +26,27 @@ _DEFAULT_RSS_FEEDS: tuple[str, ...] = (
 # ---------------------------------------------------------------------------
 # Symbol aliases for common tokens
 # ---------------------------------------------------------------------------
+_QUOTE_SUFFIXES: tuple[str, ...] = (
+    "USDT",
+    "USDC",
+    "FDUSD",
+    "TUSD",
+    "USD",
+    "BTC",
+    "ETH",
+    "BNB",
+    "EUR",
+)
+
 _SYMBOL_ALIASES: dict[str, tuple[str, ...]] = {
     "BTC": ("bitcoin",),
     "ETH": ("ethereum",),
     "DOGE": ("dogecoin",),
+    "SOL": ("solana",),
+    "ADA": ("cardano",),
+    "XRP": ("ripple",),
+    "LTC": ("litecoin",),
+    "BNB": ("binance coin",),
 }
 
 # ---------------------------------------------------------------------------
@@ -78,7 +95,7 @@ def _extract_base_token(symbol: str) -> str:
         return s.split("/")[0]
     if "-" in s:
         return s.split("-")[0]
-    for sep in ("USDT", "USD", "BTC", "ETH"):
+    for sep in _QUOTE_SUFFIXES:
         if s.endswith(sep) and len(s) > len(sep):
             return s[: -len(sep)]
     return s
@@ -245,12 +262,11 @@ class RSSSentimentAnalyzer:
                 ValueError("symbol must be a non-empty string"),
             )
 
-        base_token = _extract_base_token(validated_symbol)
+        normalized_symbol = validated_symbol
+        base_token = _extract_base_token(normalized_symbol)
         all_items: list[dict[str, Any]] = []
         failed_feeds: list[Exception] = []
         successful_feeds = 0
-
-        symbol = validated_symbol
 
         for feed_url in self.feeds:
             try:
@@ -259,7 +275,7 @@ class RSSSentimentAnalyzer:
                 logger.warning(
                     "rss_fetch_failed",
                     feed=feed_url,
-                    symbol=symbol,
+                    symbol=normalized_symbol,
                     error=str(exc),
                     error_type=type(exc).__name__,
                 )
@@ -269,7 +285,7 @@ class RSSSentimentAnalyzer:
                 logger.warning(
                     "rss_parse_failed",
                     feed=feed_url,
-                    symbol=symbol,
+                    symbol=normalized_symbol,
                     error=str(exc),
                 )
                 failed_feeds.append(exc)
@@ -281,22 +297,22 @@ class RSSSentimentAnalyzer:
                 title = _coerce_text(entry.get("title"))
                 description = _coerce_text(entry.get("description"))
                 # Match against title and description
-                if not _symbol_matches_text(symbol, base_token, title) and not _symbol_matches_text(
-                    symbol, base_token, description
+                if not _symbol_matches_text(normalized_symbol, base_token, title) and not _symbol_matches_text(
+                    normalized_symbol, base_token, description
                 ):
                     continue
                 item_record = self._build_item_record(feed_url, entry, title)
                 all_items.append(item_record)
 
         if failed_feeds and successful_feeds == 0:
-            return self._error_result(symbol, fetched_at, failed_feeds[0])
+            return self._error_result(normalized_symbol, fetched_at, failed_feeds[0])
 
         if not all_items:
-            return self._no_results_result(symbol, fetched_at)
+            return self._no_results_result(normalized_symbol, fetched_at)
 
         summary = self._summarize_items(all_items)
         return {
-            "symbol": symbol,
+            "symbol": normalized_symbol,
             "fetched_at": fetched_at,
             "feeds": list(self.feeds),
             "items": all_items,
