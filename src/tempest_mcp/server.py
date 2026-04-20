@@ -13,6 +13,7 @@ from mcp.server import Server
 from mcp.server.sse import SseServerTransport
 from mcp.types import TextContent, Tool
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -43,9 +44,9 @@ from tempest_mcp.tools.backtest_window import SUPPORTED_TIMEFRAMES
 from tempest_mcp.tools.screener_tools import MAX_SCAN_SYMBOLS, SUPPORTED_EXCHANGES
 
 # Server listens on port 9001 for HTTP/SSE transport
-# Binds to 127.0.0.1 — portmapped externally via Docker
+# Binds to 0.0.0.0 so Docker port publishing can reach the app.
 SERVER_PORT = 9001
-SERVER_HOST = "127.0.0.1"
+SERVER_HOST = "0.0.0.0"
 
 # Rate limiting: max requests per client per window
 RATE_LIMIT_REQUESTS = 100
@@ -770,7 +771,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             # Decrement on connection close
             async def decrement_sse():
                 try:
-                    await call_next(request)
+                    return await call_next(request)
                 finally:
                     async with self._global_lock:
                         self._sse_connections[client_ip] = max(
@@ -1035,23 +1036,35 @@ def create_app() -> Starlette:
                 )
             ]
 
-    transport = SseServerTransport("/messages")
+    transport = SseServerTransport("/messages/")
 
-    async def sse_handler(scope: dict, receive: callable, send: callable) -> None:
-        # TODO: Add authentication before allowing SSE connection.
-        # Currently the service binds to 127.0.0.1 and is accessible only via
-        # Docker port mapping + VPS firewall + Tailscale. Production deployment
-        # may require API key, Bearer token, or mTLS. Investigate MCP HTTP/SSE
-        # auth patterns before exposing beyond trusted networks.
-        async with transport.connect_sse(scope, receive, send) as (read_stream, write_stream):
-            await server.run(
-                read_stream,
-                write_stream,
-                server.create_initialization_options(),
-            )
+    class SseApp:
+        def __init__(self, server: Server, transport: SseServerTransport):
+            self._server = server
+            self._transport = transport
 
-    async def message_handler(scope: dict, receive: callable, send: callable) -> None:
-        await transport.handle_post_message(scope, receive, send)
+        async def __call__(self, scope: dict, receive: callable, send: callable) -> None:
+            # TODO: Add authentication before allowing SSE connection.
+            # Currently the service binds to 127.0.0.1 and is accessible only via
+            # Docker port mapping + VPS firewall + Tailscale. Production deployment
+            # may require API key, Bearer token, or mTLS. Investigate MCP HTTP/SSE
+            # auth patterns before exposing beyond trusted networks.
+            async with self._transport.connect_sse(scope, receive, send) as (read_stream, write_stream):
+                await self._server.run(
+                    read_stream,
+                    write_stream,
+                    self._server.create_initialization_options(),
+                )
+
+    class MessageApp:
+        def __init__(self, transport: SseServerTransport):
+            self._transport = transport
+
+        async def __call__(self, scope: dict, receive: callable, send: callable) -> None:
+            await self._transport.handle_post_message(scope, receive, send)
+
+    sse_handler = SseApp(server, transport)
+    message_handler = MessageApp(transport)
 
     @asynccontextmanager
     async def lifespan(app: Starlette):
@@ -1068,9 +1081,10 @@ def create_app() -> Starlette:
 
     return Starlette(
         middleware=[
-            (
+            Middleware(
                 RateLimitMiddleware,
-                {"max_requests": RATE_LIMIT_REQUESTS, "window_seconds": RATE_LIMIT_WINDOW_SECONDS},
+                max_requests=RATE_LIMIT_REQUESTS,
+                window_seconds=RATE_LIMIT_WINDOW_SECONDS,
             ),
         ],
         routes=[

@@ -63,11 +63,16 @@ cp .env.example .env
 
 ```bash
 # Build the image
-docker build -t tempest-tradingview-mcp .
+sg docker -c "docker build -t tempest-tradingview-mcp ."
 
-# Run the container
-docker run --rm tempest-tradingview-mcp
+# Run the container with the MCP port published
+sg docker -c "docker run --rm -p 9001:9001 tempest-tradingview-mcp"
 ```
+
+Notes:
+- The MCP server must bind to `0.0.0.0` inside the container for Docker port publishing to work.
+- Binding to `127.0.0.1` inside the container makes `/sse` reachable only from inside the container and breaks host-side MCP clients.
+- For live verification, use a real SSE/MCP handshake instead of only checking whether port `9001` is open.
 
 ### Docker Compose
 
