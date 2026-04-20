@@ -79,6 +79,11 @@ def _coerce_text(value: Any) -> str:
     return str(value)
 
 
+def _default_if_none(value: Any, default: Any) -> Any:
+    """Preserve legitimate falsy values while defaulting missing Reddit fields."""
+    return default if value is None else value
+
+
 def _symbol_matches_title(symbol: str, base_token: str, title: str) -> bool:
     """Return True if the title mentions the raw symbol, base token, or a known alias."""
     lower_title = _coerce_text(title).lower()
@@ -174,7 +179,7 @@ class RedditSentimentAnalyzer:
     _vader: Any = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        # Lazily-created HTTP client; raise_for_status ensures 4xx/5xx become exceptions
+        # HTTP client used for subreddit fetches; raise_for_status surfaces 4xx/5xx failures.
         self._http_client = httpx.Client(
             timeout=10.0,
             headers={"User-Agent": "tempest-tradingview-mcp/1.0"},
@@ -187,6 +192,19 @@ class RedditSentimentAnalyzer:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def close(self) -> None:
+        """Release the underlying HTTP client resources."""
+        if self._http_client is None:
+            return
+        self._http_client.close()
+        self._http_client = None
+
+    def __enter__(self) -> RedditSentimentAnalyzer:
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        self.close()
 
     def analyze(self, symbol: str) -> dict[str, Any]:
         """Analyze Reddit sentiment for a trading symbol.
@@ -216,10 +234,15 @@ class RedditSentimentAnalyzer:
         for subreddit in self.subreddits:
             try:
                 raw_posts = self._fetch_subreddit_posts(subreddit)
-            except Exception as exc:  # HTTPStatusError (incl. 429), httpx.HTTPError, timeout, …
-                logger.warning("reddit_fetch_failed", subreddit=subreddit, error=str(exc))
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "reddit_fetch_failed",
+                    subreddit=subreddit,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
                 # Deterministic full-error envelope: any fetch failure → "error"
-                return self._error_result(symbol, fetched_at, str(exc))
+                return self._error_result(symbol, fetched_at, exc)
 
             for raw in raw_posts:
                 title = _coerce_text(raw.get("title"))
@@ -251,7 +274,13 @@ class RedditSentimentAnalyzer:
         url = f"https://www.reddit.com/r/{subreddit}/hot.json?limit=25"
         response = self._http_client.get(url)
         response.raise_for_status()
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise httpx.DecodingError(
+                f"Invalid JSON returned by Reddit for r/{subreddit}",
+                request=response.request,
+            ) from exc
         children = data.get("data", {}).get("children", [])
         return [child.get("data", {}) for child in children]
 
@@ -268,11 +297,11 @@ class RedditSentimentAnalyzer:
         return {
             "subreddit": subreddit,
             "title": title,
-            "score": raw.get("score", 0) or 0,
-            "num_comments": raw.get("num_comments", 0) or 0,
-            "upvote_ratio": raw.get("upvote_ratio", 0.0) or 0.0,
+            "score": _default_if_none(raw.get("score"), 0),
+            "num_comments": _default_if_none(raw.get("num_comments"), 0),
+            "upvote_ratio": _default_if_none(raw.get("upvote_ratio"), 0.0),
             "flair": raw.get("link_flair_text"),
-            "created_utc": raw.get("created_utc", 0.0) or 0.0,
+            "created_utc": _default_if_none(raw.get("created_utc"), 0.0),
             "sentiment": {
                 "vader_pos": round(vader_scores["pos"], 4),
                 "vader_neu": round(vader_scores["neu"], 4),
@@ -316,9 +345,15 @@ class RedditSentimentAnalyzer:
             "status": "no_results",
         }
 
-    def _error_result(self, symbol: str, fetched_at: str, reason: str) -> dict[str, Any]:
+    def _error_result(
+        self, symbol: str, fetched_at: str, reason: Exception | str
+    ) -> dict[str, Any]:
         """Deterministic envelope returned on any fetch failure."""
-        logger.warning("reddit_analyze_error", symbol=symbol, reason=reason)
+        reason_text = str(reason)
+        log_kwargs = {"symbol": symbol, "reason": reason_text}
+        if isinstance(reason, Exception):
+            log_kwargs["error_type"] = type(reason).__name__
+        logger.warning("reddit_analyze_error", **log_kwargs)
         return {
             "symbol": symbol,
             "fetched_at": fetched_at,

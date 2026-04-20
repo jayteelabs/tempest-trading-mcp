@@ -391,6 +391,26 @@ class TestRedditSentimentAnalyzerError:
 
         assert result["status"] == "error"
 
+    def test_http_errors_return_error_but_programming_errors_surface(self):
+        analyzer = RedditSentimentAnalyzer(subreddits=("CryptoCurrency",))
+
+        with patch.object(analyzer, "_fetch_subreddit_posts", side_effect=TypeError("bug")):
+            with pytest.raises(TypeError, match="bug"):
+                analyzer.analyze("BTC")
+
+    def test_invalid_json_returns_error(self):
+        analyzer = RedditSentimentAnalyzer(subreddits=("CryptoCurrency",))
+        response = MagicMock()
+        response.raise_for_status.return_value = None
+        response.json.side_effect = ValueError("bad json")
+        response.request = MagicMock()
+
+        with patch.object(analyzer._http_client, "get", return_value=response):
+            result = analyzer.analyze("BTC")
+
+        assert result["status"] == "error"
+        assert result["posts"] == []
+
 
 class TestRedditSentimentAnalyzerBoostBehavior:
     """Tests for keyword boost application and capping."""
@@ -525,3 +545,9 @@ class TestPackageImportStability:
             "ethereum",
             "dogecoin",
         )
+
+    def test_context_manager_closes_http_client(self):
+        with RedditSentimentAnalyzer(subreddits=("CryptoCurrency",)) as analyzer:
+            assert analyzer._http_client is not None
+
+        assert analyzer._http_client is None
