@@ -205,7 +205,9 @@ class RSSSentimentAnalyzer:
         Fetches from configured RSS feeds, filters entries whose title or
         description mentions the symbol or its base token, scores each
         title with VADER + keyword boost, and returns a structured result
-        envelope.
+        envelope. Individual feed failures are logged and skipped so later
+        feeds can still contribute results; an error envelope is returned
+        only if every configured feed fails.
 
         Returns
         -------
@@ -223,6 +225,8 @@ class RSSSentimentAnalyzer:
         base_token = _extract_base_token(symbol)
         fetched_at = datetime.now(timezone.utc).isoformat()
         all_items: list[dict[str, Any]] = []
+        failed_feeds: list[Exception] = []
+        successful_feeds = 0
 
         for feed_url in self.feeds:
             try:
@@ -235,8 +239,8 @@ class RSSSentimentAnalyzer:
                     error=str(exc),
                     error_type=type(exc).__name__,
                 )
-                # Deterministic full-error envelope: any fetch failure -> "error"
-                return self._error_result(symbol, fetched_at, exc)
+                failed_feeds.append(exc)
+                continue
             except ET.ParseError as exc:
                 logger.warning(
                     "rss_parse_failed",
@@ -244,7 +248,10 @@ class RSSSentimentAnalyzer:
                     symbol=symbol,
                     error=str(exc),
                 )
-                return self._error_result(symbol, fetched_at, exc)
+                failed_feeds.append(exc)
+                continue
+
+            successful_feeds += 1
 
             for entry in entries:
                 title = _coerce_text(entry.get("title"))
@@ -256,6 +263,9 @@ class RSSSentimentAnalyzer:
                     continue
                 item_record = self._build_item_record(feed_url, entry, title)
                 all_items.append(item_record)
+
+        if failed_feeds and successful_feeds == 0:
+            return self._error_result(symbol, fetched_at, failed_feeds[0])
 
         if not all_items:
             return self._no_results_result(symbol, fetched_at)
@@ -347,12 +357,14 @@ class RSSSentimentAnalyzer:
             if pub_elem is not None and pub_elem.text:
                 published = pub_elem.text.strip()
 
-            entries.append({
-                "title": title,
-                "link": link,
-                "description": description,
-                "published": published,
-            })
+            entries.append(
+                {
+                    "title": title,
+                    "link": link,
+                    "description": description,
+                    "published": published,
+                }
+            )
 
         return entries
 

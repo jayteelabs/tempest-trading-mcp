@@ -298,9 +298,7 @@ class TestRSSSentimentAnalyzerHappyPath:
 
     def test_items_order_preserved(self):
         """Items should be in feed iteration order, then entry order in feed."""
-        analyzer = RSSSentimentAnalyzer(
-            feeds=("https://feed1.com/rss", "https://feed2.com/rss")
-        )
+        analyzer = RSSSentimentAnalyzer(feeds=("https://feed1.com/rss", "https://feed2.com/rss"))
 
         def fake_fetch(feed_url):
             if feed_url == "https://feed1.com/rss":
@@ -387,13 +385,11 @@ class TestRSSSentimentAnalyzerError:
         assert result["status"] == "error"
         assert result["items"] == []
 
-    def test_error_first_feed_aborts(self):
-        """If the first feed fails, we get error immediately (no partial data)."""
+    def test_error_first_feed_uses_remaining_feeds(self):
+        """A failed feed should not block later feeds from contributing results."""
         import httpx
 
-        analyzer = RSSSentimentAnalyzer(
-            feeds=("https://feed1.com/rss", "https://feed2.com/rss")
-        )
+        analyzer = RSSSentimentAnalyzer(feeds=("https://feed1.com/rss", "https://feed2.com/rss"))
 
         def fake_fetch(feed_url):
             if feed_url == "https://feed1.com/rss":
@@ -407,7 +403,38 @@ class TestRSSSentimentAnalyzerError:
         with patch.object(analyzer, "_fetch_and_parse_feed", side_effect=fake_fetch):
             result = analyzer.analyze("BTC")
 
+        assert result["status"] == "ok"
+        assert [item["title"] for item in result["items"]] == ["BTC post"]
+
+    def test_all_feeds_failing_returns_error(self):
+        import httpx
+
+        analyzer = RSSSentimentAnalyzer(feeds=("https://feed1.com/rss", "https://feed2.com/rss"))
+
+        def fake_fetch(_feed_url):
+            raise httpx.TimeoutException("timeout")
+
+        with patch.object(analyzer, "_fetch_and_parse_feed", side_effect=fake_fetch):
+            result = analyzer.analyze("BTC")
+
         assert result["status"] == "error"
+        assert result["items"] == []
+
+    def test_partial_failure_without_matches_returns_no_results(self):
+        import httpx
+
+        analyzer = RSSSentimentAnalyzer(feeds=("https://feed1.com/rss", "https://feed2.com/rss"))
+
+        def fake_fetch(feed_url):
+            if feed_url == "https://feed1.com/rss":
+                raise httpx.TimeoutException("timeout")
+            return [make_rss_entry("ETH post")]
+
+        with patch.object(analyzer, "_fetch_and_parse_feed", side_effect=fake_fetch):
+            result = analyzer.analyze("BTC")
+
+        assert result["status"] == "no_results"
+        assert result["items"] == []
 
     def test_http_errors_return_error_but_programming_errors_surface(self):
         analyzer = RSSSentimentAnalyzer(feeds=("https://example.com/rss",))
@@ -432,6 +459,20 @@ class TestRSSSentimentAnalyzerError:
 
         assert result["status"] == "error"
         assert result["items"] == []
+
+    def test_parse_error_uses_remaining_feeds(self):
+        analyzer = RSSSentimentAnalyzer(feeds=("https://feed1.com/rss", "https://feed2.com/rss"))
+
+        def fake_fetch(feed_url):
+            if feed_url == "https://feed1.com/rss":
+                raise ET.ParseError("invalid xml")
+            return [make_rss_entry("BTC recovery story")]
+
+        with patch.object(analyzer, "_fetch_and_parse_feed", side_effect=fake_fetch):
+            result = analyzer.analyze("BTC")
+
+        assert result["status"] == "ok"
+        assert [item["title"] for item in result["items"]] == ["BTC recovery story"]
 
 
 class TestRSSSentimentAnalyzerBoostBehavior:
