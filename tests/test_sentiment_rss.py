@@ -125,6 +125,9 @@ class TestSymbolMatchesText:
     def test_description_matching(self):
         assert _symbol_matches_text("BTC", "BTC", "Bitcoin is moving")
 
+    def test_empty_terms_do_not_match_everything(self):
+        assert not _symbol_matches_text("", "", "BTC is pumping!")
+
 
 class TestClamp:
     def test_within_bounds(self):
@@ -473,6 +476,27 @@ class TestRSSSentimentAnalyzerError:
 
         assert result["status"] == "ok"
         assert [item["title"] for item in result["items"]] == ["BTC recovery story"]
+
+    @pytest.mark.parametrize("symbol", [None, 123, "", "   "])
+    def test_invalid_symbol_returns_error(self, symbol):
+        analyzer = RSSSentimentAnalyzer(feeds=("https://example.com/rss",))
+
+        result = analyzer.analyze(symbol)
+
+        assert result["status"] == "error"
+        assert result["items"] == []
+        assert result["summary"]["total_items"] == 0
+
+    def test_symbol_is_trimmed_before_analysis(self):
+        analyzer = RSSSentimentAnalyzer(feeds=("https://example.com/rss",))
+        entries = [make_rss_entry("BTC momentum returns")]
+
+        with patch.object(analyzer, "_fetch_and_parse_feed", return_value=entries):
+            result = analyzer.analyze("  BTC  ")
+
+        assert result["status"] == "ok"
+        assert result["symbol"] == "BTC"
+        assert [item["title"] for item in result["items"]] == ["BTC momentum returns"]
 
 
 class TestRSSSentimentAnalyzerBoostBehavior:

@@ -93,6 +93,18 @@ def _coerce_text(value: Any) -> str:
     return str(value)
 
 
+def _validate_symbol_input(symbol: Any) -> tuple[str | None, str]:
+    """Validate and normalize a symbol input for analysis."""
+    if not isinstance(symbol, str):
+        return None, _coerce_text(symbol) or "<invalid>"
+
+    normalized = symbol.strip()
+    if not normalized:
+        return None, "<empty>"
+
+    return normalized, normalized
+
+
 def _symbol_matches_text(symbol: str, base_token: str, text: str) -> bool:
     """Return True if text mentions the raw symbol, base token, or a known alias.
 
@@ -103,6 +115,8 @@ def _symbol_matches_text(symbol: str, base_token: str, text: str) -> bool:
     base_l = base_token.lower()
 
     def matches_term(term: str) -> bool:
+        if not term:
+            return False
         pattern = re.compile(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])")
         return pattern.search(lower_text) is not None
 
@@ -222,11 +236,21 @@ class RSSSentimentAnalyzer:
                 "status": "ok" | "no_results" | "error"
             }
         """
-        base_token = _extract_base_token(symbol)
         fetched_at = datetime.now(timezone.utc).isoformat()
+        validated_symbol, result_symbol = _validate_symbol_input(symbol)
+        if validated_symbol is None:
+            return self._error_result(
+                result_symbol,
+                fetched_at,
+                ValueError("symbol must be a non-empty string"),
+            )
+
+        base_token = _extract_base_token(validated_symbol)
         all_items: list[dict[str, Any]] = []
         failed_feeds: list[Exception] = []
         successful_feeds = 0
+
+        symbol = validated_symbol
 
         for feed_url in self.feeds:
             try:
