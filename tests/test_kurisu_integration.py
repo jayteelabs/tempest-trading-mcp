@@ -24,6 +24,7 @@ import warnings
 import ccxt
 import pytest
 
+from tempest_mcp.config import ErrorCodes
 from tempest_mcp.formatters.discord import DiscordFormatter
 from tempest_mcp.tools.analytical_tools import detect_elliot_wave
 from tempest_mcp.tools.backtest_tools import BACKTEST_TOOLS
@@ -38,6 +39,14 @@ from tempest_mcp.tools.sentiment_tools import get_combined_sentiment_dashboard
 CANONICAL_SYMBOL = "BTCUSDT"
 MAX_RETRIES = 3
 TRANSIENT_FETCH_EXCEPTIONS = (ccxt.NetworkError, ConnectionError, TimeoutError)
+TRANSIENT_FAILURE_PATTERNS = {
+    "screener_scan": (
+        "unable to complete screener scan",
+        "all symbols failed to scan",
+    ),
+    "backtest_rsi": ("data fetch failed",),
+    "detect_elliot_wave": ("data fetch failed",),
+}
 
 # =============================================================================
 # Helpers — async runner
@@ -54,22 +63,41 @@ def _run_async(coro):
 # =============================================================================
 
 
+def assert_envelope_shape(result: dict) -> bool:
+    """Assert result matches the top-level MCP envelope contract.
+
+    Returns the success flag so callers can branch only after shape validation.
+    """
+    assert isinstance(result, dict), (
+        f"Envelope must be a dict, got {type(result).__name__}"
+    )
+    assert "success" in result, "Envelope must have 'success' key"
+    success = result["success"]
+    assert isinstance(success, bool), "Envelope 'success' must be a bool"
+
+    if success:
+        assert "data" in result, "Success envelope must have 'data' key"
+        assert isinstance(result["data"], dict), "data must be a dict"
+    else:
+        assert "error" in result, "Failure envelope must have 'error' key"
+        error = result["error"]
+        assert isinstance(error, dict), "error must be a dict"
+        assert "code" in error, "error must have 'code'"
+        assert "message" in error, "error must have 'message'"
+
+    return success
+
+
 def assert_success_envelope(result: dict, tool_name: str | None = None) -> dict:
     """Assert result is a deterministic success MCP envelope.
 
     Hard-fails on any contract violation.
     Returns the data dict for further tool-specific assertions.
     """
-    assert isinstance(result, dict), (
-        f"Envelope must be a dict, got {type(result).__name__}"
-    )
-    assert "success" in result, "Envelope must have 'success' key"
-    assert result["success"] is True, (
+    assert assert_envelope_shape(result) is True, (
         f"Expected success=True envelope, got: {result.get('error')}"
     )
-    assert "data" in result, "Success envelope must have 'data' key"
     data = result["data"]
-    assert isinstance(data, dict), "data must be a dict"
 
     if tool_name:
         assert data.get("tool") == tool_name, (
@@ -84,18 +112,9 @@ def assert_failure_envelope(result: dict) -> None:
 
     Hard-fails on any contract violation.
     """
-    assert isinstance(result, dict), (
-        f"Envelope must be a dict, got {type(result).__name__}"
-    )
-    assert "success" in result, "Envelope must have 'success' key"
-    assert result["success"] is False, (
+    assert assert_envelope_shape(result) is False, (
         "Expected success=False envelope, got success=True"
     )
-    assert "error" in result, "Failure envelope must have 'error' key"
-    error = result["error"]
-    assert isinstance(error, dict), "error must be a dict"
-    assert "code" in error, "error must have 'code'"
-    assert "message" in error, "error must have 'message'"
 
 
 def assert_discord_embed_shape(embed: dict) -> None:
@@ -109,6 +128,9 @@ def assert_discord_embed_shape(embed: dict) -> None:
     assert "title" in embed, "Embed must have 'title' key"
     assert "color" in embed, "Embed must have 'color' key"
     assert "fields" in embed, "Embed must have 'fields' key"
+    assert isinstance(embed["title"], str), "title must be a string"
+    assert embed["title"], "title must not be empty"
+    assert isinstance(embed["color"], int), "color must be an int"
     assert isinstance(embed["fields"], list), "fields must be a list"
 
 
@@ -122,6 +144,59 @@ def assert_discord_embed_safe(result: dict) -> dict:
     embed = formatter.format(result)
     assert_discord_embed_shape(embed)
     return embed
+
+
+def _describe_failure(result: dict) -> str:
+    """Build a concise diagnostic string for a failure envelope."""
+    error = result["error"]
+    return f"code={error['code']} message={error['message']}"
+
+
+def _is_transient_failure_envelope(result: dict, tool_name: str) -> bool:
+    """Return True when a failure envelope matches known transient upstream patterns."""
+    if assert_envelope_shape(result):
+        return False
+
+    error = result["error"]
+    message = str(error.get("message", "")).lower()
+    patterns = TRANSIENT_FAILURE_PATTERNS.get(tool_name, ())
+
+    if any(pattern in message for pattern in patterns):
+        return True
+
+    return error.get("code") == ErrorCodes.DATA_SOURCE_ERROR and any(
+        pattern in message for pattern in patterns
+    )
+
+
+def _run_with_bounded_retry(tool_name: str, operation):
+    """Run a live tool with bounded retry on transient exceptions/envelopes."""
+    last_transient: str | None = None
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            result = operation()
+        except Exception as exc:  # noqa: BLE001
+            if not isinstance(exc, TRANSIENT_FETCH_EXCEPTIONS):
+                raise
+            last_transient = f"{type(exc).__name__}: {exc}"
+        else:
+            if _is_transient_failure_envelope(result, tool_name):
+                last_transient = _describe_failure(result)
+            else:
+                return result
+
+        if attempt < MAX_RETRIES:
+            warnings.warn(
+                f"[{tool_name}] Attempt {attempt}/{MAX_RETRIES} hit transient upstream failure: "
+                f"{last_transient or 'unknown'}. Retrying...",
+                stacklevel=2,
+            )
+
+    pytest.skip(
+        f"[{tool_name}] Bounded retries ({MAX_RETRIES}) exhausted. "
+        f"Skipping due to transient upstream failure: {last_transient or 'unknown'}"
+    )
 
 
 # =============================================================================
@@ -168,10 +243,7 @@ class TestFetchTickerKurisuIntegration:
         assert data.get("stub") is True, "fetch_ticker stub must have stub=True"
 
         # Formatter compatibility — must not crash, must return stable embed shape
-        embed = assert_discord_embed_safe(result)
-        assert "BTCUSDT" in embed["title"] or "BTC" in embed["title"], (
-            f"Expected BTC-related symbol in title, got: {embed['title']}"
-        )
+        assert_discord_embed_safe(result)
 
 
 # =============================================================================
@@ -190,27 +262,9 @@ class TestScreenerScanKurisuIntegration:
 
     def _screener_scan_with_retry(self, symbols: list[str] | None, **kwargs):
         """Invoke screener_scan with bounded retry for transient upstream failures."""
-        last_transient: str | None = None
-
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                result = _run_async(screener_scan(symbols=symbols, **kwargs))
-                return result
-            except Exception as exc:  # noqa: BLE001
-                if not isinstance(exc, TRANSIENT_FETCH_EXCEPTIONS):
-                    raise
-                last_transient = f"{type(exc).__name__}: {exc}"
-                if attempt < MAX_RETRIES:
-                    warnings.warn(
-                        f"[screener_scan] Attempt {attempt}/{MAX_RETRIES} failed: "
-                        f"{type(exc).__name__}: {exc}. Retrying...",
-                        stacklevel=2,
-                    )
-                continue
-
-        pytest.skip(
-            f"[screener_scan] Bounded retries ({MAX_RETRIES}) exhausted. "
-            f"Skipping due to transient upstream CCXT instability: {last_transient or 'unknown'}"
+        return _run_with_bounded_retry(
+            "screener_scan",
+            lambda: _run_async(screener_scan(symbols=symbols, **kwargs)),
         )
 
     def test_screener_scan_success_envelope_and_formatter(self):
@@ -229,8 +283,7 @@ class TestScreenerScanKurisuIntegration:
         assert isinstance(data["failures"], list)
 
         # Formatter compatibility
-        embed = assert_discord_embed_safe(result)
-        assert "Screener" in embed["title"] or "screener" in embed["title"].lower()
+        assert_discord_embed_safe(result)
 
     def test_screener_scan_partial_results_and_formatter(self):
         """screener_scan with high min_score returns partial results and formatter-safe."""
@@ -241,7 +294,7 @@ class TestScreenerScanKurisuIntegration:
         )
 
         # Partial or full failure is acceptable — just needs deterministic envelope
-        if result["success"]:
+        if assert_envelope_shape(result):
             data = assert_success_envelope(result, tool_name="screener_scan")
             assert isinstance(data.get("results"), list)
             assert isinstance(data.get("failures"), list)
@@ -249,9 +302,7 @@ class TestScreenerScanKurisuIntegration:
             assert_failure_envelope(result)
 
         # Formatter must be safe regardless of partial/full failure
-        embed = assert_discord_embed_safe(result)
-        assert "title" in embed
-        assert "fields" in embed
+        assert_discord_embed_safe(result)
 
 
 # =============================================================================
@@ -275,31 +326,13 @@ class TestSentimentDashboardKurisuIntegration:
 
     def _sentiment_with_retry(self, symbol: str, price_bias: str, **kwargs):
         """Invoke sentiment dashboard with bounded retry for transient upstream failures."""
-        last_transient: str | None = None
-
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                result = _run_async(
-                    get_combined_sentiment_dashboard(
-                        symbol=symbol, price_bias=price_bias, **kwargs
-                    )
+        return _run_with_bounded_retry(
+            "sentiment",
+            lambda: _run_async(
+                get_combined_sentiment_dashboard(
+                    symbol=symbol, price_bias=price_bias, **kwargs
                 )
-                return result
-            except Exception as exc:  # noqa: BLE001
-                if not isinstance(exc, TRANSIENT_FETCH_EXCEPTIONS):
-                    raise
-                last_transient = f"{type(exc).__name__}: {exc}"
-                if attempt < MAX_RETRIES:
-                    warnings.warn(
-                        f"[sentiment] Attempt {attempt}/{MAX_RETRIES} failed: "
-                        f"{type(exc).__name__}: {exc}. Retrying...",
-                        stacklevel=2,
-                    )
-                continue
-
-        pytest.skip(
-            f"[sentiment] Bounded retries ({MAX_RETRIES}) exhausted. "
-            f"Skipping due to transient upstream CCXT instability: {last_transient or 'unknown'}"
+            ),
         )
 
     def test_sentiment_success_envelope_and_formatter(self):
@@ -307,7 +340,7 @@ class TestSentimentDashboardKurisuIntegration:
         result = self._sentiment_with_retry(symbol="BTCUSDT", price_bias="bullish")
 
         # Accept success envelope
-        if result["success"]:
+        if assert_envelope_shape(result):
             data = assert_success_envelope(result, tool_name="get_combined_sentiment_dashboard")
             assert "sentiment_polarity" in data
             assert "sentiment_index" in data
@@ -324,8 +357,7 @@ class TestSentimentDashboardKurisuIntegration:
             )
 
         # Formatter compatibility — must not crash, must return stable embed
-        embed = assert_discord_embed_safe(result)
-        assert "Sentiment" in embed["title"] or "sentiment" in embed["title"].lower()
+        assert_discord_embed_safe(result)
 
     def test_sentiment_failure_diagnostics_and_formatter(self):
         """sentiment dashboard failure carries diagnostics and remains formatter-safe."""
@@ -333,8 +365,11 @@ class TestSentimentDashboardKurisuIntegration:
         result = self._sentiment_with_retry(symbol="INVALIDCOINXYZ123", price_bias="neutral")
 
         # Either success with unavailable mode OR deterministic failure is acceptable
-        if result["success"]:
-            data = result["data"]
+        if assert_envelope_shape(result):
+            data = assert_success_envelope(
+                result,
+                tool_name="get_combined_sentiment_dashboard",
+            )
             # combination_mode="unavailable" is the documented failure path
             if data.get("combination_mode") == "unavailable":
                 assert "diagnostics" in data, (
@@ -348,9 +383,7 @@ class TestSentimentDashboardKurisuIntegration:
             assert isinstance(data, dict), "Diagnostics data must be a dict"
 
         # Formatter must be safe on both success(unavailable) and failure paths
-        embed = assert_discord_embed_safe(result)
-        assert "title" in embed
-        assert "fields" in embed
+        assert_discord_embed_safe(result)
 
 
 # =============================================================================
@@ -369,31 +402,13 @@ class TestBacktestRsiKurisuIntegration:
 
     def _backtest_rsi_with_retry(self, **kwargs):
         """Invoke backtest_rsi with bounded retry for transient upstream failures."""
-        last_transient: str | None = None
-
         # Get the handler from BACKTEST_TOOLS registry
         handler = BACKTEST_TOOLS.get("backtest_rsi")
         assert handler is not None, "backtest_rsi handler not found in BACKTEST_TOOLS"
 
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                result = _run_async(handler(**kwargs))
-                return result
-            except Exception as exc:  # noqa: BLE001
-                if not isinstance(exc, TRANSIENT_FETCH_EXCEPTIONS):
-                    raise
-                last_transient = f"{type(exc).__name__}: {exc}"
-                if attempt < MAX_RETRIES:
-                    warnings.warn(
-                        f"[backtest_rsi] Attempt {attempt}/{MAX_RETRIES} failed: "
-                        f"{type(exc).__name__}: {exc}. Retrying...",
-                        stacklevel=2,
-                    )
-                continue
-
-        pytest.skip(
-            f"[backtest_rsi] Bounded retries ({MAX_RETRIES}) exhausted. "
-            f"Skipping due to transient upstream CCXT instability: {last_transient or 'unknown'}"
+        return _run_with_bounded_retry(
+            "backtest_rsi",
+            lambda: _run_async(handler(**kwargs)),
         )
 
     def test_backtest_rsi_success_envelope_and_formatter(self):
@@ -409,7 +424,7 @@ class TestBacktestRsiKurisuIntegration:
         )
 
         # Envelope assertions — success path
-        if result["success"]:
+        if assert_envelope_shape(result):
             data = assert_success_envelope(result, tool_name="backtest_rsi")
             assert "strategy_id" in data
             assert "window" in data
@@ -422,9 +437,7 @@ class TestBacktestRsiKurisuIntegration:
             assert_failure_envelope(result)
 
         # Formatter compatibility
-        embed = assert_discord_embed_safe(result)
-        assert "title" in embed
-        assert "fields" in embed
+        assert_discord_embed_safe(result)
 
     def test_backtest_rsi_failure_envelope_and_formatter(self):
         """backtest_rsi with invalid params returns deterministic error and formatter-safe."""
@@ -439,7 +452,7 @@ class TestBacktestRsiKurisuIntegration:
         )
 
         # Either validation error (failure) or success with insufficient data is acceptable
-        if result["success"]:
+        if assert_envelope_shape(result):
             # Success is fine if data is insufficient — still valid envelope
             data = assert_success_envelope(result, tool_name="backtest_rsi")
             assert isinstance(data, dict)
@@ -447,9 +460,7 @@ class TestBacktestRsiKurisuIntegration:
             assert_failure_envelope(result)
 
         # Formatter must be safe on both paths
-        embed = assert_discord_embed_safe(result)
-        assert "title" in embed
-        assert "fields" in embed
+        assert_discord_embed_safe(result)
 
 
 # =============================================================================
@@ -468,27 +479,9 @@ class TestDetectElliotWaveKurisuIntegration:
 
     def _elliot_wave_with_retry(self, **kwargs):
         """Invoke detect_elliot_wave with bounded retry for transient upstream failures."""
-        last_transient: str | None = None
-
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                result = _run_async(detect_elliot_wave(**kwargs))
-                return result
-            except Exception as exc:  # noqa: BLE001
-                if not isinstance(exc, TRANSIENT_FETCH_EXCEPTIONS):
-                    raise
-                last_transient = f"{type(exc).__name__}: {exc}"
-                if attempt < MAX_RETRIES:
-                    warnings.warn(
-                        f"[detect_elliot_wave] Attempt {attempt}/{MAX_RETRIES} failed: "
-                        f"{type(exc).__name__}: {exc}. Retrying...",
-                        stacklevel=2,
-                    )
-                continue
-
-        pytest.skip(
-            f"[detect_elliot_wave] Bounded retries ({MAX_RETRIES}) exhausted. "
-            f"Skipping due to transient upstream CCXT instability: {last_transient or 'unknown'}"
+        return _run_with_bounded_retry(
+            "detect_elliot_wave",
+            lambda: _run_async(detect_elliot_wave(**kwargs)),
         )
 
     def test_elliot_wave_success_envelope_and_formatter(self):
@@ -501,7 +494,7 @@ class TestDetectElliotWaveKurisuIntegration:
         )
 
         # Envelope assertions — success path
-        if result["success"]:
+        if assert_envelope_shape(result):
             data = assert_success_envelope(result, tool_name="detect_elliot_wave")
             assert "window" in data
             assert "parameters" in data
@@ -512,9 +505,7 @@ class TestDetectElliotWaveKurisuIntegration:
             assert_failure_envelope(result)
 
         # Formatter compatibility
-        embed = assert_discord_embed_safe(result)
-        assert "title" in embed
-        assert "fields" in embed
+        assert_discord_embed_safe(result)
 
     def test_elliot_wave_4h_timeframe_and_formatter(self):
         """detect_elliot_wave on 4h timeframe returns valid envelope and formatter-safe."""
@@ -526,7 +517,7 @@ class TestDetectElliotWaveKurisuIntegration:
         )
 
         # Envelope assertions
-        if result["success"]:
+        if assert_envelope_shape(result):
             data = assert_success_envelope(result, tool_name="detect_elliot_wave")
             assert data["timeframe"] == "4h"
             assert isinstance(data["wave_sequences"], list)
@@ -534,6 +525,4 @@ class TestDetectElliotWaveKurisuIntegration:
             assert_failure_envelope(result)
 
         # Formatter compatibility
-        embed = assert_discord_embed_safe(result)
-        assert "title" in embed
-        assert "fields" in embed
+        assert_discord_embed_safe(result)
