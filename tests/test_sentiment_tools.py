@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, "src")
 
-from tempest_mcp.tools.sentiment_tools import get_combined_sentiment_dashboard
+import tempest_mcp.tools.sentiment_tools as st
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -67,13 +67,11 @@ class TestSentimentToolSuccessEnvelope:
 
     async def test_success_envelope_structure(self):
         """Success path returns success:true with full data payload."""
-        import tempest_mcp.tools.sentiment_tools as st
-
         fake_result = make_success_result()
         st._dashboard = MockDashboard(fake_result)
 
         try:
-            result = await get_combined_sentiment_dashboard(
+            result = await st.get_combined_sentiment_dashboard(
                 symbol="BTCUSDT",
                 price_bias="bullish",
             )
@@ -93,13 +91,11 @@ class TestSentimentToolSuccessEnvelope:
 
     async def test_success_envelope_contains_no_error_key(self):
         """Success path does NOT include an 'error' key."""
-        import tempest_mcp.tools.sentiment_tools as st
-
         fake_result = make_success_result()
         st._dashboard = MockDashboard(fake_result)
 
         try:
-            result = await get_combined_sentiment_dashboard(
+            result = await st.get_combined_sentiment_dashboard(
                 symbol="ETHUSDT",
                 price_bias="neutral",
             )
@@ -119,13 +115,11 @@ class TestSentimentToolFailureEnvelope:
 
     async def test_unavailable_returns_success_false(self):
         """When combination_mode is unavailable, success must be False."""
-        import tempest_mcp.tools.sentiment_tools as st
-
         fake_result = make_success_result(combination_mode="unavailable", sentiment_index=None)
         st._dashboard = MockDashboard(fake_result)
 
         try:
-            result = await get_combined_sentiment_dashboard(
+            result = await st.get_combined_sentiment_dashboard(
                 symbol="BTCUSDT",
                 price_bias="bullish",
             )
@@ -136,13 +130,11 @@ class TestSentimentToolFailureEnvelope:
 
     async def test_unavailable_includes_error_code_and_message(self):
         """Failure envelope includes error.code and error.message."""
-        import tempest_mcp.tools.sentiment_tools as st
-
         fake_result = make_success_result(combination_mode="unavailable", sentiment_index=None)
         st._dashboard = MockDashboard(fake_result)
 
         try:
-            result = await get_combined_sentiment_dashboard(
+            result = await st.get_combined_sentiment_dashboard(
                 symbol="BTCUSDT",
                 price_bias="bullish",
             )
@@ -156,13 +148,11 @@ class TestSentimentToolFailureEnvelope:
 
     async def test_unavailable_includes_diagnostics_payload(self):
         """Per ENG-41 contract: failure includes data.diagnostics alongside error."""
-        import tempest_mcp.tools.sentiment_tools as st
-
         fake_result = make_success_result(combination_mode="unavailable", sentiment_index=None)
         st._dashboard = MockDashboard(fake_result)
 
         try:
-            result = await get_combined_sentiment_dashboard(
+            result = await st.get_combined_sentiment_dashboard(
                 symbol="BTCUSDT",
                 price_bias="bullish",
             )
@@ -185,12 +175,10 @@ class TestSentimentToolExceptionEnvelope:
 
     async def test_internal_exception_returns_sanitized_envelope(self):
         """Raw exceptions must be sanitized; never leak to client."""
-        import tempest_mcp.tools.sentiment_tools as st
-
         st._dashboard = MockDashboard(RuntimeError("network timeout"))
 
         try:
-            result = await get_combined_sentiment_dashboard(
+            result = await st.get_combined_sentiment_dashboard(
                 symbol="BTCUSDT",
                 price_bias="neutral",
             )
@@ -207,12 +195,10 @@ class TestSentimentToolExceptionEnvelope:
 
     async def test_exception_path_includes_diagnostics_payload(self):
         """Internal error still returns diagnostics payload for debuggability."""
-        import tempest_mcp.tools.sentiment_tools as st
-
         st._dashboard = MockDashboard(RuntimeError("surprise"))
 
         try:
-            result = await get_combined_sentiment_dashboard(
+            result = await st.get_combined_sentiment_dashboard(
                 symbol="ETHUSDT",
                 price_bias="bearish",
             )
@@ -226,12 +212,10 @@ class TestSentimentToolExceptionEnvelope:
 
     async def test_exception_path_preserves_symbol_and_bias(self):
         """Error path envelope preserves input symbol and price_bias."""
-        import tempest_mcp.tools.sentiment_tools as st
-
         st._dashboard = MockDashboard(ValueError("bad input"))
 
         try:
-            result = await get_combined_sentiment_dashboard(
+            result = await st.get_combined_sentiment_dashboard(
                 symbol="DOGEUSDT",
                 price_bias="neutral",
             )
@@ -251,18 +235,12 @@ class TestSentimentToolCallable:
     """Smoke tests verifying the tool handler is properly exported."""
 
     def test_handler_is_importable(self):
-        from tempest_mcp.tools.sentiment_tools import get_combined_sentiment_dashboard
-
-        assert callable(get_combined_sentiment_dashboard)
+        assert callable(st.get_combined_sentiment_dashboard)
 
     def test_handler_is_awaitable(self):
         import asyncio
 
-        from tempest_mcp.tools.sentiment_tools import get_combined_sentiment_dashboard
-
-        coro = get_combined_sentiment_dashboard(symbol="BTCUSDT", price_bias="neutral")
+        coro = st.get_combined_sentiment_dashboard(symbol="BTCUSDT", price_bias="neutral")
         assert asyncio.iscoroutine(coro)
         # Clean up the created dashboard
-        import tempest_mcp.tools.sentiment_tools as st
-
         st._dashboard = None
