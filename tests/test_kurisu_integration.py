@@ -24,7 +24,6 @@ import warnings
 import ccxt
 import pytest
 
-from tempest_mcp.config import ErrorCodes
 from tempest_mcp.formatters.discord import DiscordFormatter
 from tempest_mcp.tools.analytical_tools import detect_elliot_wave
 from tempest_mcp.tools.backtest_tools import BACKTEST_TOOLS
@@ -164,9 +163,7 @@ def _is_transient_failure_envelope(result: dict, tool_name: str) -> bool:
     if any(pattern in message for pattern in patterns):
         return True
 
-    return error.get("code") == ErrorCodes.DATA_SOURCE_ERROR and any(
-        pattern in message for pattern in patterns
-    )
+    return False
 
 
 def _run_with_bounded_retry(tool_name: str, operation):
