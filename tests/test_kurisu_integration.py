@@ -283,12 +283,13 @@ class TestScreenerScanKurisuIntegration:
         # Formatter compatibility
         assert_discord_embed_safe(result)
 
-    def test_screener_scan_partial_results_and_formatter(self):
-        """screener_scan with high min_score returns partial results and formatter-safe."""
-        # Use a symbol unlikely to meet high score threshold
+    def test_screener_scan_high_threshold_envelope_and_formatter(self):
+        """screener_scan with a high threshold still returns a formatter-safe envelope."""
+        # Use a high threshold to exercise a non-happy-path live scan without
+        # over-asserting partial-result behavior that live market data may not guarantee.
         result = self._screener_scan_with_retry(
             symbols=["BTCUSDT"],
-            min_score=95.0,  # Very high threshold — likely partial or all failures
+            min_score=95.0,
         )
 
         # Partial or full failure is acceptable — just needs deterministic envelope
