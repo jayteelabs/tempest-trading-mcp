@@ -29,6 +29,7 @@ from tempest_mcp.tools import (
     fetch_klines,
     fetch_orderbook,
     fetch_ticker,
+    get_combined_sentiment_dashboard,
     indicator_rsi,
     order_block_screener_scan,
     screener_scan,
@@ -93,6 +94,8 @@ TOOLS["calculate_fibonacci"] = calculate_fibonacci
 TOOLS["calculate_tpo"] = calculate_tpo
 TOOLS["detect_elliot_wave"] = detect_elliot_wave
 TOOLS["get_market_structure"] = get_market_structure
+# ENG-41 sentiment tools
+TOOLS["get_combined_sentiment_dashboard"] = get_combined_sentiment_dashboard
 
 # ── Tool Schemas (MCP protocol surface) ──────────────────────────────────────
 TOOL_SCHEMAS: list[Tool] = [
@@ -641,6 +644,23 @@ TOOL_SCHEMAS: list[Tool] = [
             "required": ["symbol", "timeframe", "start_at", "end_at"],
         },
     ),
+    # ENG-41 Combined Sentiment Dashboard tool
+    Tool(
+        name="get_combined_sentiment_dashboard",
+        description="Combined Reddit + RSS sentiment dashboard. Returns a weighted sentiment_index (40% Reddit / 60% RSS) when both sources are available, or falls back to the single usable source. Includes per-source diagnostics and cross-signal detection against caller-supplied price_bias.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string"},
+                "price_bias": {
+                    "type": "string",
+                    "enum": ["bullish", "bearish", "neutral"],
+                    "description": "Caller-supplied directional bias used for cross-signal detection",
+                },
+            },
+            "required": ["symbol", "price_bias"],
+        },
+    ),
 ]
 
 
@@ -836,6 +856,18 @@ def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> str | None:
     # ENG-37 analytical tools — validate symbol
     if name in ("calculate_fibonacci", "calculate_tpo", "detect_elliot_wave", "get_market_structure"):
         return validate_symbol(arguments.get("symbol", ""), "symbol")
+    # ENG-41 sentiment tool — validate symbol and price_bias
+    if name == "get_combined_sentiment_dashboard":
+        if err := validate_symbol(arguments.get("symbol", ""), "symbol"):
+            return err
+        price_bias = arguments.get("price_bias")
+        if price_bias is None:
+            return "price_bias is required"
+        if not isinstance(price_bias, str):
+            return "price_bias must be a string"
+        if price_bias not in ("bullish", "bearish", "neutral"):
+            return "price_bias must be one of: bullish, bearish, neutral"
+        return None
     # Legacy deprecated tool — still validate symbol for completeness
     if name == "backtest_strategy":
         return validate_symbol(arguments.get("symbol", ""), "symbol")

@@ -1370,3 +1370,131 @@ class TestEng37ToolSpecificSchemas:
                         assert param not in props, (
                             f"{tool_name} should not have backtest-only param {param}"
                         )
+
+
+# ── ENG-41 Combined Sentiment Dashboard registration tests ────────────────────────
+
+
+class TestEng41SentimentToolRegistration:
+    """Tests for get_combined_sentiment_dashboard server registration — ENG-41."""
+
+    def test_get_combined_sentiment_dashboard_in_tools(self):
+        """get_combined_sentiment_dashboard is registered in TOOLS."""
+        from tempest_mcp.server import TOOLS
+
+        assert "get_combined_sentiment_dashboard" in TOOLS
+
+    def test_get_combined_sentiment_dashboard_in_schemas(self):
+        """get_combined_sentiment_dashboard is listed in TOOL_SCHEMAS."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        schema_names = {tool.name for tool in TOOL_SCHEMAS}
+        assert "get_combined_sentiment_dashboard" in schema_names
+
+    def test_schema_has_symbol_required(self):
+        """Schema requires symbol param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "get_combined_sentiment_dashboard":
+                props = tool.inputSchema.get("properties", {})
+                assert "symbol" in props
+                assert "symbol" in tool.inputSchema.get("required", [])
+
+    def test_schema_has_price_bias_required(self):
+        """Schema requires price_bias param."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "get_combined_sentiment_dashboard":
+                props = tool.inputSchema.get("properties", {})
+                assert "price_bias" in props
+                assert "price_bias" in tool.inputSchema.get("required", [])
+
+    def test_price_bias_enum_is_bullish_bearish_neutral(self):
+        """price_bias enum exactly [bullish, bearish, neutral]."""
+        from tempest_mcp.server import TOOL_SCHEMAS
+
+        for tool in TOOL_SCHEMAS:
+            if tool.name == "get_combined_sentiment_dashboard":
+                props = tool.inputSchema.get("properties", {})
+                assert props["price_bias"]["enum"] == ["bullish", "bearish", "neutral"]
+
+
+class TestEng41ValidateToolArguments:
+    """Tests for validate_tool_arguments with get_combined_sentiment_dashboard — ENG-41."""
+
+    def test_accepts_valid_symbol_and_bias(self):
+        """Valid symbol + price_bias returns None (valid)."""
+        from tempest_mcp.server import validate_tool_arguments
+
+        result = validate_tool_arguments(
+            "get_combined_sentiment_dashboard",
+            {"symbol": "BTCUSDT", "price_bias": "bullish"},
+        )
+        assert result is None
+
+    def test_accepts_all_valid_bias_values(self):
+        """All three bias values (bullish, bearish, neutral) are accepted."""
+        from tempest_mcp.server import validate_tool_arguments
+
+        for bias in ("bullish", "bearish", "neutral"):
+            result = validate_tool_arguments(
+                "get_combined_sentiment_dashboard",
+                {"symbol": "ETHUSDT", "price_bias": bias},
+            )
+            assert result is None, f"Failed for price_bias={bias}"
+
+    def test_empty_symbol_fails(self):
+        """Empty symbol returns error message."""
+        from tempest_mcp.server import validate_tool_arguments
+
+        result = validate_tool_arguments(
+            "get_combined_sentiment_dashboard",
+            {"symbol": "", "price_bias": "neutral"},
+        )
+        assert result is not None
+        assert "empty" in result.lower()
+
+    def test_invalid_symbol_format_fails(self):
+        """Invalid symbol format returns error message."""
+        from tempest_mcp.server import validate_tool_arguments
+
+        result = validate_tool_arguments(
+            "get_combined_sentiment_dashboard",
+            {"symbol": "INVALID@SYMBOL", "price_bias": "neutral"},
+        )
+        assert result is not None
+
+    def test_missing_price_bias_fails(self):
+        """Missing price_bias returns error message."""
+        from tempest_mcp.server import validate_tool_arguments
+
+        result = validate_tool_arguments(
+            "get_combined_sentiment_dashboard",
+            {"symbol": "BTCUSDT"},
+        )
+        assert result is not None
+        assert "price_bias" in result.lower()
+
+    def test_invalid_price_bias_value_fails(self):
+        """Invalid price_bias value returns error message."""
+        from tempest_mcp.server import validate_tool_arguments
+
+        result = validate_tool_arguments(
+            "get_combined_sentiment_dashboard",
+            {"symbol": "BTCUSDT", "price_bias": "bullishish"},
+        )
+        assert result is not None
+        assert "price_bias" in result.lower()
+
+    def test_non_string_price_bias_fails(self):
+        """Non-string price_bias returns error message."""
+        from tempest_mcp.server import validate_tool_arguments
+
+        result = validate_tool_arguments(
+            "get_combined_sentiment_dashboard",
+            {"symbol": "BTCUSDT", "price_bias": 123},
+        )
+        assert result is not None
+        assert "price_bias" in result.lower()

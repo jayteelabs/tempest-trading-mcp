@@ -18,6 +18,9 @@ from tempest_mcp.tools.screener_tools import (
     screener_scan,
     session_breakout_scan,
 )
+from tempest_mcp.tools.sentiment_tools import (
+    get_combined_sentiment_dashboard,
+)
 
 __all__ = [
     # Market tools
@@ -42,4 +45,6 @@ __all__ = [
     "calculate_tpo",
     "detect_elliot_wave",
     "get_market_structure",
+    # Sentiment tools (ENG-41)
+    "get_combined_sentiment_dashboard",
 ]
