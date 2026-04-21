@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
 from tempest_mcp.formatters import DiscordFormatter
+from tempest_mcp.formatters import discord as discord_module
 
 # ── Fixtures ────────────────────────────────────────────────────────────────────
 
@@ -89,6 +91,14 @@ def test_dispatch_missing_tool_routes_to_generic(formatter):
 def test_dispatch_non_dict_routes_to_error_embed(formatter):
     """Non-dict input must return an error embed."""
     formatted = formatter.format("not a dict")
+    assert formatted["color"] == 0xE74C3C
+    assert formatted["title"] == "❌ Invalid Payload"
+
+
+@pytest.mark.parametrize("bad_data", [None, [], "boom"])
+def test_dispatch_malformed_success_data_routes_to_error_embed(formatter, bad_data):
+    """Malformed success envelopes should return an invalid-payload embed."""
+    formatted = formatter.format({"success": True, "data": bad_data})
     assert formatted["color"] == 0xE74C3C
     assert formatted["title"] == "❌ Invalid Payload"
 
@@ -286,6 +296,28 @@ def test_format_screener_candidates_shape(formatter):
     assert "bullish_ob" in formatted["fields"][0]["value"]
 
 
+def test_format_screener_prefers_results_shape_when_candidates_empty(formatter):
+    """Empty candidates must not force candidate row formatting when results are used."""
+    result = {
+        "success": True,
+        "data": {
+            "tool": "order_block_screener_scan",
+            "candidates": [],
+            "results": [
+                {
+                    "symbol": "BTC/USDT",
+                    "exchange": "binance",
+                    "score": 0.55,
+                    "filters_matched": 3,
+                    "price": 50000.0,
+                }
+            ],
+        },
+    }
+    formatted = formatter.format_screener(result)
+    assert "Filters: 3" in formatted["fields"][0]["value"]
+
+
 def test_format_screener_failures(formatter):
     """Failures block is rendered when present."""
     result = {
@@ -353,6 +385,30 @@ SENTIMENT_FIXTURES = [
 @pytest.mark.parametrize("polarity,expected_color,expected_mood", SENTIMENT_FIXTURES)
 def test_format_sentiment_polarity(formatter, polarity, expected_color, expected_mood):
     """Sentiment polarity determines color and mood emoji."""
+    result = {
+        "success": True,
+        "data": {
+            "tool": "get_combined_sentiment_dashboard",
+            "sentiment_polarity": polarity,
+            "sentiment_index": 0.65,
+            "combination_mode": "weighted",
+        },
+    }
+    formatted = formatter.format_sentiment(result)
+    assert formatted["color"] == expected_color
+    assert expected_mood in formatted["fields"][0]["name"]
+
+
+@pytest.mark.parametrize(
+    "polarity,expected_color,expected_mood",
+    [
+        ("Bullish", 0x2ECC71, "😀"),
+        ("Bearish", 0xE74C3C, "😠"),
+        ("Neutral", 0xF1C40F, "😐"),
+    ],
+)
+def test_format_sentiment_polarity_is_case_insensitive(formatter, polarity, expected_color, expected_mood):
+    """Mood and color should stay aligned for cased polarity values."""
     result = {
         "success": True,
         "data": {
@@ -586,6 +642,18 @@ def test_format_alert_timestamp_passed_through(formatter):
     assert "timestamp" in formatted
 
 
+@pytest.mark.parametrize("timestamp", [None, "N/A", "not-a-timestamp", "2026-04-21"])
+def test_format_alert_omits_missing_or_invalid_timestamp(formatter, timestamp):
+    """Missing/invalid timestamps must be omitted from the embed."""
+    alert = {
+        "symbol": "BTC/USDT",
+        "signal": "bullish",
+        "timestamp": timestamp,
+    }
+    formatted = formatter.format_alert(alert)
+    assert "timestamp" not in formatted
+
+
 # ── format_error ───────────────────────────────────────────────────────────────
 
 def test_format_error_happy_path(formatter):
@@ -619,6 +687,14 @@ def test_format_error_missing_code_and_message(formatter):
     assert formatted["color"] == 0xE74C3C
 
 
+@pytest.mark.parametrize("bad_error", ["boom", [], None])
+def test_format_error_malformed_error_routes_to_invalid_payload(formatter, bad_error):
+    """Malformed error payloads should return an invalid-payload embed."""
+    formatted = formatter.format_error({"success": False, "error": bad_error})
+    assert formatted["color"] == 0xE74C3C
+    assert formatted["title"] == "❌ Invalid Payload"
+
+
 # ── format_generic ─────────────────────────────────────────────────────────────
 
 def test_format_generic_happy_path(formatter):
@@ -635,30 +711,69 @@ def test_format_generic_happy_path(formatter):
 
 def test_format_generic_truncation(formatter):
     """Large JSON is truncated to _GENERIC_TRUNCATE_LIMIT chars."""
+    original_limit = discord_module._GENERIC_TRUNCATE_LIMIT
+    discord_module._GENERIC_TRUNCATE_LIMIT = 120
     result = {
         "success": True,
         "data": {
             "tool": "unknown_tool",
-            "large_field": "x" * 5000,
+            "large_field": "x" * 500,
         },
     }
-    formatted = formatter.format_generic(result)
+    try:
+        formatted = formatter.format_generic(result)
+    finally:
+        discord_module._GENERIC_TRUNCATE_LIMIT = original_limit
+
     raw_field = formatted["fields"][0]
-    # Should be truncated (value contains ...)
-    assert len(raw_field["value"]) < 5000
+    assert "..." in raw_field["value"]
+    assert "/tmp/" not in raw_field["value"]
+    assert len(raw_field["value"]) <= 1024
 
 
-def test_format_generic_file_write_on_oversized():
-    """Oversized payload after truncation is written to /tmp and reference returned."""
+def test_format_generic_file_write_on_oversized(tmp_path, monkeypatch):
+    """Oversized payload after hard truncation is securely written to temp storage."""
     f = DiscordFormatter()
+    monkeypatch.setattr(discord_module, "_TMP_DIR", str(tmp_path))
     large_data = {"tool": "unknown", "arr": list(range(10000))}
     result = {"success": True, "data": large_data}
     formatted = f.format_generic(result)
     raw_field = formatted["fields"][0]
-    # Should mention /tmp path and cloud TODO
     value = raw_field["value"]
-    assert "/tmp/" in value
+    lines = [line for line in value.splitlines() if str(tmp_path) in line]
+    assert lines
+    payload_path = Path(lines[0])
+    assert payload_path.exists()
+    assert oct(payload_path.stat().st_mode & 0o777) == "0o600"
     assert "TODO" in value.upper() or "cloud" in value.lower()
+
+
+def test_embed_content_escapes_mentions_and_caps_lengths(formatter):
+    """Untrusted embed content is mention-safe and capped to Discord field limits."""
+    long_symbol = "BTC" * 120
+    result = {
+        "success": True,
+        "data": {
+            "tool": "screener_scan",
+            "results": [
+                {
+                    "symbol": f"@everyone {long_symbol}",
+                    "exchange": "binance",
+                    "score": 0.9,
+                    "filters_matched": f"@here {'x' * 1500}",
+                    "price": 50000.0,
+                }
+            ],
+        },
+    }
+
+    formatted = formatter.format_screener(result)
+    field = formatted["fields"][0]
+
+    assert "@\u200beveryone" in field["name"]
+    assert "@\u200bhere" in field["value"]
+    assert len(field["name"]) <= 256
+    assert len(field["value"]) <= 1024
 
 
 # ── Number Formatting ──────────────────────────────────────────────────────────

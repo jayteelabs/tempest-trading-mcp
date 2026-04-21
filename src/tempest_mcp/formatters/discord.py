@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import math
-import uuid
+import os
+import re
+import tempfile
+from datetime import datetime
 from typing import Any
 
 # ── Color Constants ─────────────────────────────────────────────────────────────
@@ -61,6 +64,9 @@ ANALYTICAL_TOOLS = frozenset({
 })
 
 # ── Discord Limits ─────────────────────────────────────────────────────────────
+DISCORD_TITLE_LIMIT = 256
+DISCORD_DESCRIPTION_LIMIT = 4096
+DISCORD_FIELD_NAME_LIMIT = 256
 DISCORD_FIELD_VALUE_LIMIT = 1024  # chars per field value
 DISCORD_TOTAL_FIELDS_LIMIT = 25
 
@@ -90,6 +96,12 @@ class DiscordFormatter:
             return self.format_error(result)
 
         data = result.get("data", {})
+        if not isinstance(data, dict):
+            return self._error_embed(
+                code="INVALID_FORMAT_PAYLOAD",
+                message="Expected success envelope data to be a dict",
+            )
+
         tool = data.get("tool")
 
         if tool in BACKTEST_TOOLS:
@@ -165,6 +177,8 @@ class DiscordFormatter:
         Locked decision (Josh): use top-N + count metadata.
         """
         data = result.get("data", {})
+        if not isinstance(data, dict):
+            data = {}
         best_strategy_id = self._safe_value(data.get("best_strategy_id"))
         ranking_metric = self._safe_value(data.get("ranking_metric"))
         all_results = data.get("results", [])
@@ -202,12 +216,11 @@ class DiscordFormatter:
         if ranking_metric:
             meta_parts.append(f" | Ranked by: {ranking_metric}")
 
-        if fields or True:
-            fields.append({
-                "name": "📋 Metadata",
-                "value": "".join(meta_parts),
-                "inline": False,
-            })
+        fields.append({
+            "name": "📋 Metadata",
+            "value": "".join(meta_parts),
+            "inline": False,
+        })
 
         return self._embed(
             title=f"⚔️ Compare: Best = {best_strategy_id}",
@@ -218,9 +231,28 @@ class DiscordFormatter:
     def format_screener(self, result: dict) -> dict:
         """Render screener result — handles both results (screener/session) and candidates (order-block) shapes."""
         data = result.get("data", {})
+        if not isinstance(data, dict):
+            data = {}
 
         # Determine shape: candidates (order_block) or results (screener/session)
-        rows = data.get("candidates") or data.get("results") or []
+        candidates = data.get("candidates")
+        results = data.get("results")
+        if isinstance(candidates, list) and candidates:
+            rows = candidates
+            row_shape = "candidates"
+        elif isinstance(results, list) and results:
+            rows = results
+            row_shape = "results"
+        elif isinstance(candidates, list):
+            rows = candidates
+            row_shape = "candidates"
+        elif isinstance(results, list):
+            rows = results
+            row_shape = "results"
+        else:
+            rows = []
+            row_shape = "results"
+
         failures = data.get("failures", [])
 
         fields = []
@@ -236,7 +268,7 @@ class DiscordFormatter:
             score_emoji = self._score_emoji(score_normalized) if score_normalized is not None else ""
 
             # Shape-specific detail
-            if "candidates" in data:
+            if row_shape == "candidates":
                 # order_block_screener_scan shape
                 zone_type = self._safe_value(row.get("zone_type"))
                 detail = zone_type
@@ -254,12 +286,11 @@ class DiscordFormatter:
 
         # Row count metadata
         total = len(rows)
-        if True:
-            fields.append({
-                "name": "📋 Metadata",
-                "value": f"Showing top {MAX_ROWS} of {total} results",
-                "inline": False,
-            })
+        fields.append({
+            "name": "📋 Metadata",
+            "value": f"Showing top {MAX_ROWS} of {total} results",
+            "inline": False,
+        })
 
         # Failures summary (compact)
         if failures:
@@ -279,8 +310,11 @@ class DiscordFormatter:
     def format_sentiment(self, result: dict) -> dict:
         """Render sentiment dashboard result."""
         data = result.get("data", {})
+        if not isinstance(data, dict):
+            data = {}
 
         sentiment_polarity = data.get("sentiment_polarity", "neutral")
+        normalized_polarity = str(sentiment_polarity).lower() if sentiment_polarity is not None else "neutral"
         mood = self._mood_emoji(sentiment_polarity)
 
         sentiment_index = self._safe_value(data.get("sentiment_index"))
@@ -310,9 +344,9 @@ class DiscordFormatter:
                 fields.append(diag_field)
 
         # Determine color from polarity
-        if sentiment_polarity == "bullish":
+        if normalized_polarity == "bullish":
             color = COLOR_POSITIVE
-        elif sentiment_polarity == "bearish":
+        elif normalized_polarity == "bearish":
             color = COLOR_NEGATIVE
         else:
             color = COLOR_NEUTRAL
@@ -447,7 +481,7 @@ class DiscordFormatter:
         symbol = self._safe_value(alert.get("symbol"))
         signal = alert.get("signal", "neutral")
         message = self._safe_value(alert.get("message"))
-        timestamp = self._safe_value(alert.get("timestamp"))
+        timestamp = self._valid_embed_timestamp(alert.get("timestamp"))
         confidence = alert.get("confidence")
 
         # Color by signal
@@ -488,6 +522,12 @@ class DiscordFormatter:
     def format_error(self, result: dict) -> dict:
         """Render error envelope — red embed with code and message; include diagnostics if present."""
         error = result.get("error", {})
+        if not isinstance(error, dict):
+            return self._error_embed(
+                code="INVALID_FORMAT_PAYLOAD",
+                message="Expected error envelope error to be a dict",
+            )
+
         code = self._safe_value(error.get("code"))
         message = self._safe_value(error.get("message"))
 
@@ -497,8 +537,8 @@ class DiscordFormatter:
         ]
 
         # Diagnostics block if present
-        if result.get("data") and result.get("data") != result.get("error"):
-            diag_data = result.get("data", {})
+        diag_data = result.get("data")
+        if isinstance(diag_data, dict) and diag_data != result.get("error"):
             diag_field = self._diagnostics_field(diag_data)
             if diag_field:
                 fields.append(diag_field)
@@ -524,20 +564,23 @@ class DiscordFormatter:
             json_str = "# [Serialization error]"
 
         # Truncate if needed
-        truncated, truncated_len = self._truncate_with_indicator(
-            json_str, _GENERIC_TRUNCATE_LIMIT
-        )
+        truncated, _ = self._truncate_with_indicator(json_str, _GENERIC_TRUNCATE_LIMIT)
 
-        # If still too large after truncation, write to /tmp
-        if truncated_len > _GENERIC_TRUNCATE_LIMIT:
-            tmp_path = self._write_payload_to_tmp(data)
-            value = (
-                f"```\n# Payload too large for Discord — written to file\n"
-                f"# TODO: Upload to cloud/public hosting for shared access\n"
-                f"{tmp_path}\n```"
-            )
+        inline_value = self._codeblock(truncated)
+
+        # If still too large after hard truncation, write to /tmp
+        if len(inline_value) > DISCORD_FIELD_VALUE_LIMIT:
+            tmp_path = self._write_payload_to_tmp(json_str)
+            if tmp_path:
+                value = self._codeblock(
+                    "# Payload too large for Discord — written to file\n"
+                    "# TODO: Upload to cloud/public hosting for shared access\n"
+                    f"{tmp_path}"
+                )
+            else:
+                value = inline_value
         else:
-            value = f"```\n{truncated}\n```"
+            value = inline_value
 
         fields = [
             {
@@ -565,12 +608,16 @@ class DiscordFormatter:
     ) -> dict:
         """Build a Discord embed dict."""
         embed: dict[str, Any] = {
-            "title": title,
+            "title": self._sanitize_discord_text(title, DISCORD_TITLE_LIMIT, fallback="Untitled"),
             "color": color,
-            "fields": fields,
+            "fields": self._cap_fields(fields),
         }
         if description:
-            embed["description"] = description
+            embed["description"] = self._sanitize_discord_text(
+                description,
+                DISCORD_DESCRIPTION_LIMIT,
+                fallback="N/A",
+            )
         if timestamp:
             embed["timestamp"] = timestamp
         return embed
@@ -593,6 +640,22 @@ class DiscordFormatter:
         if isinstance(value, float) and not math.isfinite(value):
             return "N/A"
         return str(value)
+
+    def _valid_embed_timestamp(self, value: Any) -> str | None:
+        """Return a Discord-safe ISO-8601 timestamp string, else None."""
+        if not isinstance(value, str):
+            return None
+
+        timestamp = value.strip()
+        if not timestamp or timestamp == "N/A" or "T" not in timestamp:
+            return None
+
+        normalized = timestamp[:-1] + "+00:00" if timestamp.endswith("Z") else timestamp
+        try:
+            datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+        return timestamp
 
     def _fmt_price(self, value: Any) -> str:
         """Format price — up to 4 decimal places."""
@@ -672,16 +735,24 @@ class DiscordFormatter:
             diag_truncated, _ = self._truncate_with_indicator(diag_json, 500)
             return {
                 "name": "🔧 Diagnostics",
-                "value": f"```json\n{diag_truncated}\n```",
+                "value": self._codeblock(diag_truncated, language="json"),
                 "inline": False,
             }
         except (TypeError, ValueError):
             return None
 
+    def _codeblock(self, text: str, language: str | None = None) -> str:
+        """Wrap text in a Discord code block."""
+        if language:
+            return f"```{language}\n{text}\n```"
+        return f"```\n{text}\n```"
+
     def _truncate_text(self, text: str, limit: int) -> str:
         """Truncate text to limit chars, adding ellipsis if cut."""
         if len(text) <= limit:
             return text
+        if limit <= 3:
+            return text[:limit]
         return text[: limit - 3] + "..."
 
     def _truncate_with_indicator(
@@ -693,23 +764,74 @@ class DiscordFormatter:
             return text, original_len
         return text[: limit - 3] + "...", original_len
 
-    def _write_payload_to_tmp(self, data: dict) -> str:
+    def _sanitize_discord_text(self, text: Any, limit: int, fallback: str = "N/A") -> str:
+        """Escape mentions and hard-cap untrusted text for Discord embeds.
+
+        Defense in depth: downstream Discord senders should still use
+        allowed_mentions=none when posting embed payloads.
+        """
+        sanitized = re.sub(r"@(?!\u200b)", "@\u200b", self._safe_value(text))
+        sanitized = self._truncate_text(sanitized, limit)
+        return sanitized or fallback
+
+    def _write_payload_to_tmp(self, payload_json: str) -> str | None:
         """Write payload JSON to /tmp and return the file path.
 
         TODO: Upload to cloud/public hosting for shared access.
         """
-        filename = f"discord_payload_{uuid.uuid4().hex[:8]}.json"
-        filepath = f"{_TMP_DIR}/{filename}"
         try:
-            with open(filepath, "w") as f:
-                json.dump(data, f, default=str)
+            fd, filepath = tempfile.mkstemp(
+                dir=_TMP_DIR,
+                prefix="discord_payload_",
+                suffix=".json",
+                text=True,
+            )
         except OSError:
-            return f"/tmp/{filename}"
-        return filepath
+            return None
+
+        try:
+            try:
+                os.fchmod(fd, 0o600)
+            except (AttributeError, OSError):
+                pass
+
+            with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
+                tmp_file.write(payload_json)
+
+            try:
+                os.chmod(filepath, 0o600)
+            except OSError:
+                pass
+            return filepath
+        except OSError:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.unlink(filepath)
+            except OSError:
+                pass
+            return None
 
     def _cap_fields(self, fields: list[dict]) -> list[dict]:
-        """Hard-cap fields at Discord's 25-field limit."""
-        return fields[:DISCORD_TOTAL_FIELDS_LIMIT]
+        """Hard-cap fields and enforce Discord-safe field text limits."""
+        capped_fields = []
+        for field in fields[:DISCORD_TOTAL_FIELDS_LIMIT]:
+            capped_fields.append({
+                "name": self._sanitize_discord_text(
+                    field.get("name"),
+                    DISCORD_FIELD_NAME_LIMIT,
+                    fallback="Field",
+                ),
+                "value": self._sanitize_discord_text(
+                    field.get("value"),
+                    DISCORD_FIELD_VALUE_LIMIT,
+                    fallback="N/A",
+                ),
+                "inline": bool(field.get("inline", False)),
+            })
+        return capped_fields
 
     def _summarize_row(self, row: dict, tool: str | None = None) -> str:
         """Summarize a single row for analytical/screener list display."""
