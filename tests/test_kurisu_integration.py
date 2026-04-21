@@ -197,6 +197,7 @@ def _run_with_bounded_retry(tool_name: str, operation):
         f"[{tool_name}] Bounded retries ({MAX_RETRIES}) exhausted. "
         f"Skipping due to transient upstream failure: {last_transient or 'unknown'}"
     )
+    raise AssertionError("unreachable: pytest.skip should raise Skipped")
 
 
 # =============================================================================
