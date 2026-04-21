@@ -182,6 +182,9 @@ class DiscordFormatter:
         best_strategy_id = self._safe_value(data.get("best_strategy_id"))
         ranking_metric = self._safe_value(data.get("ranking_metric"))
         all_results = data.get("results", [])
+        invalid_results_shape = all_results is not None and not isinstance(all_results, list)
+        if invalid_results_shape:
+            all_results = []
 
         # top-N + count metadata (top 10 by default)
         TOP_N = 10
@@ -190,6 +193,12 @@ class DiscordFormatter:
         has_more = total_count > TOP_N
 
         fields = []
+        if invalid_results_shape:
+            fields.append({
+                "name": "⚠️ Input Warning",
+                "value": "Expected 'results' to be a list of strategy rows; received unsupported payload shape.",
+                "inline": False,
+            })
         for row in displayed:
             sid = self._safe_value(row.get("strategy_id"))
             rank = self._safe_value(row.get("rank"))
@@ -237,6 +246,11 @@ class DiscordFormatter:
         # Determine shape: candidates (order_block) or results (screener/session)
         candidates = data.get("candidates")
         results = data.get("results")
+        invalid_shapes = []
+        if candidates is not None and not isinstance(candidates, list):
+            invalid_shapes.append("'candidates'")
+        if results is not None and not isinstance(results, list):
+            invalid_shapes.append("'results'")
         if isinstance(candidates, list) and candidates:
             rows = candidates
             row_shape = "candidates"
@@ -256,6 +270,13 @@ class DiscordFormatter:
         failures = data.get("failures", [])
 
         fields = []
+        if invalid_shapes:
+            joined_invalid_shapes = " and ".join(invalid_shapes)
+            fields.append({
+                "name": "⚠️ Input Warning",
+                "value": f"Expected {joined_invalid_shapes} to be list-shaped scan rows; received unsupported payload shape.",
+                "inline": False,
+            })
         MAX_ROWS = 5
 
         for row in rows[:MAX_ROWS]:
@@ -286,9 +307,10 @@ class DiscordFormatter:
 
         # Row count metadata
         total = len(rows)
+        displayed_count = min(MAX_ROWS, total)
         fields.append({
             "name": "📋 Metadata",
-            "value": f"Showing top {MAX_ROWS} of {total} results",
+            "value": f"Showing top {displayed_count} of {total} results",
             "inline": False,
         })
 

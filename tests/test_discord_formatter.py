@@ -255,6 +255,24 @@ def test_format_compare_empty_results(formatter):
     assert len(formatted["fields"]) == 1
 
 
+def test_format_compare_warns_on_non_list_results(formatter):
+    """Non-list compare results must not crash and should surface a warning."""
+    result = {
+        "success": True,
+        "data": {
+            "tool": "compare_strategies",
+            "best_strategy_id": "N/A",
+            "results": {"count": 5},
+        },
+    }
+
+    formatted = formatter.format_compare(result)
+
+    assert formatted["fields"][0]["name"] == "⚠️ Input Warning"
+    assert "'results'" in formatted["fields"][0]["value"]
+    assert "Showing top 0 of 0 strategies" in formatted["fields"][-1]["value"]
+
+
 # ── format_screener ────────────────────────────────────────────────────────────
 
 def test_format_screener_results_shape(formatter):
@@ -331,6 +349,23 @@ def test_format_screener_failures(formatter):
     formatted = formatter.format_screener(result)
     field_names = [f["name"] for f in formatted["fields"]]
     assert "⚠️ Failures" in field_names
+
+
+def test_format_screener_warns_on_non_list_results(formatter):
+    """Non-list screener results should surface a warning instead of silently looking empty."""
+    result = {
+        "success": True,
+        "data": {
+            "tool": "screener_scan",
+            "results": {"count": 5},
+        },
+    }
+
+    formatted = formatter.format_screener(result)
+
+    assert formatted["fields"][0]["name"] == "⚠️ Input Warning"
+    assert "'results'" in formatted["fields"][0]["value"]
+    assert "Showing top 0 of 0 results" in formatted["fields"][-1]["value"]
 
 
 def test_format_screener_score_normalization_0_1_scale(formatter):
@@ -947,7 +982,7 @@ def test_format_backtest_no_metrics_key(formatter):
 
 
 def test_format_screener_empty_results(formatter):
-    """Empty results renders explicit 'No rows' metadata."""
+    """Empty results renders accurate metadata without pretending rows were shown."""
     result = {
         "success": True,
         "data": {
@@ -958,7 +993,7 @@ def test_format_screener_empty_results(formatter):
     formatted = formatter.format_screener(result)
     # Should only have metadata field
     assert len(formatted["fields"]) == 1
-    assert "Showing top 5 of 0 results" in formatted["fields"][0]["value"]
+    assert "Showing top 0 of 0 results" in formatted["fields"][0]["value"]
 
 
 def test_format_compare_ranking_metric_included(formatter):
