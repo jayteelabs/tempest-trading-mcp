@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 
 import pytest
@@ -731,7 +732,7 @@ def test_format_generic_truncation(formatter):
 
 
 def test_format_generic_file_write_on_oversized(tmp_path, monkeypatch):
-    """Oversized payload after hard truncation is securely written to temp storage."""
+    """Oversized payload stores the full JSON in temp storage without exposing its path."""
     f = DiscordFormatter()
     monkeypatch.setattr(discord_module, "_TMP_DIR", str(tmp_path))
     original_limit = discord_module._GENERIC_TRUNCATE_LIMIT
@@ -755,8 +756,8 @@ def test_format_generic_file_write_on_oversized(tmp_path, monkeypatch):
     assert payload_path.exists()
     assert oct(payload_path.stat().st_mode & 0o777) == "0o600"
     payload_text = payload_path.read_text(encoding="utf-8")
-    assert len(payload_text) <= 1100
-    assert payload_text.endswith("...")
+    assert payload_text == json.dumps(large_data, indent=2, default=str)
+    assert len(payload_text) > 1100
     assert "TODO" in value.upper() or "cloud" in value.lower()
 
 

@@ -552,8 +552,9 @@ class DiscordFormatter:
     def format_generic(self, result: dict) -> dict:
         """Render unknown tool result as indented JSON code block.
 
-        Locked decision (Josh): hard-truncate oversized JSON; if still too large,
-        write the truncated payload to temp storage and avoid exposing the local path.
+        Locked decision (Josh): hard-truncate oversized JSON for inline display; if it is
+        still too large for Discord, write the full payload to temp storage and avoid
+        exposing the local path.
         """
         data = result.get("data", {})
 
@@ -568,9 +569,9 @@ class DiscordFormatter:
 
         inline_value = self._codeblock(truncated)
 
-        # If still too large after hard truncation, write the truncated payload to temp storage.
+        # If still too large after hard truncation, write the full payload to temp storage.
         if len(inline_value) > DISCORD_FIELD_VALUE_LIMIT:
-            tmp_path = self._write_payload_to_tmp(truncated)
+            tmp_path = self._write_payload_to_tmp(json_str)
             if tmp_path:
                 value = self._codeblock(
                     "# Payload too large for Discord — written to local temp storage\n"
