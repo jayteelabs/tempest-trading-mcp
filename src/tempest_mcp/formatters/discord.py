@@ -72,7 +72,7 @@ DISCORD_TOTAL_FIELDS_LIMIT = 25
 
 # ── Generic Truncation / File Write Constants ───────────────────────────────────
 _GENERIC_TRUNCATE_LIMIT = 1800  # chars — generous for a single field value
-_TMP_DIR = "/tmp"
+_TMP_DIR = tempfile.gettempdir()
 
 
 class DiscordFormatter:
@@ -553,7 +553,7 @@ class DiscordFormatter:
         """Render unknown tool result as indented JSON code block.
 
         Locked decision (Josh): hard-truncate oversized JSON; if still too large,
-        write to /tmp and return file reference. Add TODO for future cloud hosting.
+        write the truncated payload to temp storage and avoid exposing the local path.
         """
         data = result.get("data", {})
 
@@ -568,14 +568,14 @@ class DiscordFormatter:
 
         inline_value = self._codeblock(truncated)
 
-        # If still too large after hard truncation, write to /tmp
+        # If still too large after hard truncation, write the truncated payload to temp storage.
         if len(inline_value) > DISCORD_FIELD_VALUE_LIMIT:
-            tmp_path = self._write_payload_to_tmp(json_str)
+            tmp_path = self._write_payload_to_tmp(truncated)
             if tmp_path:
                 value = self._codeblock(
-                    "# Payload too large for Discord — written to file\n"
+                    "# Payload too large for Discord — written to local temp storage\n"
+                    "# Local temp path intentionally omitted from Discord embed\n"
                     "# TODO: Upload to cloud/public hosting for shared access\n"
-                    f"{tmp_path}"
                 )
             else:
                 value = inline_value
@@ -775,7 +775,7 @@ class DiscordFormatter:
         return sanitized or fallback
 
     def _write_payload_to_tmp(self, payload_json: str) -> str | None:
-        """Write payload JSON to /tmp and return the file path.
+        """Write payload JSON to the temp directory and return the file path.
 
         TODO: Upload to cloud/public hosting for shared access.
         """
@@ -793,6 +793,7 @@ class DiscordFormatter:
             try:
                 os.fchmod(fd, 0o600)
             except (AttributeError, OSError):
+                # Best-effort hardening only; some platforms lack fchmod or deny it.
                 pass
 
             with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
@@ -801,16 +802,19 @@ class DiscordFormatter:
             try:
                 os.chmod(filepath, 0o600)
             except OSError:
+                # Best-effort hardening only; keep the temp file if chmod is rejected.
                 pass
             return filepath
         except OSError:
             try:
                 os.close(fd)
             except OSError:
+                # Cleanup only; ignore close failures so the original write error still wins.
                 pass
             try:
                 os.unlink(filepath)
             except OSError:
+                # Cleanup only; unlink failure is non-fatal here and intentionally ignored.
                 pass
             return None
 

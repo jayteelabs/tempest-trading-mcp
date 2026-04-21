@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from pathlib import Path
 
 import pytest
 
@@ -735,16 +734,29 @@ def test_format_generic_file_write_on_oversized(tmp_path, monkeypatch):
     """Oversized payload after hard truncation is securely written to temp storage."""
     f = DiscordFormatter()
     monkeypatch.setattr(discord_module, "_TMP_DIR", str(tmp_path))
+    original_limit = discord_module._GENERIC_TRUNCATE_LIMIT
+    discord_module._GENERIC_TRUNCATE_LIMIT = 1100
     large_data = {"tool": "unknown", "arr": list(range(10000))}
     result = {"success": True, "data": large_data}
-    formatted = f.format_generic(result)
+    try:
+        formatted = f.format_generic(result)
+    finally:
+        discord_module._GENERIC_TRUNCATE_LIMIT = original_limit
+
     raw_field = formatted["fields"][0]
     value = raw_field["value"]
-    lines = [line for line in value.splitlines() if str(tmp_path) in line]
-    assert lines
-    payload_path = Path(lines[0])
+    assert str(tmp_path) not in value
+    assert "local temp storage" in value.lower()
+    assert "path intentionally omitted" in value.lower()
+
+    written_files = list(tmp_path.iterdir())
+    assert len(written_files) == 1
+    payload_path = written_files[0]
     assert payload_path.exists()
     assert oct(payload_path.stat().st_mode & 0o777) == "0o600"
+    payload_text = payload_path.read_text(encoding="utf-8")
+    assert len(payload_text) <= 1100
+    assert payload_text.endswith("...")
     assert "TODO" in value.upper() or "cloud" in value.lower()
 
 
