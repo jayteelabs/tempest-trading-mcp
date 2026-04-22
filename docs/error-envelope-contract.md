@@ -10,7 +10,7 @@
 
 ## Purpose
 
-This document defines the contract between `data/` adapters and `market_tools.py` (and other downstream consumers) for error handling. Per D14, data adapters **NEVER propagate exceptions** to callers — instead, they return error envelopes that downstream tools must interpret.
+This document defines the contract between `data/` adapters and downstream MCP consumers for error handling. Per D14, data adapters **NEVER propagate exceptions** to callers — instead, they return sentinel values (`float('nan')`, empty OHLCV frames, empty order book payloads) that downstream tool/server layers must interpret when building MCP error envelopes.
 
 ---
 
@@ -35,9 +35,10 @@ if math.isnan(price):
 ```
 
 `math.isnan(price)` is a lossy sentinel: it can mean invalid symbol, upstream outage,
-rate limiting, or other adapter failures. Downstream callers should map the raw sentinel
-to `3000 DATA_SOURCE_ERROR` unless they have separate metadata proving a true
-"not found" condition.
+rate limiting, or other adapter failures. Downstream callers should validate inputs
+before invoking the adapter if they need 1xxx validation codes; once inputs are known
+valid, a raw NaN sentinel should map to `3000 DATA_SOURCE_ERROR` unless separate
+metadata proves a true "not found" condition.
 
 ---
 
@@ -45,18 +46,21 @@ to `3000 DATA_SOURCE_ERROR` unless they have separate metadata proving a true
 
 | Condition | Return Value | Log Level |
 |-----------|--------------|-----------|
-| Success | DataFrame with OHLCV columns, UTC index | INFO |
+| Success | DataFrame with OHLCV columns, UTC-aware `DatetimeIndex` | INFO |
 | Invalid symbol | Empty DataFrame with correct columns | ERROR |
 | Network error | Empty DataFrame with correct columns | ERROR |
 | API unavailable | Empty DataFrame with correct columns | ERROR |
 
-**DataFrame Columns (always present):**
+**DataFrame Contract:**
 - `open`: float
 - `high`: float
 - `low`: float
 - `close`: float
 - `volume`: float
-- Index: `pd.DatetimeIndex` (UTC-aware)
+- Success path index: `pd.DatetimeIndex` (UTC-aware)
+- Empty error sentinels only guarantee the canonical OHLCV columns; implementations
+  often return `pd.DataFrame(columns=OHLCV_COLUMNS)`, which uses the default
+  `RangeIndex`
 
 **Downstream Handling:**
 ```python
@@ -69,9 +73,10 @@ if df.empty:
 ```
 
 `df.empty` is also lossy at this boundary: it may represent invalid input, network
-failure, rate limiting, or a genuine no-data result. Reserve `3003 DATA_NOT_FOUND`
-for cases where the caller has an explicit upstream classification instead of only the
-empty-frame sentinel.
+failure, rate limiting, or a genuine no-data result. Downstream callers should validate
+inputs before invoking the adapter if they need 1xxx validation codes. Reserve
+`3003 DATA_NOT_FOUND` for cases where the caller has an explicit upstream
+classification instead of only the empty-frame sentinel.
 
 ---
 
@@ -180,16 +185,19 @@ No 2xxx auth codes are currently assigned, and the older TradingView/CCXT/YFinan
 
 ---
 
-## market_tools.py Integration
+## Downstream MCP Integration
 
-The `market_tools.py` module should:
+Public MCP layers (`server.py`, current tool handlers, and any future `market_tools.py`
+wrappers) should:
 
-1. **Never catch exceptions from adapters** — they don't raise any
-2. **Check return values for error indicators:**
+1. **Validate request arguments before adapter calls** when the caller needs to emit
+   1xxx validation errors instead of collapsing everything into a data-source failure
+2. **Never catch exceptions from adapters** — they don't raise any
+3. **Check return values for error indicators:**
     - `math.isnan(price)` for `fetch_live_price`
     - `df.empty` for `fetch_ohlcv_live`
     - `ob["timestamp"] is None` for `fetch_orderbook_snapshot`
-3. **Map raw sentinel-only failures to `3000 DATA_SOURCE_ERROR`:**
+4. **Map raw post-validation sentinel-only failures to `3000 DATA_SOURCE_ERROR`:**
    - use `3003 DATA_NOT_FOUND` only when upstream classification explicitly says
      the requested data does not exist
 
