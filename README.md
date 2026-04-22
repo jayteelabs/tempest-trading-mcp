@@ -55,6 +55,9 @@ The server exposes 21 public MCP tools:
 
 > **Note:** Tools under "Internal Engine" categories represent analytical capabilities exposed via the MCP interface. The indicator breadth (30+ indicators) is an internal engine capability, not a direct 1:1 mapping to public MCP tool count.
 
+
+For practical usage examples for all 21 public tools, see [EXAMPLES.md](EXAMPLES.md).
+
 ## Quick Start
 
 ```bash
