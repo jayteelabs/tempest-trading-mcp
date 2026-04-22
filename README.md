@@ -207,9 +207,15 @@ tempest-tradingview-mcp/
 │   │   ├── indicator.py      # Indicator results
 │   │   └── market.py         # Ticker, kline, orderbook
 │   └── tools/                # MCP tool handlers
+│       ├── __init__.py
+│       ├── analysis_tools.py
 │       ├── analytical_tools.py
+│       ├── backtest_tools.py
 │       ├── backtest_window.py
-│       └── screener_tools.py
+│       ├── indicator_tools.py
+│       ├── market_tools.py
+│       ├── screener_tools.py
+│       └── sentiment_tools.py
 ├── tests/                    # Test suite
 │   ├── conftest.py           # Pytest fixtures and integration markers
 │   └── ...
@@ -258,6 +264,7 @@ uv run pytest --run-integration tests/test_phase2_backtest_live_integration.py -
 | 9xxx | Internal/unexpected errors |
 
 Specific codes:
+- `1000` — Validation error
 - `1001` — Invalid symbol
 - `1002` — Invalid timeframe
 - `1003` — Invalid exchange
