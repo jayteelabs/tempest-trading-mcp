@@ -6,6 +6,14 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+env:
+  TA_LIB_ARCHIVE: ta-lib-0.4.0-src.tar.gz
+  TA_LIB_DOWNLOAD_URL: https://downloads.sourceforge.net/project/ta-lib/ta-lib/0.4.0/ta-lib-0.4.0-src.tar.gz
+  TA_LIB_SHA256: 9ff41efcb1c011a4b4b6dfc91610b06e39b1d7973ed5d4dee55029a0ac4dc651
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -31,11 +39,13 @@ jobs:
 
       - name: Install ta-lib system library
         run: |
-          sudo apt-get update && sudo apt-get install -y build-essential wget
-          wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
-          tar -xzf ta-lib-0.4.0-src.tar.gz
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y build-essential curl
+          curl --fail --show-error --silent --location --retry 3 "$TA_LIB_DOWNLOAD_URL" -o "$TA_LIB_ARCHIVE"
+          echo "$TA_LIB_SHA256  $TA_LIB_ARCHIVE" | sha256sum --check --status
+          tar -xzf "$TA_LIB_ARCHIVE"
           cd ta-lib && ./configure && make && sudo make install
-          cd .. && rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
+          cd .. && rm -rf ta-lib "$TA_LIB_ARCHIVE"
           sudo ldconfig
         env:
           TA_LIBRARY_PATH: /usr/lib
@@ -72,11 +82,13 @@ jobs:
 
       - name: Install ta-lib system library
         run: |
-          sudo apt-get update && sudo apt-get install -y build-essential wget
-          wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
-          tar -xzf ta-lib-0.4.0-src.tar.gz
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y build-essential curl
+          curl --fail --show-error --silent --location --retry 3 "$TA_LIB_DOWNLOAD_URL" -o "$TA_LIB_ARCHIVE"
+          echo "$TA_LIB_SHA256  $TA_LIB_ARCHIVE" | sha256sum --check --status
+          tar -xzf "$TA_LIB_ARCHIVE"
           cd ta-lib && ./configure && make && sudo make install
-          cd .. && rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
+          cd .. && rm -rf ta-lib "$TA_LIB_ARCHIVE"
           sudo ldconfig
         env:
           TA_LIBRARY_PATH: /usr/lib
