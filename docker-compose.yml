@@ -10,8 +10,8 @@
 #   sg docker -c "docker compose logs -f"
 #   sg docker -c "docker compose down"
 #
-# Validation (fresh worktree / CI — uses .env.example since .env is untracked):
-#   sg docker -c "docker compose --env-file .env.example config"
+# Validation (fresh worktree / CI — override the runtime env-file path):
+#   sg docker -c "TEMPEST_ENV_FILE=.env.example docker compose config"
 
 services:
   tempest-mcp:
@@ -19,12 +19,11 @@ services:
       context: .
       dockerfile: Dockerfile
     image: tempest-tradingview-mcp:latest
-    container_name: tempest-tradingview-mcp
     restart: unless-stopped
-    # .env.example is the baseline runtime config; copy to .env and edit for local overrides.
-    # .env is gitignored so secrets stay local; the --env-file flag above handles fresh clones.
+    # Runtime config comes from .env by default so local edits affect the container.
+    # For fresh clones / CI validation, override the path with TEMPEST_ENV_FILE=.env.example.
     env_file:
-      - .env.example
+      - ${TEMPEST_ENV_FILE:-.env}
     ports:
       # Safer default: publish to loopback on the host. If you need remote access,
       # expose intentionally behind a reverse proxy, Tailscale, firewall rules,

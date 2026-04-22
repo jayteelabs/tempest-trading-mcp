@@ -9,6 +9,7 @@ Generated: 2026-04-22
 **Start command:**
 ```bash
 cd /home/tempest/apps/tempest-tradingview-mcp
+cp .env.example .env
 sg docker -c "docker compose up -d --build"
 ```
 
@@ -26,7 +27,7 @@ sg docker -c "docker compose logs -f"
 
 **Image:** `tempest-tradingview-mcp:latest` — built from `Dockerfile` in project root.
 
-**Container name:** `tempest-tradingview-mcp`
+**Container naming:** Docker Compose uses its default project-scoped container names. This avoids conflicts with older standalone `docker run --name tempest-tradingview-mcp ...` containers during migration/restarts.
 
 **Important Docker networking note:** the MCP server must bind to `0.0.0.0` inside the container. Binding to `127.0.0.1` only makes SSE/MCP work from inside the container itself and breaks host-side access through Docker port publishing on `9001`.
 
@@ -36,6 +37,12 @@ sg docker -c "docker compose logs -f"
 - SSE endpoint: `http://127.0.0.1:9001/sse`
 - Message endpoint: `http://127.0.0.1:9001/messages`
 - Host-side sanity check should use a real MCP handshake, not just a TCP port check
+
+**Fresh-clone validation (without creating `.env`):**
+```bash
+cd /home/tempest/apps/tempest-tradingview-mcp
+sg docker -c "TEMPEST_ENV_FILE=.env.example docker compose config"
+```
 
 ## Docker Socket Access
 

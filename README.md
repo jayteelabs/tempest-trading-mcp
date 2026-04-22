@@ -30,7 +30,7 @@ uv pip install -e .
 # 4. Configure environment (optional — defaults work out of the box)
 cp .env.example .env
 
-# 5. Run the MCP server (stdio transport)
+# 5. Run the MCP server (HTTP/SSE transport on :9001)
 uv run python -m tempest_mcp.server
 ```
 
@@ -43,11 +43,13 @@ Configuration is loaded from environment variables with the `TEMPEST_` prefix:
 | `TEMPEST_YF_CACHE_TTL` | Yahoo Finance cache TTL (seconds) | `3600` |
 | `TEMPEST_CCXT_DEFAULT_EXCHANGE` | Default exchange for real-time quotes | `binance` |
 | `TEMPEST_LOG_LEVEL` | Logging level | `INFO` |
-| `TEMPEST_ENABLE_SSE` | Enable SSE transport (deferred to Phase 2) | `false` |
+
+The server always exposes the HTTP/SSE transport on port `9001`; there is no transport toggle.
 
 Copy `.env.example` to `.env` and adjust as needed:
 
 ```bash
+# Compose/runtime config uses .env by default.
 cp .env.example .env
 ```
 
@@ -79,6 +81,9 @@ Notes:
 ### Docker Compose
 
 ```bash
+# First time: create the runtime env file used by docker-compose.yml
+cp .env.example .env
+
 # Build and start the service
 sg docker -c "docker compose up -d --build"
 
@@ -89,7 +94,15 @@ sg docker -c "docker compose logs -f"
 sg docker -c "docker compose down"
 ```
 
+For fresh-clone validation without creating `.env`, override the runtime env-file path explicitly:
+
+```bash
+sg docker -c "TEMPEST_ENV_FILE=.env.example docker compose config"
+```
+
 The compose stack starts the MCP server on port `9001` with the HTTP/SSE transport (`/sse` for SSE connections, `/messages` for POST requests) and publishes it on host loopback by default (`127.0.0.1:9001:9001`).
+
+Compose uses its default project-scoped container naming so repeated `docker compose up` runs do not collide with an older standalone `docker run --name tempest-tradingview-mcp ...` container.
 
 **Health check:** The image includes a Dockerfile-level HEALTHCHECK that verifies the SSE endpoint is reachable via a HEAD request to `http://localhost:9001/sse`. The healthcheck exits 0 (healthy) when the endpoint exists (2xx-4xx response) and exits 1 (unhealthy) on 5xx or connection failure. Use `sg docker -c "docker compose ps"` to see the health status.
 
@@ -107,7 +120,7 @@ Kurisu → tempest-mesh → MCP Server → [CCXT primary / Yahoo Finance fallbac
 tempest-tradingview-mcp/
 ├── src/tempest_mcp/          # Main package
 │   ├── __init__.py
-│   ├── server.py             # MCP server entry point (stdio)
+│   ├── server.py             # MCP server entry point (HTTP/SSE)
 │   ├── config.py             # Environment config loader
 │   ├── logging_config.py     # Structured logging setup
 │   ├── models/               # Dataclass models (D6)

@@ -750,7 +750,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             self._cleanup_task = asyncio.create_task(self._periodic_request_cleanup())
             _rate_limit_cleanup_task = self._cleanup_task
 
-        if request.url.path == "/messages":
+        if request.url.path in {"/messages", "/messages/"}:
             # Request-count rate limiting
             lock = self._get_lock(client_ip)
             async with lock:
@@ -1068,7 +1068,7 @@ def create_app() -> Starlette:
                 )
             ]
 
-    transport = SseServerTransport("/messages/")
+    transport = SseServerTransport("/messages")
 
     class SseApp:
         def __init__(self, server: Server, transport: SseServerTransport):
@@ -1123,6 +1123,7 @@ def create_app() -> Starlette:
         routes=[
             Route("/sse", sse_handler, methods=["GET"]),
             Route("/messages", message_handler, methods=["POST"]),
+            Route("/messages/", message_handler, methods=["POST"]),
         ],
         lifespan=lifespan,
     )

@@ -19,7 +19,7 @@ Generated: 2026-04-13
 - Naming: snake_case modules/functions, dataclasses in `models/`
 - Tests: `tests/` with focused adapter/indicator/backtest modules; some tests marked `integration`
 - Docker deploys: this service is reached through Docker port publishing, so the MCP server must bind to `0.0.0.0` in-container, not `127.0.0.1`
-- Deployment verification: prefer a real SSE/MCP handshake (`/sse` -> `/messages/`) over a bare port-open check
+- Deployment verification: prefer a real SSE/MCP handshake (`/sse` -> `/messages`) over a bare port-open check
 
 ## CI Gates
 - Install dependencies with `uv`
