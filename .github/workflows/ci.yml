@@ -89,7 +89,7 @@ jobs:
           python .github/scripts/render_coverage_comment.py \
             --coverage-json coverage.json \
             --output coverage-comment.md \
-            --head-sha "${GITHUB_SHA}" \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
             --coverage-status "${{ steps.coverage.outcome }}" \
             --workflow-url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
