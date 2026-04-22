@@ -52,3 +52,52 @@ jobs:
 
       - name: Run tests with pytest
         run: pytest tests/ -v --tb=short
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
+
+      - name: Install ta-lib system library
+        run: |
+          sudo apt-get update && sudo apt-get install -y build-essential wget
+          wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
+          tar -xzf ta-lib-0.4.0-src.tar.gz
+          cd ta-lib && ./configure && make && sudo make install
+          cd .. && rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
+          sudo ldconfig
+        env:
+          TA_LIBRARY_PATH: /usr/lib
+          TA_INCLUDE_PATH: /usr/include
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system -e .
+          uv pip install --system ".[dev]"
+          uv pip install --system ta-lib
+
+      - name: Lint with ruff
+        run: ruff check src/ tests/
+
+      - name: Run tests with coverage
+        run: pytest tests/ -v --tb=short --cov=src/tempest_mcp --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage to Codecov
+        if: success()
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+          verbose: true
