@@ -16,7 +16,7 @@ ta-lib is a C extension that must be installed at the system level before the Py
 
 ```bash
 # Ubuntu/Debian
-sudo apt-get install ta-lib
+sudo apt-get install libta-lib-dev
 
 # macOS (Homebrew)
 brew install ta-lib
@@ -92,7 +92,7 @@ Branches are named to align with Linear ticket IDs:
 
 | Prefix | Example | Purpose |
 |--------|---------|---------|
-| `feature/eng-XX` | `feature/ENG-42/add-rsi-tool` | New features |
+| `feature/eng-XX` | `feature/ENG-48/add-rsi-tool` | New features |
 | `fix/eng-XX` | `fix/ENG-55/correct-vwap-calc` | Bug fixes |
 | `docs/eng-XX` | `docs/ENG-48/contributing-docs` | Documentation |
 
@@ -175,8 +175,8 @@ uv run pytest tests/ -v --tb=short
 # Specific test file
 uv run pytest tests/test_backtest_rsi.py -v --tb=short
 
-# Integration tests (require network access)
-uv run pytest tests/ -v --tb=short -m integration
+# Integration tests (require network access and --run-integration flag)
+uv run pytest tests/ -v --tb=short -m integration --run-integration
 ```
 
 ### Test Markers
