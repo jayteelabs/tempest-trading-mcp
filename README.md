@@ -154,6 +154,8 @@ Compose uses its default project-scoped container naming so repeated `docker com
 
 ## Architecture
 
+For a detailed architecture deep-dive, see [ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ```
 ┌─────────────┐     ┌──────────────────┐     ┌─────────────────────────────┐
 │ MCP Client  │────▶│  HTTP/SSE        │     │  Starlette + MCP Server    │
@@ -180,6 +182,7 @@ Compose uses its default project-scoped container naming so repeated `docker com
 ### Directory Structure
 
 ```
+
 tempest-tradingview-mcp/
 ├── src/tempest_mcp/          # Main package
 │   ├── __init__.py
@@ -247,6 +250,7 @@ uv run ruff check src/
 # Format
 uv run ruff format src/
 ```
+
 
 ### Live-Data Integration Tests
 
