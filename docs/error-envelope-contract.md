@@ -30,8 +30,8 @@ This document defines the contract between `data/` adapters and `market_tools.py
 ```python
 price = adapter.fetch_live_price("BTCUSDT")
 if math.isnan(price):
-    # Handle error case - no price available
-    return {"success": False, "error": {"code": 3000, "message": "Price unavailable"}}
+    # Handle error case - no price data found for this symbol
+    return {"success": False, "error": {"code": 3003, "message": "Price data not found"}}
 ```
 
 ---
@@ -57,8 +57,8 @@ if math.isnan(price):
 ```python
 df = adapter.fetch_ohlcv_live("BTCUSDT", "1m", 100)
 if df.empty:
-    # Handle error case - no OHLCV data available
-    return {"success": False, "error": {"code": 3000, "message": "OHLCV data unavailable"}}
+    # Handle error case - no OHLCV data found for this query
+    return {"success": False, "error": {"code": 3003, "message": "OHLCV data not found"}}
 
 # DataFrame is valid - proceed with analysis
 ```
