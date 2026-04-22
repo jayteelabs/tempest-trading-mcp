@@ -72,24 +72,24 @@ sg docker -c "docker run --rm -p 9001:9001 tempest-tradingview-mcp"
 Notes:
 - The MCP server must bind to `0.0.0.0` inside the container for Docker port publishing to work.
 - Binding to `127.0.0.1` inside the container makes `/sse` reachable only from inside the container and breaks host-side MCP clients.
-- For live verification, use a real SSE/MCP handshake instead of only checking whether port `9001` is open.
+- The image includes a Dockerfile-level HEALTHCHECK that probes the SSE surface via a HEAD request to `/sse`.
 
 ### Docker Compose
 
 ```bash
 # Build and start the service
-docker compose up -d --build
+sg docker -c "docker compose up -d --build"
 
 # View logs
-docker compose logs -f
+sg docker -c "docker compose logs -f"
 
 # Stop the service
-docker compose down
+sg docker -c "docker compose down"
 ```
 
 The compose stack starts the MCP server on port `9001` with the HTTP/SSE transport (`/sse` for SSE connections, `/messages` for POST requests).
 
-**Health check:** The service includes a Docker healthcheck that verifies the SSE endpoint responds on `http://localhost:9001/sse`. Use `docker compose ps` to see the health status.
+**Health check:** The image includes a Dockerfile-level HEALTHCHECK that verifies the SSE endpoint is reachable via a HEAD request to `http://localhost:9001/sse`. The healthcheck exits 0 (healthy) when the endpoint exists (2xx-4xx response) and exits 1 (unhealthy) on 5xx or connection failure. Use `sg docker -c "docker compose ps"` to see the health status.
 
 **Note:** The MCP server must bind to `0.0.0.0` inside the container for Docker port publishing to work. The Dockerfile is pre-configured to run the server on `0.0.0.0:9001`.
 

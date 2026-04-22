@@ -2,10 +2,16 @@
 # Single-service stack for local/VPS deployment
 #
 # Usage:
-#   docker compose up -d --build
-#   docker compose ps
-#   docker compose logs -f
-#   docker compose down
+#   # First time: copy .env.example to .env and edit with your values
+#   cp .env.example .env
+#
+#   sg docker -c "docker compose up -d --build"
+#   sg docker -c "docker compose ps"
+#   sg docker -c "docker compose logs -f"
+#   sg docker -c "docker compose down"
+#
+# Validation (fresh worktree / CI — uses .env.example since .env is untracked):
+#   sg docker -c "docker compose --env-file .env.example config"
 
 services:
   tempest-mcp:
@@ -15,18 +21,14 @@ services:
     image: tempest-tradingview-mcp:latest
     container_name: tempest-tradingview-mcp
     restart: unless-stopped
+    # .env.example is the baseline runtime config; copy to .env and edit for local overrides.
+    # .env is gitignored so secrets stay local; the --env-file flag above handles fresh clones.
     env_file:
-      - .env
+      - .env.example
     ports:
       - "9001:9001"
-    # Healthcheck targets the existing HTTP/SSE surface on port 9001.
-    # We use curl with a short max-time so it exits after connecting
-    # (SSE is a persistent stream, so we just verify the endpoint responds).
-    healthcheck:
-      test: ["CMD", "curl", "-f", "--max-time", "5", "http://localhost:9001/sse"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
+    # Healthcheck is defined in Dockerfile (HEALTHCHECK directive) to properly
+    # probe the SSE surface via a HEAD request that returns without waiting
+    # for the streaming body. Compose inherits the Dockerfile healthcheck.
     # Server binds to 0.0.0.0 in-container (see server.py:SERVER_HOST).
     # No volume mounts needed — service is stateless.
