@@ -20,11 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `fetch_klines` — OHLCV candle data (historical and live)
 - `fetch_orderbook` — Order book depth snapshot
 
-#### Indicator Engine (30+ indicators)
+#### Indicator Engine (30+ internal indicators)
 - **Momentum**: RSI, MACD, ADX, Stochastic, CCI, Williams %R, ROC
 - **Trend**: EMA (7, 25, 50, 200), VWAP
 - **Volatility**: ATR, Bollinger Bands, historical volatility
 - **Volume**: VWAP, TPO (Time Price Opportunity), Volume Profile
+
+These indicator modules power strategy, screening, and analysis features in the repo; `indicator_rsi` is the only standalone indicator exposed directly on the public MCP tool surface today.
 
 #### Backtesting Engine
 - **Bidirectional backtest engine** (`backtest/engine.py`) — Supports LONG and SHORT positions with through-flat transitions
