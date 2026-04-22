@@ -1,0 +1,32 @@
+# Docker Compose for tempest-tradingview-mcp
+# Single-service stack for local/VPS deployment
+#
+# Usage:
+#   docker compose up -d --build
+#   docker compose ps
+#   docker compose logs -f
+#   docker compose down
+
+services:
+  tempest-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tempest-tradingview-mcp:latest
+    container_name: tempest-tradingview-mcp
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "9001:9001"
+    # Healthcheck targets the existing HTTP/SSE surface on port 9001.
+    # We use curl with a short max-time so it exits after connecting
+    # (SSE is a persistent stream, so we just verify the endpoint responds).
+    healthcheck:
+      test: ["CMD", "curl", "-f", "--max-time", "5", "http://localhost:9001/sse"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    # Server binds to 0.0.0.0 in-container (see server.py:SERVER_HOST).
+    # No volume mounts needed — service is stateless.

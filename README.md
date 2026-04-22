@@ -76,12 +76,22 @@ Notes:
 
 ### Docker Compose
 
-```yaml
-services:
-  tempest-mcp:
-    build: .
-    restart: unless-stopped
+```bash
+# Build and start the service
+docker compose up -d --build
+
+# View logs
+docker compose logs -f
+
+# Stop the service
+docker compose down
 ```
+
+The compose stack starts the MCP server on port `9001` with the HTTP/SSE transport (`/sse` for SSE connections, `/messages` for POST requests).
+
+**Health check:** The service includes a Docker healthcheck that verifies the SSE endpoint responds on `http://localhost:9001/sse`. Use `docker compose ps` to see the health status.
+
+**Note:** The MCP server must bind to `0.0.0.0` inside the container for Docker port publishing to work. The Dockerfile is pre-configured to run the server on `0.0.0.0:9001`.
 
 ## Architecture
 
