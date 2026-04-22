@@ -80,8 +80,6 @@ cp .env.example .env
 uv run python -m tempest_mcp.server
 ```
 
-For a detailed architecture deep-dive, see [ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
 ## Configuration
 
 Configuration is loaded from environment variables with the `TEMPEST_` prefix:
@@ -97,8 +95,6 @@ Copy `.env.example` to `.env` and adjust as needed:
 ```bash
 cp .env.example .env
 ```
-
-For a detailed architecture deep-dive, see [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 **No API keys required** — the active data sources use public endpoints.
 
@@ -118,8 +114,6 @@ sg docker -c "docker build -t tempest-tradingview-mcp ."
 # Run the container with the MCP port published on host loopback
 sg docker -c "docker run --rm -p 127.0.0.1:9001:9001 tempest-tradingview-mcp"
 ```
-
-For a detailed architecture deep-dive, see [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Notes:
 - The MCP server must bind to `0.0.0.0` inside the container for Docker port publishing to work.
@@ -144,15 +138,11 @@ sg docker -c "docker compose logs -f"
 sg docker -c "docker compose down"
 ```
 
-For a detailed architecture deep-dive, see [ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
 For fresh-clone validation without creating `.env`, override the runtime env-file path explicitly:
 
 ```bash
 sg docker -c "TEMPEST_ENV_FILE=.env.example docker compose config"
 ```
-
-For a detailed architecture deep-dive, see [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 The compose stack starts the MCP server on port `9001` with the HTTP/SSE transport (`/sse` for SSE connections, `/messages` for POST requests) and publishes it on host loopback by default (`127.0.0.1:9001:9001`).
 
@@ -164,9 +154,9 @@ Compose uses its default project-scoped container naming so repeated `docker com
 
 ## Architecture
 
-```
-
 For a detailed architecture deep-dive, see [ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+```
 ┌─────────────┐     ┌──────────────────┐     ┌─────────────────────────────┐
 │ MCP Client  │────▶│  HTTP/SSE        │     │  Starlette + MCP Server    │
 │ (optional)  │     │  /sse  /messages │────▶│  Tool Dispatch             │
@@ -185,8 +175,6 @@ For a detailed architecture deep-dive, see [ARCHITECTURE.md](docs/ARCHITECTURE.m
                                               └────────────────────────────┘
 ```
 
-For a detailed architecture deep-dive, see [ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
 **Runtime boundary:** MCP client(s) connect via HTTP/SSE to the Starlette/MCP server on port 9001. The server dispatches to internal engines (market data, backtest, screener, analysis, sentiment). External data dependencies are CCXT (live primary) and Yahoo Finance (historical fallback).
 
 > Kurisu and tempest-mesh are **optional upstream callers** in the broader ecosystem — they are not mandatory runtime dependencies of this repository.
@@ -195,7 +183,6 @@ For a detailed architecture deep-dive, see [ARCHITECTURE.md](docs/ARCHITECTURE.m
 
 ```
 
-For a detailed architecture deep-dive, see [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 tempest-tradingview-mcp/
 ├── src/tempest_mcp/          # Main package
 │   ├── __init__.py
@@ -248,8 +235,6 @@ tempest-tradingview-mcp/
 └── README.md
 ```
 
-For a detailed architecture deep-dive, see [ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
 ## Development
 
 ```bash
@@ -275,8 +260,6 @@ uv run ruff format src/
 # across both 1h and 4h timeframes
 uv run pytest --run-integration tests/test_phase2_backtest_live_integration.py -v
 ```
-
-For a detailed architecture deep-dive, see [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Error Codes
 

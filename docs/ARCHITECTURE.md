@@ -79,11 +79,7 @@ All CCXT methods return empty/safe values on error (no exception propagation —
 
 ### Fallback Data Path: yfinance
 
-yfinance is the fallback for stocks and crypto data gaps CCXT does not cover (`yf_adapter.py`).
-
-```python
-YFinanceAdapter  # historical OHLCV for non-crypto symbols
-```
+yfinance is the fallback for stocks and crypto data gaps CCXT does not cover (`yf_adapter.py`). The module exposes `fetch_ohlcv(...)` and a `YFAdapter` compatibility wrapper for historical OHLCV retrieval.
 
 ### Data Source Router
 
@@ -97,9 +93,9 @@ DataSourceRouter
 
 ### Historical Data Source
 
-**File:** `src/tempest_mcp/data/_hist.py`
+**Files:** `src/tempest_mcp/data/_hist.py`, `src/tempest_mcp/data/_factory.py`
 
-Wraps `CCXTAdapter` (primary) and `YFinanceAdapter` (fallback) behind a single interface, with caching via `get_historical_adapter()` singleton.
+`HistoricalDataSource` lives in `_hist.py` and wraps CCXT-backed historical retrieval with yfinance fallback behind a single interface. The cached `get_historical_adapter()` singleton helper lives in `_factory.py` and returns one `HistoricalDataSource` instance via `lru_cache(maxsize=1)`.
 
 ### Legacy TradingView Adapter
 
@@ -166,7 +162,7 @@ Internal backtest-core module (not a separate MCP tool surface).
 
 **Directory:** `src/tempest_mcp/strategies/`
 
-Strategy modules owned by the backtest team. Each module is a self-contained strategy definition used by the backtest tools.
+Strategy modules owned by the backtest team. The surface is mixed: some modules return `(signals, BacktestEngine)` directly, while RSI and Order Blocks expose signal generators that are wrapped by thin adapters in `src/tempest_mcp/tools/backtest_tools.py`.
 
 | File | Strategy |
 |------|----------|
@@ -177,7 +173,8 @@ Strategy modules owned by the backtest team. Each module is a self-contained str
 | `backtest_order_blocks.py` | Order Blocks |
 | `backtest_elliot_wave.py` | Elliott Wave |
 
-Each strategy module follows the `run()` callable contract: accepts `(ohlcv_df, initial_capital, **params)` and returns `(signals: pd.Series, engine: BacktestEngine)`.
+- Direct runners: `run_pdh_session_backtest`, `run_vwap_anchored_backtest`, `run_ema_stack_backtest`, and `run_elliot_wave_backtest` return `(signals, BacktestEngine)` directly.
+- Signal-generator modules: `backtest_rsi.py` exposes `generate_rsi_signals(...)` and `backtest_order_blocks.py` exposes `generate_order_block_signals(...)`; `tools/backtest_tools.py` wraps those outputs with the shared `BacktestEngine`.
 
 ---
 
@@ -258,9 +255,10 @@ Thin handlers that bridge MCP tool calls to internal engines:
 ### Adding a new data source
 
 1. Create a new adapter in `src/tempest_mcp/data/` (e.g., `my_adapter.py`).
-2. If historical: update `HistoricalDataSource` in `_hist.py` to wrap it as a fallback layer.
-3. If live: ensure `DataSourceRouter.route_live()` returns it.
-4. No changes to MCP tool schemas required — data sources are internal.
+2. If historical: update `HistoricalDataSource` in `_hist.py` to route to it.
+3. If the historical singleton construction changes, update `get_historical_adapter()` in `_factory.py`.
+4. If live: update `get_live_adapter()` / `DataSourceRouter.route_live()` as needed.
+5. No changes to MCP tool schemas required — data sources are internal.
 
 ### Adding a new indicator
 
@@ -270,8 +268,10 @@ Thin handlers that bridge MCP tool calls to internal engines:
 
 ### Adding a new backtest strategy
 
-1. Create a new module in `src/tempest_mcp/strategies/` following the `run(ohlcv_df, initial_capital, **params) → (signals, engine)` contract.
-2. Add the strategy to the `compare_strategies` allowed list in `server.py` (update `strategy_ids` enum).
+1. Create a new module in `src/tempest_mcp/strategies/`.
+2. Choose the live surface: either expose a direct runner that returns `(signals, BacktestEngine)` or expose a signal generator and add a thin adapter in `tools/backtest_tools.py`.
+3. Register the strategy in `tools/backtest_tools.py` (`_STRATEGY_SPECS` plus `_run_direct_runner()` / `_run_adapter()` as appropriate).
+4. If it should participate in `compare_strategies`, update `ALLOWED_STRATEGY_IDS` in `tools/backtest_tools.py` and the `compare_strategies` schema text in `server.py`.
 
 ---
 
