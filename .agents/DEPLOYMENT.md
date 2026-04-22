@@ -30,6 +30,8 @@ sg docker -c "docker compose logs -f"
 
 **Important Docker networking note:** the MCP server must bind to `0.0.0.0` inside the container. Binding to `127.0.0.1` only makes SSE/MCP work from inside the container itself and breaks host-side access through Docker port publishing on `9001`.
 
+**Exposure posture:** the repo-owned Compose config publishes `127.0.0.1:9001:9001` by default so the unauthenticated SSE + `/messages` surface stays local to the host. If remote access is needed, expose intentionally behind a reverse proxy, Tailscale, firewall rules, or equivalent trusted-network controls.
+
 **Expected live endpoint behavior:**
 - SSE endpoint: `http://127.0.0.1:9001/sse`
 - Message endpoint: `http://127.0.0.1:9001/messages`

@@ -4,22 +4,27 @@
 # ── Stage 1: Builder — install ta-lib C library + Python dependencies ──
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
 
+ARG TA_LIB_VERSION=0.4.0
+ARG TA_LIB_SHA256=9ff41efcb1c011a4b4b6dfc91610b06e39b1d7973ed5d4dee55029a0ac4dc651
+
 # Install system dependencies for ta-lib C extension (D4, Q3)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential \
+    ca-certificates \
     wget && \
     rm -rf /var/lib/apt/lists/*
 
 # Build and install ta-lib C library from source
-RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
-    tar -xzf ta-lib-0.4.0-src.tar.gz && \
+RUN wget -O ta-lib-${TA_LIB_VERSION}-src.tar.gz "https://sourceforge.net/projects/ta-lib/files/ta-lib/${TA_LIB_VERSION}/ta-lib-${TA_LIB_VERSION}-src.tar.gz/download" && \
+    echo "${TA_LIB_SHA256}  ta-lib-${TA_LIB_VERSION}-src.tar.gz" | sha256sum -c - && \
+    tar -xzf ta-lib-${TA_LIB_VERSION}-src.tar.gz && \
     cd ta-lib/ && \
     ./configure --prefix=/usr && \
     make && \
     make install && \
     cd .. && \
-    rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
+    rm -rf ta-lib ta-lib-${TA_LIB_VERSION}-src.tar.gz
 
 WORKDIR /app
 

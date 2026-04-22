@@ -26,7 +26,10 @@ services:
     env_file:
       - .env.example
     ports:
-      - "9001:9001"
+      # Safer default: publish to loopback on the host. If you need remote access,
+      # expose intentionally behind a reverse proxy, Tailscale, firewall rules,
+      # or equivalent trusted-network controls.
+      - "127.0.0.1:9001:9001"
     # Healthcheck is defined in Dockerfile (HEALTHCHECK directive) to properly
     # probe the SSE surface via a HEAD request that returns without waiting
     # for the streaming body. Compose inherits the Dockerfile healthcheck.

@@ -65,13 +65,15 @@ cp .env.example .env
 # Build the image
 sg docker -c "docker build -t tempest-tradingview-mcp ."
 
-# Run the container with the MCP port published
-sg docker -c "docker run --rm -p 9001:9001 tempest-tradingview-mcp"
+# Run the container with the MCP port published on host loopback
+sg docker -c "docker run --rm -p 127.0.0.1:9001:9001 tempest-tradingview-mcp"
 ```
 
 Notes:
 - The MCP server must bind to `0.0.0.0` inside the container for Docker port publishing to work.
 - Binding to `127.0.0.1` inside the container makes `/sse` reachable only from inside the container and breaks host-side MCP clients.
+- Publishing `127.0.0.1:9001:9001` on the host keeps the unauthenticated SSE + `/messages` surface local by default.
+- If you need remote access, expose intentionally behind a reverse proxy, Tailscale, firewall rules, or equivalent trusted-network controls.
 - The image includes a Dockerfile-level HEALTHCHECK that probes the SSE surface via a HEAD request to `/sse`.
 
 ### Docker Compose
@@ -87,11 +89,11 @@ sg docker -c "docker compose logs -f"
 sg docker -c "docker compose down"
 ```
 
-The compose stack starts the MCP server on port `9001` with the HTTP/SSE transport (`/sse` for SSE connections, `/messages` for POST requests).
+The compose stack starts the MCP server on port `9001` with the HTTP/SSE transport (`/sse` for SSE connections, `/messages` for POST requests) and publishes it on host loopback by default (`127.0.0.1:9001:9001`).
 
 **Health check:** The image includes a Dockerfile-level HEALTHCHECK that verifies the SSE endpoint is reachable via a HEAD request to `http://localhost:9001/sse`. The healthcheck exits 0 (healthy) when the endpoint exists (2xx-4xx response) and exits 1 (unhealthy) on 5xx or connection failure. Use `sg docker -c "docker compose ps"` to see the health status.
 
-**Note:** The MCP server must bind to `0.0.0.0` inside the container for Docker port publishing to work. The Dockerfile is pre-configured to run the server on `0.0.0.0:9001`.
+**Note:** The MCP server must bind to `0.0.0.0` inside the container for Docker port publishing to work. The Dockerfile is pre-configured to run the server on `0.0.0.0:9001`, but the repo-owned Docker examples keep host publishing on loopback by default. Intentionally widen exposure only with compensating controls such as a reverse proxy, Tailscale, and/or firewall rules.
 
 ## Architecture
 
