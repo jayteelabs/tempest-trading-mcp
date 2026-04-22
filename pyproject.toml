@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tempest-tradingview-mcp"
-version = "0.1.0"
+version = "1.0.0"
 description = "Market data & analytics MCP server — technical indicators, backtesting, and screening for crypto markets"
 readme = "README.md"
 license = "MIT"
@@ -14,7 +14,7 @@ authors = [
 ]
 keywords = ["mcp", "market-data", "crypto", "technical-analysis", "backtesting"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.10",
