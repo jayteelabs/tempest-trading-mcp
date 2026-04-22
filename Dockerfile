@@ -87,8 +87,9 @@ ENV PATH="/home/tempest/.venv/bin:$PATH" \
 # Healthcheck: probe SSE surface via HEAD request to /sse.
 # SSE is a persistent stream — HEAD returns headers immediately without waiting for body.
 # Exit 0 (healthy) if endpoint exists (2xx-4xx), exit 1 (unhealthy) if 5xx or unreachable.
+# Connection failures exit cleanly without printing a Python traceback.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD python -c "import http.client; conn = http.client.HTTPConnection('localhost', 9001, timeout=5); conn.request('HEAD', '/sse'); r = conn.getresponse(); conn.close(); exit(0 if r.status < 500 else 1)"
+    CMD ["python", "-c", "exec(\"import http.client, sys\\nstatus = 500\\nconn = None\\ntry:\\n    conn = http.client.HTTPConnection('localhost', 9001, timeout=5)\\n    conn.request('HEAD', '/sse')\\n    status = conn.getresponse().status\\nexcept OSError:\\n    sys.exit(1)\\nfinally:\\n    if conn is not None:\\n        conn.close()\\nsys.exit(0 if status < 500 else 1)\\n\")"]
 
 # Switch to non-root user
 USER tempest
