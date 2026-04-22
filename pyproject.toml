@@ -26,8 +26,8 @@ dependencies = [
     "yfinance>=0.2.0",
     "ccxt>=4.0.0",
     "pandas>=2.0.0",
-    "numpy>=1.24.0",
-    "ta-lib>=0.4.0",
+    "numpy>=2.0.0",
+    "ta-lib>=0.6.8",
     "structlog>=23.0.0",
     "httpx>=0.25.0",
     "python-dotenv>=1.0.0",
@@ -85,7 +85,7 @@ omit = [
 ]
 
 [tool.coverage.report]
-# Show uncovered lines with >= 80% threshold.
+# Show uncovered lines in terminal and XML reports.
 precision = 2
 show_missing = true
 skip_covered = false

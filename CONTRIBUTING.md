@@ -8,32 +8,21 @@ Thank you for your interest in contributing! This document outlines the developm
 
 - Python 3.10, 3.11, or 3.12
 - [uv](https://github.com/astral-sh/uv) — fast Python package manager
-- **ta-lib** system library — required for technical indicator calculations
+- **TA-Lib Python 0.6.8+** — install from PyPI; supported wheels bundle the underlying TA-Lib C library on standard CI/dev platforms
 
 ### Installing ta-lib
 
-ta-lib is a C extension that must be installed at the system level before the Python package can be built:
+Use the upstream-supported TA-Lib Python wheel install for this repo's NumPy 2 environment:
 
 ```bash
-# Ubuntu/Debian
-sudo apt-get install libta-lib-dev
-
-# macOS (Homebrew)
-brew install ta-lib
-
-# Amazon Linux / RHEL / CentOS
-sudo yum install ta-lib
+uv pip install "TA-Lib==0.6.8"
 ```
 
-If ta-lib is not available via your package manager, you can build from source:
+TA-Lib Python 0.6.5+ publishes wheels that bundle the underlying TA-Lib C library, so a separate manual source download/build is not needed on supported platforms.
 
-```bash
-git clone https://github.com/mrjbq7/ta-lib.git
-cd ta-lib
-./configure
-make
-sudo make install
-```
+If your platform does not have a compatible wheel, follow the upstream installation directions instead of using the legacy SourceForge tarball path in this repository:
+
+- https://github.com/ta-lib/ta-lib-python?tab=readme-ov-file#installation
 
 ### Initial Setup
 
@@ -48,6 +37,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 # Create virtual environment and install with dev dependencies
 uv venv
 source .venv/bin/activate
+uv pip install "TA-Lib==0.6.8"
 uv pip install -e ".[dev]"
 
 # Verify installation
