@@ -1,16 +1,59 @@
 # tempest-tradingview-mcp
 
-**Market data & analytics MCP server** — provides technical indicators, backtesting, and multi-factor screening for crypto markets via the Model Context Protocol.
+**Market data & analytics MCP server** — provides technical indicators, backtesting, screening, and sentiment analysis for crypto markets via the Model Context Protocol.
 
 **NOT a trading bot.** No order execution, no position management, no trade placement.
 
-## Features
+## Public MCP Tools
 
-- **Market Data** — CCXT is the primary source for live crypto market data; Yahoo Finance is historical fallback for coverage gaps
-- **Technical Indicators** — 30+ indicators via ta-lib C extension: EMA, RSI, MACD, ATR, VWAP, Supertrend, Bollinger, Stochastic, and more
-- **Backtesting** — Commission/slippage model with 6 built-in strategies
-- **Screening** — Multi-factor crypto screener with session breakout detection
-- **Structured Logging** — JSON output via structlog
+The server exposes 21 public MCP tools:
+
+### Market Data
+| Tool | Description |
+|------|-------------|
+| `fetch_ticker` | Real-time ticker price + 24h volume for a crypto symbol |
+| `fetch_klines` | OHLCV klines with timeframe, limit, and exchange selection |
+| `fetch_orderbook` | Order book depth for a symbol |
+
+### Technical Indicators
+| Tool | Description |
+|------|-------------|
+| `indicator_rsi` | RSI oscillator (0–100: <30 oversold, >70 overbought) |
+
+### Backtesting
+| Tool | Description |
+|------|-------------|
+| `backtest_pdh_session` | PDH/PDL + Session Levels strategy |
+| `backtest_rsi` | RSI Mean Reversion (long oversold, short overbought) |
+| `backtest_vwap` | VWAP Anchored trend-following with EMA confirmation |
+| `backtest_ema_stack` | Multi-EMA trend-following with risk management |
+| `backtest_order_blocks` | Institutional order block detection with retest confirmation |
+| `backtest_elliot_wave` | Elliott Wave counting with trend confirmation |
+| `compare_strategies` | Compare 2+ strategies on a single OHLCV dataset, ranked by total_return descending, then sharpe_ratio descending, then strategy_id ascending |
+
+### Screening
+| Tool | Description |
+|------|-------------|
+| `screener_scan` | Multi-factor crypto screener with session breakout detection |
+| `session_breakout_scan` | Session breakout/proximity patterns against PDH/PDL |
+| `order_block_screener_scan` | Active order-block zones across 1h/1d and 4h/7d horizons |
+
+### Analysis (Internal Engine)
+| Tool | Description |
+|------|-------------|
+| `calculate_volume_profile` | Volume profile with POC, VAH, VAL, and shape classification |
+| `detect_order_blocks` | Active order-block zone detection (read-only) |
+| `calculate_fibonacci` | Fibonacci retracement/extension levels |
+| `calculate_tpo` | TPO (Time-Price Opportunity) chart for a session |
+| `detect_elliot_wave` | Elliott Wave pattern detection from OHLCV data |
+| `get_market_structure` | Deterministic market structure summary |
+
+### Sentiment (Internal Engine)
+| Tool | Description |
+|------|-------------|
+| `get_combined_sentiment_dashboard` | Combined Reddit + RSS sentiment (40% Reddit / 60% RSS weighted) with cross-signal detection |
+
+> **Note:** Tools under "Internal Engine" categories represent analytical capabilities exposed via the MCP interface. The indicator breadth (30+ indicators) is an internal engine capability, not a direct 1:1 mapping to public MCP tool count.
 
 ## Quick Start
 
@@ -40,16 +83,13 @@ Configuration is loaded from environment variables with the `TEMPEST_` prefix:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `TEMPEST_YF_CACHE_TTL` | Yahoo Finance cache TTL (seconds) | `3600` |
+| `TEMPEST_LOG_LEVEL` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`) | `INFO` |
+| `TEMPEST_YF_CACHE_TTL` | Yahoo Finance cache TTL (seconds) | `300` |
 | `TEMPEST_CCXT_DEFAULT_EXCHANGE` | Default exchange for real-time quotes | `binance` |
-| `TEMPEST_LOG_LEVEL` | Logging level | `INFO` |
-
-The server always exposes the HTTP/SSE transport on port `9001`; there is no transport toggle.
 
 Copy `.env.example` to `.env` and adjust as needed:
 
 ```bash
-# Compose/runtime config uses .env by default.
 cp .env.example .env
 ```
 
@@ -57,7 +97,8 @@ cp .env.example .env
 
 > Note: despite the repository name, TradingView is not an active market-data
 > provider in the current architecture. Legacy TradingView compatibility code is
-> retained only to avoid breaking older imports.
+> retained only to avoid breaking older imports. Yahoo Finance remains the
+> fallback/historical adapter; CCXT is the primary live-market-data path.
 
 ## Deployment
 
@@ -111,8 +152,27 @@ Compose uses its default project-scoped container naming so repeated `docker com
 ## Architecture
 
 ```
-Kurisu → tempest-mesh → MCP Server → [CCXT primary / Yahoo Finance fallback]
+┌─────────────┐     ┌──────────────────┐     ┌─────────────────────────────┐
+│ MCP Client  │────▶│  HTTP/SSE        │     │  Starlette + MCP Server    │
+│ (optional)  │     │  /sse  /messages │────▶│  Tool Dispatch             │
+└─────────────┘     └──────────────────┘     │  ├── Market Data           │
+                                              │  ├── Backtest Engine       │
+                                              │  ├── Screener              │
+                                              │  ├── Analysis              │
+                                              │  └── Sentiment             │
+                                              └────────────┬──────────────┘
+                                                           │
+                                              ┌────────────▼──────────────┐
+                                              │  Data Layer               │
+                                              │  ├── CCXT (live, primary) │
+                                              │  └── Yahoo Finance        │
+                                              │      (historical fallback)│
+                                              └────────────────────────────┘
 ```
+
+**Runtime boundary:** MCP client(s) connect via HTTP/SSE to the Starlette/MCP server on port 9001. The server dispatches to internal engines (market data, backtest, screener, analysis, sentiment). External data dependencies are CCXT (live primary) and Yahoo Finance (historical fallback).
+
+> Kurisu and tempest-mesh are **optional upstream callers** in the broader ecosystem — they are not mandatory runtime dependencies of this repository.
 
 ### Directory Structure
 
@@ -120,34 +180,52 @@ Kurisu → tempest-mesh → MCP Server → [CCXT primary / Yahoo Finance fallbac
 tempest-tradingview-mcp/
 ├── src/tempest_mcp/          # Main package
 │   ├── __init__.py
-│   ├── server.py             # MCP server entry point (HTTP/SSE)
-│   ├── config.py             # Environment config loader
+│   ├── server.py             # MCP server entry point (HTTP/SSE on :9001)
+│   ├── config.py             # Environment config loader (TEMPEST_* vars)
 │   ├── logging_config.py     # Structured logging setup
-│   ├── models/               # Dataclass models (D6)
-│   │   ├── market.py         # Ticker, kline, orderbook
-│   │   ├── indicator.py      # Indicator results
-│   │   └── backtest.py       # Backtest results
+│   ├── errors.py             # Error definitions
+│   ├── time_utils.py         # Time utilities
 │   ├── data/                 # Data layer
-│   │   ├── yf_adapter.py     # Yahoo Finance adapter
-│   │   └── ccxt_adapter.py   # CCXT adapter (public, no keys)
+│   │   ├── yf_adapter.py     # Yahoo Finance adapter (historical fallback)
+│   │   └── ccxt_adapter.py   # CCXT adapter (live primary, no keys)
 │   ├── indicators/           # Technical indicator engine
-│   │   ├── ta_wrapper.py     # ta-lib C extension wrapper
+│   │   ├── ta_wrapper.py     # ta-lib C extension wrapper (internal)
 │   │   ├── session_levels.py # Asia/London/NY PDH/PDL
-│   │   ├── trend.py          # EMA, VWAP, Supertrend, ADX
-│   │   ├── momentum.py       # RSI, MACD, Stochastic, CCI
-│   │   ├── volatility.py     # ATR, HV, Bollinger Width
-│   │   ├── volume.py         # OBV, MFI, VWAP
+│   │   ├── trend/            # Trend indicators (EMA module today)
+│   │   ├── momentum/         # RSI, MACD, Stochastic, CCI modules
+│   │   ├── volatility/       # ATR and volatility modules
+│   │   ├── volume/           # VWAP, TPO, and volume-profile modules
 │   │   └── structure.py      # Fibonacci, Pivots, HH/HL
 │   ├── backtest/             # Backtesting engine
+│   ├── strategies/           # Strategy definitions
 │   ├── screener/             # Multi-factor crypto screener
-│   ├── sentiment/            # Sentiment analysis (Phase 4)
+│   ├── sentiment/            # Sentiment analysis (Reddit + RSS)
+│   ├── formatters/           # Output formatters (Discord)
 │   ├── charting/             # mplfinance (debug only)
+│   ├── models/               # Dataclass models
+│   │   ├── backtest.py       # Backtest results
+│   │   ├── indicator.py      # Indicator results
+│   │   └── market.py         # Ticker, kline, orderbook
 │   └── tools/                # MCP tool handlers
+│       ├── __init__.py
+│       ├── analysis_tools.py
+│       ├── analytical_tools.py
+│       ├── backtest_tools.py
+│       ├── backtest_window.py
+│       ├── indicator_tools.py
+│       ├── market_tools.py
+│       ├── screener_tools.py
+│       └── sentiment_tools.py
 ├── tests/                    # Test suite
+│   ├── conftest.py           # Pytest fixtures and integration markers
+│   └── ...
+├── docs/                     # Repository documentation
+│   ├── backtest-mcp-tools-phase2.md
+│   └── error-envelope-contract.md
 ├── pyproject.toml
 ├── Dockerfile
+├── docker-compose.yml
 ├── .env.example
-├── .gitignore
 └── README.md
 ```
 
@@ -170,21 +248,39 @@ uv run ruff format src/
 ### Live-Data Integration Tests
 
 ```bash
-# Run Phase 2 backtest live-data integration suite (ENG-64)
-# This fetches real BTCUSDT OHLCV via CCXT and validates strategy contracts
+# Run Phase 2 backtest live-data integration suite
+# Fetches real BTCUSDT OHLCV via CCXT and validates strategy contracts
 # across both 1h and 4h timeframes
 uv run pytest --run-integration tests/test_phase2_backtest_live_integration.py -v
 ```
 
-### Error Codes
+## Error Codes
 
 | Range | Category |
 |-------|----------|
 | 1xxx | Validation errors |
-| 2xxx | Authentication/authorization errors |
 | 3xxx | Data source errors (Yahoo Finance, CCXT) |
-| 5xxx | Indicator calculation errors |
+| 5xxx | Indicator/calculation errors |
 | 9xxx | Internal/unexpected errors |
+
+Specific codes:
+- `1000` — Validation error
+- `1001` — Invalid symbol
+- `1002` — Invalid timeframe
+- `1003` — Invalid exchange
+- `1004` — Invalid parameter
+- `1005` — Missing parameter
+- `3000` — Data source error
+- `3001` — Yahoo Finance error
+- `3002` — CCXT error
+- `3003` — Data not found
+- `3004` — Rate limit error
+- `3005` — Network error
+- `5000` — Indicator error
+- `5001` — Insufficient data
+- `5002` — Calculation error
+- `9000` — Internal error
+- `9001` — Unexpected error
 
 ## License
 
