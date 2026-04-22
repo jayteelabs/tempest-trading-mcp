@@ -29,7 +29,7 @@ The server exposes 21 public MCP tools:
 | `backtest_ema_stack` | Multi-EMA trend-following with risk management |
 | `backtest_order_blocks` | Institutional order block detection with retest confirmation |
 | `backtest_elliot_wave` | Elliott Wave counting with trend confirmation |
-| `compare_strategies` | Compare 2+ strategies on a single OHLCV dataset, ranked by total_return then sharpe_ratio |
+| `compare_strategies` | Compare 2+ strategies on a single OHLCV dataset, ranked by total_return descending, then sharpe_ratio descending, then strategy_id ascending |
 
 ### Screening
 | Tool | Description |
@@ -191,10 +191,10 @@ tempest-tradingview-mcp/
 │   ├── indicators/           # Technical indicator engine
 │   │   ├── ta_wrapper.py     # ta-lib C extension wrapper (internal)
 │   │   ├── session_levels.py # Asia/London/NY PDH/PDL
-│   │   ├── trend.py          # EMA, VWAP, Supertrend, ADX
-│   │   ├── momentum.py       # RSI, MACD, Stochastic, CCI
-│   │   ├── volatility.py     # ATR, HV, Bollinger Width
-│   │   ├── volume.py         # OBV, MFI, VWAP
+│   │   ├── trend/            # Trend indicators (EMA module today)
+│   │   ├── momentum/         # RSI, MACD, Stochastic, CCI modules
+│   │   ├── volatility/       # ATR and volatility modules
+│   │   ├── volume/           # VWAP, TPO, and volume-profile modules
 │   │   └── structure.py      # Fibonacci, Pivots, HH/HL
 │   ├── backtest/             # Backtesting engine
 │   ├── strategies/           # Strategy definitions
