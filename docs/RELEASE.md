@@ -39,49 +39,56 @@ The following privileged actions are **not** performed by this ticket and requir
 
 ### Workflow Dispatch (Manual Trigger)
 
+Use manual dispatch for release-build validation. An approved release-gate run that publishes to TestPyPI must be launched from `main`.
+
 To trigger a release build manually:
 
 ```bash
 # Navigate to Actions > Release Package > Run workflow
 # Or use GitHub CLI:
-gh workflow run release.yml -f version=1.0.0 --dry-run=false
+gh workflow run release.yml --ref main -f dry_run=false
 ```
 
 Inputs:
-- `version` (required) — Semantic version string (e.g., `1.0.0`)
-- `dry_run` (optional, default: `true`) — Set to `false` to publish to TestPyPI and create GitHub release
+- `dry_run` (optional, default: `true`) — Set to `false` to publish the already-versioned build to TestPyPI from `main`
 
-### Merge-to-Main Auto-Publish (Future)
+Manual dispatch behavior:
 
-When `main` is merged from a release branch:
+1. The workflow builds the wheel and sdist artifacts
+2. It validates the built package with a local install check
+3. If `dry_run=false` **and** the workflow is dispatched from `main`, it publishes the artifacts to TestPyPI
 
-1. The `release.yml` workflow detects a merged PR to `main`
+### Tag Push Publish (Release Gate)
+
+Production publication is gated behind an explicit release tag push.
+
+When an approved `v*.*.*` tag is pushed:
+
+1. The `release.yml` workflow detects the tag push
 2. It builds the package artifacts
 3. It validates the build locally
 4. If credentials are available, it publishes to PyPI
 
-**Note:** This auto-publish path requires the `PYPI_API_TOKEN` secret to be configured in the repository.
+**Note:** This tag-gated publish path requires the `PYPI_API_TOKEN` secret to be configured in the repository.
 
 ## Release Artifact Flow
 
 ```
-Code (main branch)
-       │
-       ▼
-   [CI Pass]
-       │
-       ▼
-   [release.yml]
+workflow_dispatch
        │
        ├──► Build wheel + sdist
        │
        ├──► Validate artifacts (test install)
        │
-       ├──► (if dry_run=false) Publish to TestPyPI
+       └──► (if dry_run=false on main) Publish to TestPyPI
+
+push tag v*.*.*
        │
-       ├──► (if merged PR) Publish to PyPI
+       ├──► Build wheel + sdist
        │
-       └──► (if workflow_dispatch) Create GitHub Release + upload artifacts
+       ├──► Validate artifacts (test install)
+       │
+       └──► Publish to PyPI
 ```
 
 ## Version Alignment

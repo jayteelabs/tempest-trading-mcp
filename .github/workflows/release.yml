@@ -3,17 +3,17 @@ name: Release Package
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: "Version to release (e.g., 1.0.0)"
-        required: true
-        type: string
       dry_run:
         description: "Dry run mode (skip publish)"
         required: false
         type: boolean
         default: true
-  pull_request:
-    types: [closed]
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -66,7 +66,7 @@ jobs:
     name: Publish to TestPyPI
     needs: [build, test-build]
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' && !github.event.inputs.dry_run
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && !inputs.dry_run
     environment:
       name: testpypi
       url: https://test.pypi.org/projects/tempest-tradingview-mcp
@@ -87,7 +87,7 @@ jobs:
     name: Publish to PyPI
     needs: [build, test-build]
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     environment:
       name: pypi
       url: https://pypi.org/project/tempest-tradingview-mcp
@@ -102,29 +102,3 @@ jobs:
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
           skip_existing: true
-
-  create-github-release:
-    name: Create GitHub Release
-    needs: [build, test-build]
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' && !github.event.inputs.dry_run
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref }}
-          fetch-depth: 0
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: dist/*
-          version: ${{ github.event.inputs.version }}
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
