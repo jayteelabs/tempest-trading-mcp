@@ -38,7 +38,6 @@
 - [ ] Tests pass: `uv run pytest tests/ -v --tb=short`
 - [ ] Lint clean: `uv run ruff check src/ tests/`
 - [ ] Format clean: `uv run ruff format --check src/ tests/`
-- [ ] No code changes introduced (docs-only PR)
 - [ ] Linear ticket linked in this description
 
 ## Additional Notes

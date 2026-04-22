@@ -147,7 +147,6 @@ git commit -m "test: add integration tests for screener tools"
    uv run ruff format --check src/ tests/
    ```
 
-4. **Verify no code changes** — this project only accepts documentation-only changes via PR
 
 ### PR Description
 
