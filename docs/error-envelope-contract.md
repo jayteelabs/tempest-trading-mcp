@@ -4,13 +4,13 @@
 **Date:** 2026-04-04  
 **Owner:** eru  
 **Status:** Draft for Haga's Security Review  
-**Design Decision:** D14 (Empty DataFrame on error, no exception propagation)
+**Design Decision:** D14 (sentinel returns for covered adapter entry points)
 
 ---
 
 ## Purpose
 
-This document defines the contract between `data/` adapters and downstream MCP consumers for error handling. Per D14, data adapters **NEVER propagate exceptions** to callers — instead, they return sentinel values (`float('nan')`, empty OHLCV frames, empty order book payloads) that downstream tool/server layers must interpret when building MCP error envelopes.
+This document defines the contract between `data/` adapters and downstream MCP consumers for error handling. For the D14-covered adapter entry points used by current MCP flows — `CCXTAdapter.fetch_live_price`, `CCXTAdapter.fetch_ohlcv_live`, `CCXTAdapter.fetch_orderbook_snapshot`, `HistoricalDataSource.fetch_ohlcv`, and module-level `yf_adapter.fetch_ohlcv` — failures are returned as sentinel values (`float('nan')`, empty OHLCV frames, empty order book payloads) instead of being propagated as exceptions. This is **not** universal across every adapter/compatibility API: legacy `YFAdapter` object methods such as `fetch_ticker`, `fetch_klines`, and `get_historical_prices` still raise `YFinanceError`.
 
 ---
 
@@ -192,7 +192,7 @@ wrappers) should:
 
 1. **Validate request arguments before adapter calls** when the caller needs to emit
    1xxx validation errors instead of collapsing everything into a data-source failure
-2. **Never catch exceptions from adapters** — they don't raise any
+2. **Prefer sentinel checks for D14-covered entry points, but keep downstream wrappers defensive:** legacy compatibility APIs (notably `YFAdapter` methods) can still raise typed adapter exceptions, and future regressions should still be converted into MCP envelopes instead of leaking raw exceptions
 3. **Check return values for error indicators:**
     - `math.isnan(price)` for `fetch_live_price`
     - `df.empty` for `fetch_ohlcv_live`
@@ -206,7 +206,16 @@ wrappers) should:
 def fetch_ticker(symbol: str) -> dict:
     """MCP tool wrapper for ticker data."""
     adapter = get_live_adapter()
-    price = adapter.fetch_live_price(symbol)
+    try:
+        price = adapter.fetch_live_price(symbol)
+    except Exception:
+        return {
+            "success": False,
+            "error": {
+                "code": 3000,
+                "message": f"Unable to fetch price for {symbol}",
+            }
+        }
     
     if math.isnan(price):
         return {
@@ -237,12 +246,15 @@ Tests must verify:
    - Invalid symbol -> `float('nan')` / empty DataFrame / empty dict
    - Network errors -> same as above
    
-2. **No exceptions propagate:**
-   ```python
-   # This should NEVER raise
-   price = adapter.fetch_live_price("DEFINITELY_NOT_A_REAL_SYMBOL")
-   assert math.isnan(price)
-   ```
+2. **D14-covered entry points do not propagate exceptions:**
+    ```python
+    # This should not raise for the sentinel-based adapter entry points
+    price = adapter.fetch_live_price("DEFINITELY_NOT_A_REAL_SYMBOL")
+    assert math.isnan(price)
+    ```
+
+   Legacy compatibility methods on `YFAdapter` are a separate contract and should be
+   tested for typed `YFinanceError` failures where they remain supported.
 
 3. **Structured logging occurs:**
    - INFO on success
