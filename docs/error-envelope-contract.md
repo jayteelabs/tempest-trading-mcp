@@ -30,9 +30,14 @@ This document defines the contract between `data/` adapters and `market_tools.py
 ```python
 price = adapter.fetch_live_price("BTCUSDT")
 if math.isnan(price):
-    # Handle error case - no price data found for this symbol
-    return {"success": False, "error": {"code": 3003, "message": "Price data not found"}}
+    # Handle error case - NaN is a generic failure sentinel
+    return {"success": False, "error": {"code": 3000, "message": "Unable to fetch price data"}}
 ```
+
+`math.isnan(price)` is a lossy sentinel: it can mean invalid symbol, upstream outage,
+rate limiting, or other adapter failures. Downstream callers should map the raw sentinel
+to `3000 DATA_SOURCE_ERROR` unless they have separate metadata proving a true
+"not found" condition.
 
 ---
 
@@ -57,11 +62,16 @@ if math.isnan(price):
 ```python
 df = adapter.fetch_ohlcv_live("BTCUSDT", "1m", 100)
 if df.empty:
-    # Handle error case - no OHLCV data found for this query
-    return {"success": False, "error": {"code": 3003, "message": "OHLCV data not found"}}
+    # Handle error case - empty frame is a generic failure sentinel
+    return {"success": False, "error": {"code": 3000, "message": "Unable to fetch OHLCV data"}}
 
 # DataFrame is valid - proceed with analysis
 ```
+
+`df.empty` is also lossy at this boundary: it may represent invalid input, network
+failure, rate limiting, or a genuine no-data result. Reserve `3003 DATA_NOT_FOUND`
+for cases where the caller has an explicit upstream classification instead of only the
+empty-frame sentinel.
 
 ---
 
@@ -176,10 +186,12 @@ The `market_tools.py` module should:
 
 1. **Never catch exceptions from adapters** — they don't raise any
 2. **Check return values for error indicators:**
-   - `math.isnan(price)` for `fetch_live_price`
-   - `df.empty` for `fetch_ohlcv_live`
-   - `ob["timestamp"] is None` for `fetch_orderbook_snapshot`
-3. **Map to appropriate MCP response envelope:**
+    - `math.isnan(price)` for `fetch_live_price`
+    - `df.empty` for `fetch_ohlcv_live`
+    - `ob["timestamp"] is None` for `fetch_orderbook_snapshot`
+3. **Map raw sentinel-only failures to `3000 DATA_SOURCE_ERROR`:**
+   - use `3003 DATA_NOT_FOUND` only when upstream classification explicitly says
+     the requested data does not exist
 
 ```python
 # Example market_tools.py pattern
