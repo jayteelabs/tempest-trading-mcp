@@ -26,8 +26,8 @@ dependencies = [
     "yfinance>=0.2.0",
     "ccxt>=4.0.0",
     "pandas>=2.0.0",
-    "numpy>=1.24.0",
-    "ta-lib>=0.4.0",
+    "numpy>=2.0.0",
+    "ta-lib>=0.6.8",
     "structlog>=23.0.0",
     "httpx>=0.25.0",
     "python-dotenv>=1.0.0",
@@ -39,6 +39,7 @@ dev = [
     "ruff>=0.1.0",
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
     "vcrpy>=5.0.0",
 ]
 
@@ -72,3 +73,23 @@ pythonpath = ["src"]
 markers = [
     "integration: marks tests that require network access",
 ]
+
+[tool.coverage.run]
+# Measure coverage for the main package source.
+source = ["src/tempest_mcp"]
+# Exclude integration tests from default coverage runs.
+omit = [
+    "*/tests/*",
+    "*/test_*/*.py",
+    "*/conftest.py",
+]
+
+[tool.coverage.report]
+# Show uncovered lines in terminal and XML reports.
+precision = 2
+show_missing = true
+skip_covered = false
+
+[tool.coverage.html]
+# Coverage HTML output directory.
+directory = "htmlcov"

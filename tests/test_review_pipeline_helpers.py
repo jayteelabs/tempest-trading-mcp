@@ -287,6 +287,17 @@ def test_review_workflow_uses_trusted_runtime_for_publish() -> None:
     assert "${{ github.workspace }}/.github/scripts" not in publish_section
 
 
+def test_ci_coverage_comment_uses_pr_head_sha_with_separate_writer_job() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    coverage_section, comment_section = workflow.split("  coverage_pr_comment:\n", 1)
+
+    assert '--head-sha "${{ github.event.pull_request.head.sha }}"' in coverage_section
+    assert "Upload coverage PR comment artifact" in coverage_section
+    assert "issues: write" in comment_section
+    assert "pull-requests: write" in comment_section
+    assert "Download coverage PR comment artifact" in comment_section
+
+
 def test_severity_style_uses_expected_header_metadata() -> None:
     assert severity_style("critical")[0:2] == ("🔴", "CRITICAL")
     assert severity_style("high")[0:2] == ("🟠", "HIGH")
