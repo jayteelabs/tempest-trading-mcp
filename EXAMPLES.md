@@ -53,8 +53,8 @@ For high-level tool descriptions and architecture, see [README.md](README.md).
 ```
 
 **Notes:**
-- `timeframe` defaults to `"1h"`. Supported timeframes are defined in `src/tempest_mcp/tools/backtest_window.py`.
-- `since` is an ISO 8601 datetime string; if timezone is omitted, interpreted in `America/New_York` before conversion to UTC.
+- `timeframe` defaults to `"1h"`. In `src/tempest_mcp/server.py`, this tool exposes `timeframe` as a plain string rather than an enum-backed timeframe contract.
+- `since` is optional and nullable in the current server schema. This example uses an ISO 8601 string, but the schema does not currently document timezone or default parsing semantics for this field.
 - `limit` defaults to 100 candles.
 - `source` defaults to `"ccxt"` (live primary).
 
@@ -105,7 +105,7 @@ For high-level tool descriptions and architecture, see [README.md](README.md).
 
 ## 3. Backtesting
 
-All backtest tools accept `trade_style` (`"day_trade"`, `"swing_trade"`, `"custom"`), `start_at`, `end_at`, `timeframe`, `exchange`, `initial_capital`, and `max_bars`. The `custom` trade style requires explicit `start_at` and `end_at` in ISO 8601 format. Timezone handling on `start_at`/`end_at` matches `fetch_klines`.
+All backtest tools accept `trade_style` (`"day_trade"`, `"swing_trade"`, `"custom"`), `start_at`, `end_at`, `timeframe`, `exchange`, `initial_capital`, and `max_bars`. The `custom` trade style requires explicit `start_at` and `end_at` in ISO 8601 format. In the server schema, omitted timezones on these fields are interpreted in `America/New_York` before conversion to UTC.
 
 ### `backtest_pdh_session` — PDH/PDL + Session Levels
 
@@ -349,7 +349,7 @@ All backtest tools accept `trade_style` (`"day_trade"`, `"swing_trade"`, `"custo
 
 ## 5. Analysis
 
-All analysis tools require `symbol`, `timeframe`, `start_at`, and `end_at`. The `start_at`/`end_at` parameter notes from `fetch_klines` apply here as well.
+All analysis tools require `symbol`, `timeframe`, `start_at`, and `end_at`. In the server schema, `start_at`/`end_at` are documented as ISO 8601 datetimes, and omitted timezones are interpreted in `America/New_York` before conversion to UTC.
 
 ### `calculate_volume_profile` — Volume profile for a time window
 
@@ -425,7 +425,7 @@ All analysis tools require `symbol`, `timeframe`, `start_at`, and `end_at`. The 
 - `swing_high` and `swing_low` are required and must be explicit price values.
 - `output_mode` is `"retracement"` (default) or `"extension"`.
 - `trend_direction` is `"bullish"` or `"bearish"`.
-- `levels` defaults to standard Fibonacci levels if not provided.
+- `levels` is an optional array of custom Fibonacci ratios when you want to override the tool's built-in calculation behavior.
 
 ---
 
@@ -538,6 +538,6 @@ All analysis tools require `symbol`, `timeframe`, `start_at`, and `end_at`. The 
 |-----------|-------|
 | `symbol` | Alphanumeric with optional single `/` or `-` separator. |
 | `exchange` | Defaults to `"binance"`. Other exchanges supported per `src/tempest_mcp/tools/screener_tools.py`. |
-| `timeframe` | Must be one of the supported OHLCV intervals from `src/tempest_mcp/tools/backtest_window.py`. |
-| `start_at` / `end_at` | ISO 8601 datetime. If timezone is omitted, interpreted in `America/New_York` before UTC conversion. Required for `custom` trade style. |
+| `timeframe` | For backtest + analysis tools, this is enum-backed and must be one of the supported OHLCV intervals from `src/tempest_mcp/tools/backtest_window.py`. `fetch_klines` and `indicator_rsi` expose `timeframe` as a plain string with default `"1h"`. |
+| `start_at` / `end_at` | For backtest + analysis tools, ISO 8601 datetime. If timezone is omitted, the server schema says values are interpreted in `America/New_York` before UTC conversion. Required for `custom` trade style on backtests and required by the analysis tool schemas. |
 | `max_bars` | Safety cap on estimated candle count; applied when the window would otherwise generate excessive bars. |
