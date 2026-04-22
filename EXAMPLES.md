@@ -54,7 +54,7 @@ For high-level tool descriptions and architecture, see [README.md](README.md).
 
 **Notes:**
 - `timeframe` defaults to `"1h"`. In `src/tempest_mcp/server.py`, this tool exposes `timeframe` as a plain string rather than an enum-backed timeframe contract.
-- `since` is optional and nullable in the current server schema. This example uses an ISO 8601 string, but the schema does not currently document timezone or default parsing semantics for this field.
+- `since` is optional and nullable in the current server schema. The current stub handler accepts it as an opaque string and does not parse or normalize timezone data yet, so use a timezone-qualified ISO 8601 timestamp when you need deterministic behavior.
 - `limit` defaults to 100 candles.
 - `source` defaults to `"ccxt"` (live primary).
 
@@ -154,6 +154,8 @@ All backtest tools accept `trade_style` (`"day_trade"`, `"swing_trade"`, `"custo
 **Notes:**
 - Long at oversold (< 30), short at overbought (> 70) by default.
 - Optional divergence confirmation via `confirmation_enabled`.
+- `risk_reward_ratio` defaults to `2.0` and sets the take-profit distance relative to the stop distance.
+- `atr_stop_multiplier` defaults to `1.5` and scales the ATR-based stop placement.
 
 ---
 
@@ -468,13 +470,14 @@ All analysis tools require `symbol`, `timeframe`, `start_at`, and `end_at`. In t
     "wave2_retrace_band": [0.5, 0.618],
     "wave3_extension_min": 1.0,
     "wave4_retrace_max": 0.618,
+    "waveb_retrace_band": [0.382, 0.886],
     "include_rejected": true
   }
 }
 ```
 
 **Notes:**
-- `wave2_retrace_band` and `waveb_retrace_band` are `[min, max]` tuples.
+- `wave2_retrace_band` and `waveb_retrace_band` are two-item `[min, max]` arrays in JSON.
 - `degree_thresholds` is `[micro_max, minor_max]` for degree classification.
 - `include_rejected` defaults to `true`.
 
