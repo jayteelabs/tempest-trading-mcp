@@ -31,7 +31,7 @@ This document defines the contract between `data/` adapters and `market_tools.py
 price = adapter.fetch_live_price("BTCUSDT")
 if math.isnan(price):
     # Handle error case - no price available
-    return {"success": False, "error": {"code": 3004, "message": "Price unavailable"}}
+    return {"success": False, "error": {"code": 3000, "message": "Price unavailable"}}
 ```
 
 ---
@@ -58,7 +58,7 @@ if math.isnan(price):
 df = adapter.fetch_ohlcv_live("BTCUSDT", "1m", 100)
 if df.empty:
     # Handle error case - no OHLCV data available
-    return {"success": False, "error": {"code": 3004, "message": "OHLCV data unavailable"}}
+    return {"success": False, "error": {"code": 3000, "message": "OHLCV data unavailable"}}
 
 # DataFrame is valid - proceed with analysis
 ```
@@ -88,7 +88,7 @@ if df.empty:
 ob = adapter.fetch_orderbook_snapshot("BTCUSDT", 20)
 if ob["timestamp"] is None or len(ob["bids"]) == 0:
     # Handle error case - no orderbook data
-    return {"success": False, "error": {"code": 3104, "message": "Orderbook unavailable"}}
+    return {"success": False, "error": {"code": 3000, "message": "Orderbook unavailable"}}
 
 # Orderbook is valid - proceed with analysis
 ```
@@ -102,32 +102,23 @@ Per D8, error codes are organized in ranges:
 | Range | Category | Source |
 |-------|----------|--------|
 | 1xxx | Validation errors | Input validation |
-| 2xxx | Auth/authorization errors | Key/permission issues |
-| **3001-3005** | TradingView errors | TradingView API |
-| **3101-3105** | CCXT errors | CCXT adapter |
-| 3201-3205 | YFinance errors | Yahoo Finance |
+| 3xxx | Data source errors | Active adapter/runtime failures |
 | 5xxx | Indicator errors | Calculation failures |
 | 9xxx | Internal errors | Unexpected failures |
 
-### TradingView Error Codes (3001-3005)
+The current public MCP error envelope follows `src/tempest_mcp/config.py::ErrorCodes`.
+No 2xxx auth codes are currently assigned, and the older TradingView/CCXT/YFinance split ranges are legacy/stale design notes.
+
+### Implemented Data Source Error Codes (3000-3005)
 
 | Code | Name | Description |
 |------|------|-------------|
-| 3001 | AUTH_ERROR | Invalid or missing API key |
-| 3002 | RATE_LIMIT | TradingView rate limit exceeded |
-| 3003 | INVALID_SYMBOL | Symbol not found on TradingView |
-| 3004 | DATA_UNAVAILABLE | Data temporarily unavailable |
-| 3005 | CONNECTION_ERROR | Network/timeout error |
-
-### CCXT Error Codes (3101-3105)
-
-| Code | Name | Description |
-|------|------|-------------|
-| 3101 | CONNECTION_ERROR | Exchange connection failed |
-| 3102 | RATE_LIMIT | Exchange rate limit exceeded |
-| 3103 | INVALID_SYMBOL | Symbol not found on exchange |
-| 3104 | DATA_UNAVAILABLE | Data temporarily unavailable |
-| 3105 | TIMEOUT | Network timeout |
+| 3000 | DATA_SOURCE_ERROR | Generic upstream data-source failure |
+| 3001 | YFINANCE_ERROR | Yahoo Finance adapter error |
+| 3002 | CCXT_ERROR | CCXT adapter error |
+| 3003 | DATA_NOT_FOUND | Requested data was not found |
+| 3004 | RATE_LIMIT_ERROR | Upstream rate limit exceeded |
+| 3005 | NETWORK_ERROR | Network/timeout failure |
 
 ---
 
@@ -138,7 +129,7 @@ Per D8, error codes are organized in ranges:
 | Outcome | Level | Keys Required |
 |---------|-------|---------------|
 | Success | INFO | `source`, `symbol`, `timeframe` (if applicable) |
-| Fallback activation | WARNING | `reason`, `fallback_to` |
+| Fallback activation | INFO | `symbol`, `reason` |
 | Failure | ERROR | `error`, `symbol`, `source` |
 
 ### Example Log Entries
@@ -158,10 +149,10 @@ Per D8, error codes are organized in ranges:
 **Fallback:**
 ```json
 {
-  "level": "warning",
-  "message": "adapter_selected",
-  "adapter": "CCXTAdapter",
-  "reason": "TRADINGVIEW_API_KEY not set - using CCXT fallback"
+  "level": "info",
+  "message": "historical_fetch_fallback_yfinance",
+  "symbol": "BTC-USD",
+  "reason": "CCXT returned empty"
 }
 ```
 
@@ -201,7 +192,7 @@ def fetch_ticker(symbol: str) -> dict:
         return {
             "success": False,
             "error": {
-                "code": 3004,
+                "code": 3000,
                 "message": f"Unable to fetch price for {symbol}",
             }
         }
