@@ -53,8 +53,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
-      pull-requests: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -95,6 +93,14 @@ jobs:
             --coverage-status "${{ steps.coverage.outcome }}" \
             --workflow-url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
+      - name: Upload coverage PR comment artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-pr-comment
+          path: coverage-comment.md
+          if-no-files-found: warn
+
       - name: Upload coverage to Codecov
         if: ${{ always() && hashFiles('coverage.xml') != '' }}
         uses: codecov/codecov-action@v4
@@ -103,12 +109,30 @@ jobs:
           fail_ci_if_error: false
           verbose: true
 
+  coverage_pr_comment:
+    name: Coverage PR comment
+    if: github.event_name == 'pull_request'
+    needs: coverage
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Download coverage PR comment artifact
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-pr-comment
+          path: coverage-artifacts
+
       - name: Post coverage PR comment
         if: always()
         uses: actions/github-script@v8
         with:
           script: |
             const fs = require('fs')
+            const path = require('path')
             const marker = '<!-- tempest-coverage-comment -->'
             const fallbackBody = [
               marker,
@@ -116,8 +140,9 @@ jobs:
               '',
               '> Coverage reporting did not complete cleanly, but it remains non-blocking. Merge gates stay **ruff lint** and **pytest**.',
             ].join('\n')
-            const body = fs.existsSync('coverage-comment.md')
-              ? fs.readFileSync('coverage-comment.md', 'utf8')
+            const commentPath = path.join('coverage-artifacts', 'coverage-comment.md')
+            const body = fs.existsSync(commentPath)
+              ? fs.readFileSync(commentPath, 'utf8')
               : fallbackBody
 
             const { owner, repo } = context.repo
