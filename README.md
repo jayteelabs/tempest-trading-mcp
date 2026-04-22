@@ -30,7 +30,7 @@ uv pip install -e .
 # 4. Configure environment (optional — defaults work out of the box)
 cp .env.example .env
 
-# 5. Run the MCP server (stdio transport)
+# 5. Run the MCP server (HTTP/SSE transport on :9001)
 uv run python -m tempest_mcp.server
 ```
 
@@ -43,11 +43,13 @@ Configuration is loaded from environment variables with the `TEMPEST_` prefix:
 | `TEMPEST_YF_CACHE_TTL` | Yahoo Finance cache TTL (seconds) | `3600` |
 | `TEMPEST_CCXT_DEFAULT_EXCHANGE` | Default exchange for real-time quotes | `binance` |
 | `TEMPEST_LOG_LEVEL` | Logging level | `INFO` |
-| `TEMPEST_ENABLE_SSE` | Enable SSE transport (deferred to Phase 2) | `false` |
+
+The server always exposes the HTTP/SSE transport on port `9001`; there is no transport toggle.
 
 Copy `.env.example` to `.env` and adjust as needed:
 
 ```bash
+# Compose/runtime config uses .env by default.
 cp .env.example .env
 ```
 
@@ -65,23 +67,46 @@ cp .env.example .env
 # Build the image
 sg docker -c "docker build -t tempest-tradingview-mcp ."
 
-# Run the container with the MCP port published
-sg docker -c "docker run --rm -p 9001:9001 tempest-tradingview-mcp"
+# Run the container with the MCP port published on host loopback
+sg docker -c "docker run --rm -p 127.0.0.1:9001:9001 tempest-tradingview-mcp"
 ```
 
 Notes:
 - The MCP server must bind to `0.0.0.0` inside the container for Docker port publishing to work.
 - Binding to `127.0.0.1` inside the container makes `/sse` reachable only from inside the container and breaks host-side MCP clients.
-- For live verification, use a real SSE/MCP handshake instead of only checking whether port `9001` is open.
+- Publishing `127.0.0.1:9001:9001` on the host keeps the unauthenticated SSE + `/messages` surface local by default.
+- If you need remote access, expose intentionally behind a reverse proxy, Tailscale, firewall rules, or equivalent trusted-network controls.
+- The image includes a Dockerfile-level HEALTHCHECK that probes the SSE surface via a HEAD request to `/sse`.
 
 ### Docker Compose
 
-```yaml
-services:
-  tempest-mcp:
-    build: .
-    restart: unless-stopped
+```bash
+# First time: create the runtime env file used by docker-compose.yml
+cp .env.example .env
+
+# Build and start the service
+sg docker -c "docker compose up -d --build"
+
+# View logs
+sg docker -c "docker compose logs -f"
+
+# Stop the service
+sg docker -c "docker compose down"
 ```
+
+For fresh-clone validation without creating `.env`, override the runtime env-file path explicitly:
+
+```bash
+sg docker -c "TEMPEST_ENV_FILE=.env.example docker compose config"
+```
+
+The compose stack starts the MCP server on port `9001` with the HTTP/SSE transport (`/sse` for SSE connections, `/messages` for POST requests) and publishes it on host loopback by default (`127.0.0.1:9001:9001`).
+
+Compose uses its default project-scoped container naming so repeated `docker compose up` runs do not collide with an older standalone `docker run --name tempest-tradingview-mcp ...` container.
+
+**Health check:** The image includes a Dockerfile-level HEALTHCHECK that verifies the SSE endpoint is reachable via a HEAD request to `http://localhost:9001/sse`. The healthcheck exits 0 (healthy) when the endpoint exists (2xx-4xx response) and exits 1 (unhealthy) on 5xx or connection failure. Use `sg docker -c "docker compose ps"` to see the health status.
+
+**Note:** The MCP server must bind to `0.0.0.0` inside the container for Docker port publishing to work. The Dockerfile is pre-configured to run the server on `0.0.0.0:9001`, but the repo-owned Docker examples keep host publishing on loopback by default. Intentionally widen exposure only with compensating controls such as a reverse proxy, Tailscale, and/or firewall rules.
 
 ## Architecture
 
@@ -95,7 +120,7 @@ Kurisu → tempest-mesh → MCP Server → [CCXT primary / Yahoo Finance fallbac
 tempest-tradingview-mcp/
 ├── src/tempest_mcp/          # Main package
 │   ├── __init__.py
-│   ├── server.py             # MCP server entry point (stdio)
+│   ├── server.py             # MCP server entry point (HTTP/SSE)
 │   ├── config.py             # Environment config loader
 │   ├── logging_config.py     # Structured logging setup
 │   ├── models/               # Dataclass models (D6)

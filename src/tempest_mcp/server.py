@@ -750,7 +750,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             self._cleanup_task = asyncio.create_task(self._periodic_request_cleanup())
             _rate_limit_cleanup_task = self._cleanup_task
 
-        if request.url.path == "/messages":
+        if request.url.path in {"/messages", "/messages/"}:
             # Request-count rate limiting
             lock = self._get_lock(client_ip)
             async with lock:
@@ -1068,7 +1068,7 @@ def create_app() -> Starlette:
                 )
             ]
 
-    transport = SseServerTransport("/messages/")
+    transport = SseServerTransport("/messages")
 
     class SseApp:
         def __init__(self, server: Server, transport: SseServerTransport):
@@ -1077,10 +1077,11 @@ def create_app() -> Starlette:
 
         async def __call__(self, scope: dict, receive: callable, send: callable) -> None:
             # TODO: Add authentication before allowing SSE connection.
-            # Currently the service binds to 127.0.0.1 and is accessible only via
-            # Docker port mapping + VPS firewall + Tailscale. Production deployment
-            # may require API key, Bearer token, or mTLS. Investigate MCP HTTP/SSE
-            # auth patterns before exposing beyond trusted networks.
+            # The server binds to 0.0.0.0 in-container, and the repo-owned Compose
+            # config publishes 127.0.0.1:9001 on the host by default. If this is
+            # exposed beyond trusted networks, add compensating controls such as a
+            # reverse proxy, Tailscale, firewall rules, and/or API auth (Bearer
+            # token, API key, mTLS) before widening exposure.
             async with self._transport.connect_sse(scope, receive, send) as (read_stream, write_stream):
                 await self._server.run(
                     read_stream,
@@ -1122,6 +1123,7 @@ def create_app() -> Starlette:
         routes=[
             Route("/sse", sse_handler, methods=["GET"]),
             Route("/messages", message_handler, methods=["POST"]),
+            Route("/messages/", message_handler, methods=["POST"]),
         ],
         lifespan=lifespan,
     )

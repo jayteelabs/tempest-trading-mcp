@@ -4,22 +4,27 @@
 # ── Stage 1: Builder — install ta-lib C library + Python dependencies ──
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
 
+ARG TA_LIB_VERSION=0.4.0
+ARG TA_LIB_SHA256=9ff41efcb1c011a4b4b6dfc91610b06e39b1d7973ed5d4dee55029a0ac4dc651
+
 # Install system dependencies for ta-lib C extension (D4, Q3)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential \
+    ca-certificates \
     wget && \
     rm -rf /var/lib/apt/lists/*
 
 # Build and install ta-lib C library from source
-RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
-    tar -xzf ta-lib-0.4.0-src.tar.gz && \
+RUN wget -O ta-lib-${TA_LIB_VERSION}-src.tar.gz "https://sourceforge.net/projects/ta-lib/files/ta-lib/${TA_LIB_VERSION}/ta-lib-${TA_LIB_VERSION}-src.tar.gz/download" && \
+    echo "${TA_LIB_SHA256}  ta-lib-${TA_LIB_VERSION}-src.tar.gz" | sha256sum -c - && \
+    tar -xzf ta-lib-${TA_LIB_VERSION}-src.tar.gz && \
     cd ta-lib/ && \
     ./configure --prefix=/usr && \
     make && \
     make install && \
     cd .. && \
-    rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
+    rm -rf ta-lib ta-lib-${TA_LIB_VERSION}-src.tar.gz
 
 WORKDIR /app
 
@@ -78,6 +83,13 @@ ENV PATH="/home/tempest/.venv/bin:$PATH" \
     TA_LIBRARY_PATH=/usr/lib \
     TA_INCLUDE_PATH=/usr/include \
     PYTHONPATH=/app/src
+
+# Healthcheck: probe SSE surface via HEAD request to /sse.
+# SSE is a persistent stream — HEAD returns headers immediately without waiting for body.
+# Exit 0 (healthy) if endpoint exists (2xx-4xx), exit 1 (unhealthy) if 5xx or unreachable.
+# Connection failures exit cleanly without printing a Python traceback.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD ["python", "-c", "exec(\"import http.client, sys\\nstatus = 500\\nconn = None\\ntry:\\n    conn = http.client.HTTPConnection('localhost', 9001, timeout=5)\\n    conn.request('HEAD', '/sse')\\n    status = conn.getresponse().status\\nexcept OSError:\\n    sys.exit(1)\\nfinally:\\n    if conn is not None:\\n        conn.close()\\nsys.exit(0 if status < 500 else 1)\\n\")"]
 
 # Switch to non-root user
 USER tempest
