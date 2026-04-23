@@ -152,6 +152,34 @@ class TestIndicatorRsiValidation:
         result = _run_async(indicator_rsi(symbol="BTCUSDT", period=-5))
         assert_failure_envelope(result)
         assert result["error"]["code"] == 1004
+    def test_limit_zero(self):
+        """limit=0 returns validation failure code 1005."""
+        result = _run_async(indicator_rsi(symbol="BTCUSDT", period=14, limit=0, exchange="binance"))
+        assert_failure_envelope(result)
+        assert result["error"]["code"] == 1005
+        assert "limit" in result["error"]["message"].lower()
+
+    def test_limit_negative(self):
+        """Negative limit returns validation failure code 1005."""
+        result = _run_async(indicator_rsi(symbol="BTCUSDT", period=14, limit=-5, exchange="binance"))
+        assert_failure_envelope(result)
+        assert result["error"]["code"] == 1005
+        assert "limit" in result["error"]["message"].lower()
+
+    def test_limit_float(self):
+        """Float limit returns validation failure code 1005."""
+        result = _run_async(indicator_rsi(symbol="BTCUSDT", period=14, limit=5.7, exchange="binance"))
+        assert_failure_envelope(result)
+        assert result["error"]["code"] == 1005
+        assert "limit" in result["error"]["message"].lower()
+
+    def test_limit_string(self):
+        """String limit returns validation failure code 1005."""
+        result = _run_async(indicator_rsi(symbol="BTCUSDT", period=14, limit="100", exchange="binance"))
+        assert_failure_envelope(result)
+        assert result["error"]["code"] == 1005
+        assert "limit" in result["error"]["message"].lower()
+
 
     @pytest.mark.parametrize(
         ("symbol", "expected_symbol"),
@@ -259,7 +287,7 @@ class TestIndicatorRsiSuccess:
             assert data["limit"] == 5
 
     def test_limit_clamp_to_1000(self):
-        """limit > 1000 is clamped to 1000."""
+        """limit > 1000 returns validation failure code 1005."""
         with patch("tempest_mcp.tools.indicator_tools.get_historical_adapter") as mock_get_adapter:
             mock_adapter = MagicMock()
             dates = pd.date_range("2024-01-01", periods=2000, freq="h", tz="UTC")
@@ -280,12 +308,9 @@ class TestIndicatorRsiSuccess:
             mock_get_adapter.return_value = mock_adapter
 
             result = _run_async(indicator_rsi(symbol="BTCUSDT", period=14, limit=5000, exchange="binance"))
-            data = assert_success_envelope(result, "indicator_rsi")
-
-            # limit should be clamped
-            assert data["limit"] == 1000
-            # values should be capped at available RSI rows, not exceed 1000
-            assert len(data["values"]) <= 1000
+            assert_failure_envelope(result)
+            assert result["error"]["code"] == 1005
+            assert "limit" in result["error"]["message"].lower()
 
     def test_yfinance_source_used(self, mock_adapter_with_data):
         """source_used reflects actual data source."""

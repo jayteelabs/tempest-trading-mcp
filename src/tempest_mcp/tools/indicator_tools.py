@@ -105,7 +105,7 @@ async def indicator_rsi(
                 }
             }
         Failure envelope (validation):
-            {"success": False, "error": {"code": 1001-1004, "message": "..."}}
+            {"success": False, "error": {"code": 1001-1005, "message": "..."}}
         Failure envelope (data):
             {"success": False, "error": {"code": 2001-2002, "message": "..."}}
     """
@@ -150,11 +150,9 @@ async def indicator_rsi(
     if not isinstance(period, int) or period < 2:
         return _failure_envelope(1004, "period must be a positive integer >= 2")
 
-    # Validate limit (clamp to 1-1000)
-    if not isinstance(limit, int) or limit < 1:
-        limit = 1
-    elif limit > 1000:
-        limit = 1000
+    # Validate limit (must be integer between 1 and 1000)
+    if not isinstance(limit, int) or limit < 1 or limit > 1000:
+        return _failure_envelope(1005, "limit must be an integer between 1 and 1000")
 
     # -------------------------------------------------------------------------
     # Data Fetch
