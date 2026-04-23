@@ -200,14 +200,20 @@ def normalize_to_ccxt(symbol: str, exchange: ExchangeName = "binance") -> str:
             )
         return symbol_upper
 
-    # Handle single hyphen-delimited symbols FIRST (e.g., BTC-USDT → BTC/USDT).
+    # Handle single hyphen-delimited market pairs FIRST (e.g., BTC-USDT → BTC/USDT).
     # This must come before endswith("USDT") check so BTC-USDT is normalized
     # to BTC/USDT before that check can return it unchanged.
+    # yfinance-style USD aliases (BTC-USD) remain rejected to avoid implicitly
+    # changing the quote instrument from the legacy USD alias path.
     # Malformed cases (multiple hyphens, backslash, colon) are still rejected.
     if "-" in symbol_upper:
         if symbol_upper.count("-") == 1:
             base, _, quote = symbol_upper.partition("-")
             if base.isalnum() and quote.isalnum():
+                if quote == "USD":
+                    raise ValueError(
+                        f"Invalid symbol format: '{symbol}'. Expected TradingView (BTCUSD) or CCXT (BTCUSDT) format."
+                    )
                 # Valid single-hyphen pattern - convert to slash format
                 return f"{base}/{quote}"
         # Malformed hyphen pattern (multiple hyphens, or invalid base/quote)
