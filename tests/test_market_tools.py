@@ -75,6 +75,32 @@ class TestFetchTickerValidation:
         assert_failure_envelope(result)
         assert result["error"]["code"] == 1004
 
+    @pytest.mark.parametrize("symbol", ["BTCUSDT", "BTC/USDT", "BTC-USDT", "ETH-USDT"])
+    def test_hyphen_and_slash_symbol_normalization(self, symbol):
+        """Hyphen and slash symbols normalize correctly (ENG-124)."""
+        with patch("tempest_mcp.tools.market_tools.get_live_adapter") as mock_get_adapter:
+            mock_adapter = MagicMock()
+            mock_adapter.fetch_ticker_snapshot.return_value = {
+                "price": 67234.5,
+                "bid": 67234.4,
+                "ask": 67234.6,
+                "change_pct_24h": 1.23,
+                "volume_24h": 12345.67,
+                "timestamp": pd.Timestamp.now(tz="UTC"),
+            }
+            mock_get_adapter.return_value = mock_adapter
+
+            result = _run_async(fetch_ticker(symbol=symbol, exchange="binance"))
+            data = assert_success_envelope(result, "fetch_ticker")
+            assert data["symbol"] == "BTC/USDT" or data["symbol"] == "ETH/USDT"
+
+    @pytest.mark.parametrize("symbol", ["BTC--USDT", "BTC:USDT", "BTC\\USDT"])
+    def test_malformed_symbols_rejected(self, symbol):
+        """Malformed symbols return 1004 (ENG-124)."""
+        result = _run_async(fetch_ticker(symbol=symbol, exchange="binance"))
+        assert_failure_envelope(result)
+        assert result["error"]["code"] == 1004
+
     @pytest.mark.parametrize("exchange", ["binance", "bybit", "coinbase", "kraken"])
     def test_valid_exchange(self, exchange):
         """Valid exchanges pass validation and return success."""

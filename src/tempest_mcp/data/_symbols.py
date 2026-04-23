@@ -200,15 +200,34 @@ def normalize_to_ccxt(symbol: str, exchange: ExchangeName = "binance") -> str:
             )
         return symbol_upper
 
-    # If ends with USDT, already in CCXT format
+    # Handle single hyphen-delimited symbols FIRST (e.g., BTC-USDT → BTC/USDT).
+    # This must come before endswith("USDT") check so BTC-USDT is normalized
+    # to BTC/USDT before that check can return it unchanged.
+    # Malformed cases (multiple hyphens, backslash, colon) are still rejected.
+    if "-" in symbol_upper:
+        if symbol_upper.count("-") == 1:
+            base, _, quote = symbol_upper.partition("-")
+            if base.isalnum() and quote.isalnum():
+                # Valid single-hyphen pattern - convert to slash format
+                return f"{base}/{quote}"
+        # Malformed hyphen pattern (multiple hyphens, or invalid base/quote)
+        raise ValueError(
+            f"Invalid symbol format: '{symbol}'. Expected TradingView (BTCUSD) or CCXT (BTCUSDT) format."
+        )
+
+    # If ends with USDT, already in CCXT format — but validate base is alphanumeric
     if symbol_upper.endswith("USDT"):
-        return symbol_upper
+        base = symbol_upper[:-4]
+        if base.isalnum():
+            return symbol_upper
+        raise ValueError(
+            f"Invalid symbol format: '{symbol}'. Expected TradingView (BTCUSD) or CCXT (BTCUSDT) format."
+        )
 
     if symbol_upper.endswith("USDC"):
-        return symbol_upper
-
-    # Reject yfinance-style hyphenated symbols here to avoid rewriting USD into USDT.
-    if "-" in symbol_upper:
+        base = symbol_upper[:-4]
+        if base.isalnum():
+            return symbol_upper
         raise ValueError(
             f"Invalid symbol format: '{symbol}'. Expected TradingView (BTCUSD) or CCXT (BTCUSDT) format."
         )
@@ -244,8 +263,26 @@ def normalize_to_ccxt_market(symbol: str, exchange: ExchangeName = "binance") ->
     """Convert a symbol to the CCXT market pair format used by exchange APIs."""
     symbol_upper = symbol.strip().upper()
     if "/" in symbol_upper:
-        return symbol_upper
+        # Already in market format - validate base/quote are alphanumeric
+        base, _, quote = symbol_upper.partition("/")
+        if base.isalnum() and quote.isalnum():
+            return symbol_upper
+        raise ValueError(
+            f"Invalid symbol format: '{symbol}'. Expected alphanumeric base/quote."
+        )
     ccxt_symbol = normalize_to_ccxt(symbol, exchange=exchange)
+
+    # If normalize_to_ccxt returned a market-formatted symbol (contains slash),
+    # validate and return it directly without further suffix stripping.
+    # This prevents double-slash issues when normalize_to_ccxt converts
+    # hyphenated symbols like BTC-USDT to BTC/USDT.
+    if "/" in ccxt_symbol:
+        base, _, quote = ccxt_symbol.partition("/")
+        if base.isalnum() and quote.isalnum():
+            return ccxt_symbol
+        raise ValueError(
+            f"Invalid symbol format: '{symbol}'. Expected alphanumeric base/quote."
+        )
 
     for quote in ("USDT", "USDC", "USD", "BTC", "ETH", "BUSD"):
         if ccxt_symbol.endswith(quote):

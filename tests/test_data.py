@@ -109,10 +109,22 @@ class TestSymbolNormalization:
         """BTCUSD (TV format) should convert to BTCUSDT for CCXT."""
         assert normalize_to_ccxt("BTCUSD") == "BTCUSDT"
 
-    def test_normalize_yf_format_rejected_by_ccxt(self):
-        """BTC-USD should be rejected by CCXT normalization to avoid USD/USDT rewrites."""
+    def test_normalize_single_hyphen_accepted(self):
+        """BTC-USDT (single hyphen) should normalize to BTC/USDT per ENG-124."""
+        assert normalize_to_ccxt("BTC-USDT") == "BTC/USDT"
+        assert normalize_to_ccxt("ETH-USDT") == "ETH/USDT"
+
+    def test_malformed_double_hyphen_rejected(self):
+        """BTC--USDT (double hyphen) should be rejected as malformed."""
         with pytest.raises(ValueError):
-            normalize_to_ccxt("BTC-USD")
+            normalize_to_ccxt("BTC--USDT")
+
+    def test_yfinance_format_accepted(self):
+        """BTC-USD (yfinance format with USD quote) now normalizes to BTC/USD per docs contract."""
+        # With hyphen→slash normalization, BTC-USD correctly becomes BTC/USD
+        # This is NOT a USD→USDT rewrite - it's just making the separator explicit
+        assert normalize_to_ccxt("BTC-USD") == "BTC/USD"
+        assert normalize_to_ccxt("ETH-USD") == "ETH/USD"
 
     def test_normalize_to_ccxt_exchange(self):
         """CCXT exchange format should be BASE/QUOTE."""
