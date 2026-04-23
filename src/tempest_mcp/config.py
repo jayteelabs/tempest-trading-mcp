@@ -26,7 +26,7 @@ class Config:
     ccxt_timeout: int = 30
     default_exchange: str = "binance"
     mcp_server_name: str = "tempest-tradingview-mcp"
-    mcp_server_version: str = "0.1.0"
+    mcp_server_version: str = "1.0.0"
     default_commission: float = 0.001
     default_slippage: float = 0.0005
     screener_symbols: tuple[str, ...] = ("BTC/USDT", "ETH/USDT", "DOGE/USDT")
@@ -87,7 +87,7 @@ def get_config() -> Config:
         ccxt_timeout=_get_int("CCXT_TIMEOUT", 30),
         default_exchange=_get_str("DEFAULT_EXCHANGE", "binance"),
         mcp_server_name=_get_str("MCP_SERVER_NAME", "tempest-tradingview-mcp"),
-        mcp_server_version=_get_str("MCP_SERVER_VERSION", "0.1.0"),
+        mcp_server_version=_get_str("MCP_SERVER_VERSION", "1.0.0"),
         default_commission=_get_float("DEFAULT_COMMISSION", 0.001),
         default_slippage=_get_float("DEFAULT_SLIPPAGE", 0.0005),
         screener_symbols=_get_tuple("SCREENER_SYMBOLS", ("BTC/USDT", "ETH/USDT", "DOGE/USDT")),
