@@ -6,6 +6,7 @@ import math
 import re
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any
 
 import uvicorn
@@ -101,41 +102,61 @@ TOOLS["get_combined_sentiment_dashboard"] = get_combined_sentiment_dashboard
 TOOL_SCHEMAS: list[Tool] = [
     Tool(
         name="fetch_ticker",
-        description="Fetch real-time ticker price + 24h volume for a crypto symbol.",
+        description="Fetch real-time ticker price + metadata for a crypto symbol. Returns price (required), bid/ask/change_pct_24h/volume_24h (nullable).",
         inputSchema={
             "type": "object",
             "properties": {
-                "symbol": {"type": "string"},
-                "exchange": {"type": "string", "default": "binance"},
+                "symbol": {"type": "string", "description": "Trading symbol (e.g., BTCUSDT, ETHUSD, BTC/USDT)"},
+                "exchange": {
+                    "type": "string",
+                    "default": "binance",
+                    "enum": ["binance", "bybit", "coinbase", "kraken"],
+                    "description": "Exchange name",
+                },
             },
             "required": ["symbol"],
         },
     ),
     Tool(
         name="fetch_klines",
-        description="Fetch OHLCV klines for a symbol.",
+        description="Fetch OHLCV klines for a symbol. Routes through historical abstraction (CCXT primary, yfinance fallback). source must be 'ccxt'.",
         inputSchema={
             "type": "object",
             "properties": {
-                "symbol": {"type": "string"},
-                "timeframe": {"type": "string", "default": "1h"},
-                "since": {"type": "string", "nullable": True},
-                "limit": {"type": "integer", "default": 100},
-                "exchange": {"type": "string", "default": "binance"},
-                "source": {"type": "string", "default": "ccxt"},
+                "symbol": {"type": "string", "description": "Trading symbol (e.g., BTCUSDT, ETHUSD, BTC/USDT)"},
+                "timeframe": {
+                    "type": "string",
+                    "default": "1h",
+                    "enum": ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1wk", "1mo"],
+                    "description": "OHLCV interval",
+                },
+                "since": {"type": "string", "nullable": True, "description": "ISO-8601 start time (naive interpreted as America/New_York)"},
+                "limit": {"type": "integer", "default": 100, "minimum": 1, "maximum": 1000, "description": "Max candles to return"},
+                "exchange": {
+                    "type": "string",
+                    "default": "binance",
+                    "enum": ["binance", "bybit", "coinbase", "kraken"],
+                    "description": "Exchange name",
+                },
+                "source": {"type": "string", "default": "ccxt", "description": "Must be 'ccxt' (historical routing is CCXT+yfinance fallback)"},
             },
             "required": ["symbol"],
         },
     ),
     Tool(
         name="fetch_orderbook",
-        description="Fetch order book depth for a symbol.",
+        description="Fetch order book (bid/ask depth) for a symbol. One-sided snapshots are allowed; both sides empty are treated as a data-source error.",
         inputSchema={
             "type": "object",
             "properties": {
-                "symbol": {"type": "string"},
-                "limit": {"type": "integer", "default": 20},
-                "exchange": {"type": "string", "default": "binance"},
+                "symbol": {"type": "string", "description": "Trading symbol (e.g., BTCUSDT, ETHUSD, BTC/USDT)"},
+                "limit": {"type": "integer", "default": 20, "minimum": 1, "maximum": 100, "description": "Orderbook depth"},
+                "exchange": {
+                    "type": "string",
+                    "default": "binance",
+                    "enum": ["binance", "bybit", "coinbase", "kraken"],
+                    "description": "Exchange name",
+                },
             },
             "required": ["symbol"],
         },
@@ -829,14 +850,79 @@ def validate_symbol(symbol: str, field_name: str = "symbol") -> str | None:
     return None
 
 
+def _validate_exchange(exchange: Any) -> str | None:
+    """Validate exchange parameter."""
+    if exchange is None:
+        return None
+    if not isinstance(exchange, str):
+        return "exchange must be a string"
+    if exchange.lower() not in {"binance", "bybit", "coinbase", "kraken"}:
+        return "exchange must be one of: binance, bybit, coinbase, kraken"
+    return None
+
+
+def _validate_timeframe(timeframe: Any) -> str | None:
+    """Validate timeframe parameter."""
+    if timeframe is None:
+        return None
+    if not isinstance(timeframe, str):
+        return "timeframe must be a string"
+    if timeframe not in {"1m", "5m", "15m", "30m", "1h", "4h", "1d", "1wk", "1mo"}:
+        return "timeframe must be one of: 1m, 5m, 15m, 30m, 1h, 4h, 1d, 1wk, 1mo"
+    return None
+
+
+def _validate_limit(limit: Any, field_name: str = "limit", min_val: int = 1, max_val: int = 1000) -> str | None:
+    """Validate limit parameter."""
+    if limit is None:
+        return None
+    if not isinstance(limit, int):
+        return f"{field_name} must be an integer"
+    if limit < min_val or limit > max_val:
+        return f"{field_name} must be between {min_val} and {max_val}"
+    return None
+
+
+def _validate_iso8601_datetime(value: Any, field_name: str = "since") -> str | None:
+    """Validate ISO-8601 datetime string parameters."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return f"{field_name} must be a string"
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return f"{field_name} must be a valid ISO-8601 datetime string"
+    return None
+
+
 def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> str | None:
     """Validate tool arguments. Returns error message or None if valid."""
     if name == "fetch_ticker":
-        return validate_symbol(arguments.get("symbol", ""), "symbol")
+        if err := validate_symbol(arguments.get("symbol", ""), "symbol"):
+            return err
+        return _validate_exchange(arguments.get("exchange"))
     if name == "fetch_klines":
-        return validate_symbol(arguments.get("symbol", ""), "symbol")
+        if err := validate_symbol(arguments.get("symbol", ""), "symbol"):
+            return err
+        if err := _validate_timeframe(arguments.get("timeframe")):
+            return err
+        if err := _validate_limit(arguments.get("limit"), "limit", 1, 1000):
+            return err
+        if err := _validate_iso8601_datetime(arguments.get("since"), "since"):
+            return err
+        if err := _validate_exchange(arguments.get("exchange")):
+            return err
+        source = arguments.get("source")
+        if source is not None and source != "ccxt":
+            return 'source must be "ccxt" (historical routing is CCXT+yfinance fallback)'
+        return None
     if name == "fetch_orderbook":
-        return validate_symbol(arguments.get("symbol", ""), "symbol")
+        if err := validate_symbol(arguments.get("symbol", ""), "symbol"):
+            return err
+        if err := _validate_limit(arguments.get("limit"), "limit", 1, 100):
+            return err
+        return _validate_exchange(arguments.get("exchange"))
     if name == "indicator_rsi":
         return validate_symbol(arguments.get("symbol", ""), "symbol")
     # Phase 2 backtest tools — validate symbol

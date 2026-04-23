@@ -389,7 +389,7 @@ class TestHistoricalAdapter:
 
         monkeypatch.setattr(yf_adapter, "fetch_ohlcv", _fake_yf_fetch)
 
-        df = source.fetch_ohlcv("BTCUSDT", "1d")
+        df, _ = source.fetch_ohlcv("BTCUSDT", "1d")
         assert dummy_ccxt.called is True
         assert captured["symbol"] == "BTC-USD"
         assert not df.empty
@@ -421,7 +421,7 @@ class TestHistoricalAdapter:
 
         monkeypatch.setattr(yf_adapter, "fetch_ohlcv", _fake_yf_fetch)
 
-        df = source.fetch_ohlcv("BTC-USD", "1d")
+        df, _ = source.fetch_ohlcv("BTC-USD", "1d")
         assert not df.empty
         assert df.index.tz is not None
 
@@ -454,7 +454,7 @@ class TestHistoricalAdapter:
 
         monkeypatch.setattr(yf_adapter, "fetch_ohlcv", _fake_yf_fetch)
 
-        df = source.fetch_ohlcv("BTCUSDT", "1d")
+        df, _ = source.fetch_ohlcv("BTCUSDT", "1d")
         assert not df.empty
         assert df.index.tz is not None
         assert list(df.columns) == ["open", "high", "low", "close", "volume"]
