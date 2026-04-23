@@ -12,6 +12,7 @@ from typing import Any
 import uvicorn
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import TextContent, Tool
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -689,12 +690,18 @@ TOOL_SCHEMAS: list[Tool] = [
 # Module-level registry for cleanup task — accessible from lifespan handler
 _rate_limit_cleanup_task: asyncio.Task | None = None
 
+# ── Streamable HTTP Session Manager ───────────────────────────────────────────
+# Module-level reference to the StreamableHTTPSessionManager — set in create_app()
+# so cancel can fire during shutdown if lifespan exits unexpectedly.
+_http_session_manager: "StreamableHTTPSessionManager | None" = None
+
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """In-memory rate limiter per client IP — thread-safe for asyncio.
 
     Handles both:
     - /messages: request-count rate limiting (100 req/min per IP)
+    - /mcp: request-count rate limiting (100 req/min per IP)
     - /sse: concurrent connection limiting (10 per IP)
     """
 
@@ -771,7 +778,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             self._cleanup_task = asyncio.create_task(self._periodic_request_cleanup())
             _rate_limit_cleanup_task = self._cleanup_task
 
-        if request.url.path in {"/messages", "/messages/"}:
+        if request.url.path in {"/messages", "/messages/", "/mcp"}:
             # Request-count rate limiting
             lock = self._get_lock(client_ip)
             async with lock:
@@ -1081,14 +1088,14 @@ def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> str | None:
 
 # ── Server ────────────────────────────────────────────────────────────────────
 def create_app() -> Starlette:
-    """Create the Starlette ASGI app with SSE transport."""
+    """Create the Starlette ASGI app with SSE and streamable-HTTP transport."""
     config = get_config()
     setup_logging()
     logger.info(
         "Starting MCP server",
         name=config.mcp_server_name,
         version=config.mcp_server_version,
-        transport="sse",
+        transport="sse+streamable-http",
         port=SERVER_PORT,
         host=SERVER_HOST,
     )
@@ -1182,13 +1189,38 @@ def create_app() -> Starlette:
         async def __call__(self, scope: dict, receive: callable, send: callable) -> None:
             await self._transport.handle_post_message(scope, receive, send)
 
+    # Streamable HTTP session manager — uses real MCP SDK session lifecycle (ENG-123)
+    # Stateless=True gives each POST request its own server run + transport instance,
+    # which cleanly parallels how SseApp creates a per-connection transport.
+    http_session_manager = StreamableHTTPSessionManager(
+        app=server,
+        stateless=True,
+    )
+
+    class StreamableHTTPApp:
+        """ASGI wrapper around StreamableHTTPSessionManager — handles POST /mcp."""
+
+        def __init__(self, mgr: StreamableHTTPSessionManager):
+            self._mgr = mgr
+
+        async def __call__(self, scope: dict, receive: callable, send: callable) -> None:
+            await self._mgr.handle_request(scope, receive, send)
+
     sse_handler = SseApp(server, transport)
     message_handler = MessageApp(transport)
+    streamable_http_handler = StreamableHTTPApp(http_session_manager)
+
+    # Module-level reference so cancel can fire during shutdown
+    global _http_session_manager
+    _http_session_manager = http_session_manager
 
     @asynccontextmanager
     async def lifespan(app: Starlette):
-        """Gracefully cancel background tasks on shutdown."""
-        yield
+        """Manage StreamableHTTPSessionManager lifecycle; cancel cleanup tasks on shutdown."""
+        async with http_session_manager.run():
+            yield
+        global _http_session_manager
+        _http_session_manager = None
         cancel_rate_limit_cleanup()
         logger.info("Rate limit cleanup task cancelled on shutdown")
 
@@ -1210,6 +1242,7 @@ def create_app() -> Starlette:
             Route("/sse", sse_handler, methods=["GET"]),
             Route("/messages", message_handler, methods=["POST"]),
             Route("/messages/", message_handler, methods=["POST"]),
+            Route("/mcp", streamable_http_handler, methods=["POST"]),
         ],
         lifespan=lifespan,
     )
