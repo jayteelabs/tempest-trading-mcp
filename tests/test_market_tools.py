@@ -217,6 +217,13 @@ class TestFetchKlinesValidation:
         assert_failure_envelope(result)
         assert result["error"]["code"] == 1004
 
+    def test_invalid_since(self):
+        """Malformed since returns 1004 instead of being ignored."""
+        result = _run_async(fetch_klines(symbol="BTCUSDT", since="not-an-iso"))
+        assert_failure_envelope(result)
+        assert result["error"]["code"] == 1004
+        assert "since" in result["error"]["message"].lower()
+
 
 class TestFetchKlinesSuccess:
     """Success path tests for fetch_klines."""
@@ -308,6 +315,23 @@ class TestFetchOrderbookSuccess:
             assert data["limit"] == 20
             assert data["bids"] == [[67234.4, 1.2], [67234.3, 0.8]]
             assert data["asks"] == [[67234.6, 0.8], [67234.7, 0.5]]
+
+    def test_fetch_orderbook_success_with_partial_depth(self):
+        """One-sided orderbook snapshots are returned as success."""
+        with patch("tempest_mcp.tools.market_tools.get_live_adapter") as mock_get_adapter:
+            mock_adapter = MagicMock()
+            mock_adapter.fetch_orderbook_snapshot.return_value = {
+                "bids": [[67234.4, 1.2]],
+                "asks": [],
+                "timestamp": pd.Timestamp("2026-04-23T10:00:00+00:00"),
+            }
+            mock_get_adapter.return_value = mock_adapter
+
+            result = _run_async(fetch_orderbook(symbol="BTCUSDT", exchange="binance"))
+            data = assert_success_envelope(result, "fetch_orderbook")
+
+            assert data["bids"] == [[67234.4, 1.2]]
+            assert data["asks"] == []
 
 
 class TestFetchOrderbookFailure:

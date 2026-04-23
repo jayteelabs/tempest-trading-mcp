@@ -6,6 +6,7 @@ import math
 import re
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any
 
 import uvicorn
@@ -144,7 +145,7 @@ TOOL_SCHEMAS: list[Tool] = [
     ),
     Tool(
         name="fetch_orderbook",
-        description="Fetch order book (bid/ask depth) for a symbol.",
+        description="Fetch order book (bid/ask depth) for a symbol. One-sided snapshots are allowed; both sides empty are treated as a data-source error.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -882,6 +883,19 @@ def _validate_limit(limit: Any, field_name: str = "limit", min_val: int = 1, max
     return None
 
 
+def _validate_iso8601_datetime(value: Any, field_name: str = "since") -> str | None:
+    """Validate ISO-8601 datetime string parameters."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return f"{field_name} must be a string"
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return f"{field_name} must be a valid ISO-8601 datetime string"
+    return None
+
+
 def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> str | None:
     """Validate tool arguments. Returns error message or None if valid."""
     if name == "fetch_ticker":
@@ -894,6 +908,8 @@ def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> str | None:
         if err := _validate_timeframe(arguments.get("timeframe")):
             return err
         if err := _validate_limit(arguments.get("limit"), "limit", 1, 1000):
+            return err
+        if err := _validate_iso8601_datetime(arguments.get("since"), "since"):
             return err
         if err := _validate_exchange(arguments.get("exchange")):
             return err

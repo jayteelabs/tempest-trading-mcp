@@ -230,6 +230,8 @@ async def fetch_klines(
 
     # Parse since
     since_dt = _parse_since(since)
+    if since is not None and since_dt is None:
+        return _failure_envelope(1004, "since must be a valid ISO-8601 datetime string")
     since_iso = since_dt.isoformat() if since_dt is not None else None
 
     # Get exchange-aware historical adapter
@@ -303,6 +305,7 @@ async def fetch_orderbook(
 
     Notes:
         - bids/asks are sorted: bids descending by price, asks ascending by price
+        - one-sided snapshots are returned as success; only both sides empty are treated as a data-source error
         - Uses exchange-aware CCXT adapter for the specified exchange
     """
     logger.info("fetch_orderbook", symbol=symbol, limit=limit, exchange=exchange)
