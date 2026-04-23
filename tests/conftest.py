@@ -1,13 +1,36 @@
 """Test configuration."""
 
-import os
 import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import numpy as np
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../src"))
+TESTS_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = TESTS_ROOT.parent
+SRC_ROOT = REPO_ROOT / "src"
+
+sys.path.insert(0, str(SRC_ROOT))
+
+
+def _assert_worktree_package_resolution() -> None:
+    """Fail fast if pytest resolves tempest_mcp from a sibling checkout."""
+    import tempest_mcp
+
+    package_path = Path(tempest_mcp.__file__).resolve()
+
+    try:
+        package_path.relative_to(SRC_ROOT)
+    except ValueError as exc:
+        raise pytest.UsageError(
+            "pytest imported tempest_mcp from "
+            f"{package_path} instead of this worktree's source tree ({SRC_ROOT}). "
+            "Run repo-local validation from this checkout, e.g. `uv run pytest ...`."
+        ) from exc
+
+
+_assert_worktree_package_resolution()
 
 
 def pytest_addoption(parser):

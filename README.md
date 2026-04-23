@@ -241,7 +241,8 @@ tempest-tradingview-mcp/
 # Install development dependencies
 uv pip install -e ".[dev]"
 
-# Run tests
+# Run tests from this worktree's repo-local environment
+# (avoids picking up a sibling editable checkout from a shared shell session)
 uv run pytest
 
 # Linting
