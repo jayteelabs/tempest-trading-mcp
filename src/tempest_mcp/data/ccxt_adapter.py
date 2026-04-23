@@ -99,6 +99,141 @@ class CCXTAdapter:
                 time.sleep(min_interval - (current_time - last_request))
             _rate_limit_tracker[self.exchange_name] = time.time()
 
+    def fetch_ticker_snapshot(
+        self,
+        symbol: str,
+    ) -> dict:
+        """Fetch a structured ticker snapshot for a symbol.
+
+        Args:
+            symbol: Symbol in any format (e.g., "BTCUSD", "BTCUSDT")
+
+        Returns:
+            Dict with keys:
+            - price: Latest trade price (float, required for success)
+            - bid: Best bid price (float or None)
+            - ask: Best ask price (float or None)
+            - change_pct_24h: 24h change percentage (float or None)
+            - volume_24h: 24h volume (float or None)
+            - timestamp: UTC-aware pandas Timestamp
+
+        Note:
+            Per D14, this function NEVER raises exceptions to callers.
+            On failure, logs ERROR and returns a dict with price=float('nan')
+            and all supplemental fields as None.
+
+        Example:
+            >>> adapter = CCXTAdapter()
+            >>> snapshot = adapter.fetch_ticker_snapshot("BTCUSDT")
+            >>> isinstance(snapshot["price"], float)
+            True
+        """
+        try:
+            # Normalize symbol to CCXT format
+            try:
+                ccxt_symbol = normalize_to_ccxt_market(symbol)
+            except ValueError as e:
+                logger.error(
+                    "invalid_symbol_format",
+                    symbol=symbol,
+                    error=str(e),
+                )
+                return {
+                    "price": float("nan"),
+                    "bid": None,
+                    "ask": None,
+                    "change_pct_24h": None,
+                    "volume_24h": None,
+                    "timestamp": None,
+                }
+
+            if not validate_symbol(ccxt_symbol):
+                logger.error(
+                    "invalid_symbol",
+                    symbol=symbol,
+                    ccxt_symbol=ccxt_symbol,
+                )
+                return {
+                    "price": float("nan"),
+                    "bid": None,
+                    "ask": None,
+                    "change_pct_24h": None,
+                    "volume_24h": None,
+                    "timestamp": None,
+                }
+
+            self._check_rate_limit()
+
+            # Fetch ticker from exchange
+            ticker = self.exchange.fetch_ticker(ccxt_symbol)
+
+            result = {
+                "price": float(ticker.get("last", float("nan"))),
+                "bid": float(ticker["bid"]) if ticker.get("bid") is not None else None,
+                "ask": float(ticker["ask"]) if ticker.get("ask") is not None else None,
+                "change_pct_24h": float(ticker["change"]) if ticker.get("change") is not None else None,
+                "volume_24h": float(ticker["baseVolume"]) if ticker.get("baseVolume") is not None else None,
+                "timestamp": pd.Timestamp.now(tz="UTC"),
+            }
+
+            logger.info(
+                "fetch_ticker_snapshot_success",
+                source="ccxt",
+                exchange=self.exchange_name,
+                symbol=ccxt_symbol,
+                price=result["price"],
+            )
+
+            return result
+
+        except ccxt.NetworkError as e:
+            logger.error(
+                "fetch_ticker_snapshot_network_error",
+                source="ccxt",
+                symbol=symbol,
+                error=str(e),
+            )
+            return {
+                "price": float("nan"),
+                "bid": None,
+                "ask": None,
+                "change_pct_24h": None,
+                "volume_24h": None,
+                "timestamp": None,
+            }
+
+        except ccxt.ExchangeError as e:
+            logger.error(
+                "fetch_ticker_snapshot_exchange_error",
+                source="ccxt",
+                symbol=symbol,
+                error=str(e),
+            )
+            return {
+                "price": float("nan"),
+                "bid": None,
+                "ask": None,
+                "change_pct_24h": None,
+                "volume_24h": None,
+                "timestamp": None,
+            }
+
+        except Exception as e:
+            logger.error(
+                "fetch_ticker_snapshot_unexpected_error",
+                source="ccxt",
+                symbol=symbol,
+                error=str(e),
+            )
+            return {
+                "price": float("nan"),
+                "bid": None,
+                "ask": None,
+                "change_pct_24h": None,
+                "volume_24h": None,
+                "timestamp": None,
+            }
+
     def fetch_live_price(
         self,
         symbol: str,

@@ -20,7 +20,7 @@ Design decisions:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 import structlog
 
@@ -52,17 +52,23 @@ __all__ = [
     "normalize_to_yf",
     "get_base_currency",
     "validate_symbol",
+    # Supported exchanges
+    "SUPPORTED_EXCHANGES",
 ]
+
+# Supported exchange names for market tools
+SUPPORTED_EXCHANGES: tuple[str, ...] = ("binance", "bybit", "coinbase", "kraken")
 
 
 @runtime_checkable
 class LiveDataAdapter(Protocol):
     """Protocol defining the interface for live data adapters.
 
-    All adapters must implement these three methods:
+    All adapters must implement these methods:
     - fetch_live_price: Get latest trade price
     - fetch_ohlcv_live: Get OHLCV candlestick data
     - fetch_orderbook_snapshot: Get order book depth
+    - fetch_ticker_snapshot: Get structured ticker snapshot (ENG-122)
     """
 
     def fetch_live_price(
@@ -117,29 +123,41 @@ class LiveDataAdapter(Protocol):
         """
         ...
 
+    def fetch_ticker_snapshot(
+        self,
+        symbol: str,
+    ) -> dict:
+        """Fetch a structured ticker snapshot.
 
-def get_live_adapter() -> LiveDataAdapter:
-    """Get the active live-market-data adapter.
+        Args:
+            symbol: Symbol in any supported format
 
-    The live path is intentionally simple: new code should always use
-    ``CCXTAdapter`` for live price, OHLCV, and order book retrieval. TradingView
-    is not part of the active data architecture.
+        Returns:
+            Dict with price, bid, ask, change_pct_24h, volume_24h, timestamp,
+            or dict with price=float('nan') and None fields on error
+        """
+        ...
+
+
+def get_live_adapter(exchange_name: Literal["binance", "bybit", "coinbase", "kraken"] = "binance") -> LiveDataAdapter:
+    """Get the active live-market-data adapter for the specified exchange.
+
+    The live path uses CCXT for live price, OHLCV, and order book retrieval.
+    Results are cached per exchange for efficiency.
+
+    Args:
+        exchange_name: Target exchange (default: "binance")
 
     Returns:
         CCXTAdapter instance for exchange-backed live market data.
 
     Example:
-        >>> adapter = get_live_adapter()
+        >>> adapter = get_live_adapter("binance")
         >>> price = adapter.fetch_live_price("BTCUSDT")
     """
-    from tempest_mcp.data.ccxt_adapter import CCXTAdapter
+    from tempest_mcp.data._factory import get_live_adapter as _get_live_adapter
 
-    logger.info(
-        "adapter_selected",
-        adapter="CCXTAdapter",
-        reason="TradingView has no OHLCV data API - CCXT is primary",
-    )
-    return CCXTAdapter()
+    return _get_live_adapter(exchange_name=exchange_name)
 
 
 # Lazy re-exports via __getattr__ to avoid E402 for _symbols imports

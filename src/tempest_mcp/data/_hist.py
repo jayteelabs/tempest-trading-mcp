@@ -13,7 +13,7 @@ client-side, or use CCXT directly for 4h data.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 import pandas as pd
 import structlog
@@ -67,6 +67,10 @@ class HistoricalDataAdapter(Protocol):
         ...
 
 
+# Supported exchange names
+SUPPORTED_EXCHANGES: tuple[str, ...] = ("binance", "bybit", "coinbase", "kraken")
+
+
 class HistoricalDataSource:
     """Primary CCXT + fallback yfinance historical data source.
 
@@ -86,10 +90,16 @@ class HistoricalDataSource:
     _CCXT_INTERVALS = frozenset({"1m", "5m", "15m", "30m", "1h", "4h", "1d", "1wk", "1mo"})
     _YF_INTERVALS = frozenset({"1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"})  # 4h excluded
 
-    def __init__(self) -> None:
+    def __init__(self, exchange_name: Literal["binance", "bybit", "coinbase", "kraken"] = "binance") -> None:
+        """Initialize HistoricalDataSource with exchange-specific CCXT adapter.
+
+        Args:
+            exchange_name: Exchange to use for CCXT primary (default: "binance")
+        """
         from tempest_mcp.data.ccxt_adapter import CCXTAdapter
 
-        self._ccxt = CCXTAdapter()
+        self.exchange_name = exchange_name
+        self._ccxt = CCXTAdapter(exchange_name=exchange_name)
 
     def _ccxt_timeframe(self, interval: str) -> str:
         """Map generic interval to CCXT timeframe string.
@@ -158,7 +168,7 @@ class HistoricalDataSource:
         start: datetime | None = None,
         end: datetime | None = None,
         auto_adjust: bool = True,
-    ) -> pd.DataFrame:
+    ) -> tuple[pd.DataFrame, str]:
         """Fetch historical OHLCV data via CCXT primary, yfinance fallback.
 
         Tries CCXT first (supports Binance/Bybit public REST). On failure
@@ -175,8 +185,9 @@ class HistoricalDataSource:
                 CCXT always returns split-adjusted spot prices)
 
         Returns:
-            DataFrame with [open, high, low, close, volume] and UTC-aware index,
-            or empty DataFrame on error
+            Tuple of (DataFrame with [open, high, low, close, volume] and UTC-aware index,
+            source_used: str indicating "ccxt" or "yfinance").
+            Returns (empty DataFrame, source_used) on error.
 
         Note:
             "4h" is supported by CCXT but NOT by yfinance. If CCXT returns
@@ -209,19 +220,20 @@ class HistoricalDataSource:
                     symbol=symbol,
                     error=str(exc),
                 )
-                return _empty_ohlcv()
+                return _empty_ohlcv(), "ccxt"
             logger.info(
                 "historical_fetch_yfinance_direct",
                 symbol=yf_symbol,
                 reason="yfinance_symbol_input",
             )
-            return _yf_fetch_ohlcv(
+            df = _yf_fetch_ohlcv(
                 symbol=yf_symbol,
                 interval=interval,
                 start=start_utc,
                 end=end_utc,
                 auto_adjust=auto_adjust,
             )
+            return df, "yfinance"
 
         # Normalize to CCXT symbol format
         try:
@@ -232,7 +244,7 @@ class HistoricalDataSource:
                 symbol=symbol,
                 error=str(exc),
             )
-            return _empty_ohlcv()
+            return _empty_ohlcv(), "ccxt"
         timeframe = self._ccxt_timeframe(interval)
 
         # Compute since/until timestamps for CCXT
@@ -290,7 +302,7 @@ class HistoricalDataSource:
                 rows=len(ccxt_result),
                 source="ccxt",
             )
-            return ccxt_result
+            return ccxt_result, "ccxt"
 
         # CCXT failed or empty — fallback to yfinance (pass UTC-normalized datetimes)
         try:
@@ -301,16 +313,17 @@ class HistoricalDataSource:
                 symbol=ccxt_symbol,
                 error=str(exc),
             )
-            return _empty_ohlcv()
+            return _empty_ohlcv(), "ccxt"
         logger.info(
             "historical_fetch_fallback_yfinance",
             symbol=yf_symbol,
             reason="CCXT returned empty",
         )
-        return _yf_fetch_ohlcv(
+        yf_result = _yf_fetch_ohlcv(
             symbol=yf_symbol,
             interval=interval,
             start=start_utc,
             end=end_utc,
             auto_adjust=auto_adjust,
         )
+        return yf_result, "yfinance"

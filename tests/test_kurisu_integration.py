@@ -222,8 +222,8 @@ def network_available():
 class TestFetchTickerKurisuIntegration:
     """Kurisu-integration tests for fetch_ticker.
 
-    fetch_ticker is currently a stubbed public surface, so coverage is
-    contract/formatter smoke only — no live-price assertions.
+    fetch_ticker is now wired to live CCXT adapter (ENG-122).
+    Tests verify real data envelope and DiscordFormatter compatibility.
     """
 
     @pytest.fixture(autouse=True)
@@ -232,12 +232,16 @@ class TestFetchTickerKurisuIntegration:
             pytest.skip("Network not available")
 
     def test_fetch_ticker_envelope_and_formatter(self):
-        """fetch_ticker returns valid stub envelope and is DiscordFormatter-safe."""
+        """fetch_ticker returns valid real data envelope and is DiscordFormatter-safe."""
         result = _run_async(fetch_ticker(symbol="BTCUSDT", exchange="binance"))
 
-        # Envelope assertions
+        # Envelope assertions — real implementation
         data = assert_success_envelope(result, tool_name="fetch_ticker")
-        assert data.get("stub") is True, "fetch_ticker stub must have stub=True"
+        assert data.get("stub") is None, "fetch_ticker should not have stub=True (real implementation)"
+        assert "price" in data, "fetch_ticker must have price field"
+        assert "symbol" in data, "fetch_ticker must have symbol field"
+        assert "exchange" in data, "fetch_ticker must have exchange field"
+        assert isinstance(data["price"], (int, float)), "price must be numeric"
 
         # Formatter compatibility — must not crash, must return stable embed shape
         assert_discord_embed_safe(result)
