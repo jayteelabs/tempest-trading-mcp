@@ -551,3 +551,139 @@ class TestPackageImportStability:
             assert analyzer._http_client is not None
 
         assert analyzer._http_client is None
+
+
+class TestRedditSentimentAnalyzerDeprecated:
+    """Tests for the deprecated (HTTP 403) envelope per ENG-129."""
+
+    def test_403_returns_deprecated_status(self):
+        """HTTP 403 from Reddit public-feed returns status='deprecated'."""
+
+        analyzer = RedditSentimentAnalyzer(subreddits=("CryptoCurrency",))
+
+        response = MagicMock()
+        response.status_code = 403
+        response.request = MagicMock()
+
+        with patch.object(
+            analyzer._http_client,
+            "get",
+            return_value=response,
+        ):
+            result = analyzer.analyze("BTC")
+
+        assert result["status"] == "deprecated"
+        assert result["posts"] == []
+        assert result["summary"]["total_posts"] == 0
+
+    def test_403_raises_reddit_blocked_error(self):
+        """HTTP 403 triggers RedditBlockedError which returns deprecated envelope."""
+
+        analyzer = RedditSentimentAnalyzer(subreddits=("CryptoCurrency",))
+
+        response = MagicMock()
+        response.status_code = 403
+        response.request = MagicMock()
+
+        with patch.object(
+            analyzer._http_client,
+            "get",
+            return_value=response,
+        ):
+            result = analyzer.analyze("BTC")
+
+        assert result["status"] == "deprecated"
+
+    def test_deprecated_first_subreddit_aborts(self):
+        """If the first subreddit returns 403, we get deprecated immediately (no partial data)."""
+        analyzer = RedditSentimentAnalyzer(subreddits=("CryptoCurrency", "Bitcoin"))
+
+        call_count = 0
+
+        def fake_get(url):
+            nonlocal call_count
+            call_count += 1
+            response = MagicMock()
+            response.status_code = 403
+            return response
+
+        with patch.object(analyzer._http_client, "get", side_effect=fake_get):
+            result = analyzer.analyze("BTC")
+
+        assert result["status"] == "deprecated"
+        # Should only call get once (aborts on first 403)
+        assert call_count == 1
+
+    def test_deprecated_result_schema(self):
+        """Verify the deprecated envelope has all required schema fields."""
+        analyzer = RedditSentimentAnalyzer(subreddits=("CryptoCurrency",))
+
+        response = MagicMock()
+        response.status_code = 403
+        response.request = MagicMock()
+
+        with patch.object(
+            analyzer._http_client,
+            "get",
+            return_value=response,
+        ):
+            result = analyzer.analyze("BTC")
+
+        # Verify all required envelope fields
+        assert "symbol" in result
+        assert "fetched_at" in result
+        assert "subreddits" in result
+        assert "posts" in result
+        assert "summary" in result
+        assert "status" in result
+
+        # Verify summary fields
+        summary = result["summary"]
+        assert "total_posts" in summary
+        assert "avg_sentiment" in summary
+        assert "positive_count" in summary
+        assert "negative_count" in summary
+        assert "neutral_count" in summary
+
+        # Verify deprecated status values
+        assert result["status"] == "deprecated"
+        assert result["posts"] == []
+        assert summary["total_posts"] == 0
+        assert summary["avg_sentiment"] == 0.0
+
+    def test_other_4xx_errors_still_return_error(self):
+        """Non-403 4xx errors (like 429) should still return error status, not deprecated."""
+        import httpx
+
+        analyzer = RedditSentimentAnalyzer(subreddits=("CryptoCurrency",))
+
+        with patch.object(
+            analyzer,
+            "_fetch_subreddit_posts",
+            side_effect=httpx.HTTPStatusError(
+                "429",
+                request=MagicMock(),
+                response=MagicMock(status_code=429),
+            ),
+        ):
+            result = analyzer.analyze("BTC")
+
+        assert result["status"] == "error"
+        assert result["posts"] == []
+
+    def test_reddit_blocked_error_isinstance_check(self):
+        """RedditBlockedError should be instance of RedditHTTPError."""
+        from tempest_mcp.sentiment.reddit import RedditBlockedError, RedditHTTPError
+
+        error = RedditBlockedError("403 Blocked")
+
+        assert isinstance(error, RedditHTTPError)
+        assert error.is_blocked is True
+
+    def test_reddit_http_error_base_isinstance_check(self):
+        """RedditHTTPError base class should not be blocked."""
+        from tempest_mcp.sentiment.reddit import RedditHTTPError
+
+        error = RedditHTTPError("Some error")
+
+        assert error.is_blocked is False

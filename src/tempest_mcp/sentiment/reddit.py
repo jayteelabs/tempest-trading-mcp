@@ -1,4 +1,19 @@
-"""Reddit sentiment analyzer for crypto subreddit monitoring."""
+"""Reddit sentiment analyzer for crypto subreddit monitoring.
+
+.. deprecated::
+    The Reddit public-feed source (``https://www.reddit.com/r/{subreddit}/hot.json``)
+    is no longer supported. Reddit now returns HTTP 403 on all public-feed requests
+    with no authenticated workaround within this ticket's scope.
+
+    - ENG-128 restored the combined dashboard via RSS fallback after ``vaderSentiment``
+      container failure.
+    - ENG-129 explicitly marks the Reddit public-feed path as a deprecated source
+      rather than pursuing authenticated recovery.
+    - Combined sentiment diagnostics already honestly degrade to ``single_source`` mode
+      when Reddit returns ``status="deprecated"``.
+
+    See: https://linear.app/jayteelabs/issue/ENG-129
+"""
 
 from __future__ import annotations
 
@@ -156,6 +171,33 @@ def _clamp(value: float, lo: float = -1.0, hi: float = 1.0) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Custom exceptions for Reddit source diagnostics
+# ---------------------------------------------------------------------------
+
+
+class RedditHTTPError(Exception):
+    """Base class for Reddit-specific HTTP errors.
+
+    Used internally to distinguish Reddit source failures from generic
+    network errors. The ``is_blocked`` attribute indicates whether the
+    error appears to be a 403/blocked response from Reddit's public feed.
+    """
+
+    is_blocked: bool = False
+
+
+class RedditBlockedError(RedditHTTPError):
+    """Raised when Reddit returns HTTP 403 on public-feed requests.
+
+    This indicates the Reddit public-feed path is no longer accessible.
+    The combined sentiment dashboard treats this as an explicit deprecated-source
+    outcome per ENG-129, not a recoverable network error.
+    """
+
+    is_blocked: bool = True
+
+
+# ---------------------------------------------------------------------------
 # RedditSentimentAnalyzer
 # ---------------------------------------------------------------------------
 
@@ -163,6 +205,15 @@ def _clamp(value: float, lo: float = -1.0, hi: float = 1.0) -> float:
 @dataclass
 class RedditSentimentAnalyzer:
     """Deterministic Reddit sentiment analyzer for crypto subreddits.
+
+    .. deprecated::
+        The public JSON feed at ``https://www.reddit.com/r/{subreddit}/hot.json``
+        is no longer supported. Reddit now returns HTTP 403 on all public-feed
+        requests. This analyzer returns ``status="deprecated"`` for all requests
+        per ENG-129.
+
+        Use :class:`CombinedSentimentDashboard` which falls back to RSS when
+        Reddit is unavailable.
 
     Monitors r/CryptoCurrency, r/Bitcoin, r/ethereum, and r/dogecoin using
     Reddit's public JSON API. Scores post headlines with VADER sentiment
@@ -209,6 +260,13 @@ class RedditSentimentAnalyzer:
     def analyze(self, symbol: str) -> dict[str, Any]:
         """Analyze Reddit sentiment for a trading symbol.
 
+        .. deprecated::
+            The Reddit public-feed path is no longer accessible (HTTP 403).
+            This method always returns ``status="deprecated"`` per ENG-129.
+
+            Use :class:`CombinedSentimentDashboard` for sentiment analysis
+            with RSS fallback.
+
         Fetches hot posts from the configured subreddits, filters to posts
         whose title or selftext mentions the symbol or its base token, scores
         each title with VADER + keyword boost, and returns a structured result
@@ -224,8 +282,11 @@ class RedditSentimentAnalyzer:
                 "subreddits": list[str],
                 "posts": list[dict],         # empty when status != "ok"
                 "summary": dict,
-                "status": "ok" | "no_results" | "error"
+                "status": "ok" | "no_results" | "error" | "deprecated"
             }
+
+            ``status="deprecated"`` is returned when Reddit returns HTTP 403,
+            indicating the public-feed path is no longer a supported data source.
         """
         base_token = _extract_base_token(symbol)
         fetched_at = datetime.now(timezone.utc).isoformat()
@@ -234,6 +295,14 @@ class RedditSentimentAnalyzer:
         for subreddit in self.subreddits:
             try:
                 raw_posts = self._fetch_subreddit_posts(subreddit)
+            except RedditBlockedError:
+                logger.warning(
+                    "reddit_public_feed_blocked",
+                    subreddit=subreddit,
+                    reason="403 Blocked - Reddit public-feed is no longer supported",
+                )
+                # Explicit deprecated-source outcome: 403 from Reddit public feed
+                return self._deprecated_result(symbol, fetched_at)
             except httpx.HTTPError as exc:
                 logger.warning(
                     "reddit_fetch_failed",
@@ -241,7 +310,7 @@ class RedditSentimentAnalyzer:
                     error=str(exc),
                     error_type=type(exc).__name__,
                 )
-                # Deterministic full-error envelope: any fetch failure → "error"
+                # Generic network error envelope
                 return self._error_result(symbol, fetched_at, exc)
 
             for raw in raw_posts:
@@ -270,9 +339,25 @@ class RedditSentimentAnalyzer:
     # ------------------------------------------------------------------
 
     def _fetch_subreddit_posts(self, subreddit: str) -> list[dict[str, Any]]:
-        """Fetch and return the `children` list from Reddit's hot endpoint."""
+        """Fetch and return the `children` list from Reddit's hot endpoint.
+
+        Raises
+        ------
+        RedditBlockedError
+            When Reddit returns HTTP 403, indicating the public-feed path
+            is no longer accessible.
+        httpx.HTTPError
+            For other HTTP error responses (4xx/5xx) or network failures.
+        """
         url = f"https://www.reddit.com/r/{subreddit}/hot.json?limit=25"
         response = self._http_client.get(url)
+
+        # Check for 403 specifically to provide explicit deprecated-source outcome
+        if response.status_code == 403:
+            raise RedditBlockedError(
+                "403 Blocked: Reddit public-feed is no longer supported (ENG-129)"
+            )
+
         response.raise_for_status()
         try:
             data = response.json()
@@ -343,6 +428,34 @@ class RedditSentimentAnalyzer:
                 "neutral_count": 0,
             },
             "status": "no_results",
+        }
+
+    def _deprecated_result(self, symbol: str, fetched_at: str) -> dict[str, Any]:
+        """Deterministic envelope returned when Reddit public-feed returns 403.
+
+        This explicitly marks the Reddit source as deprecated per ENG-129 rather
+        than treating it as a generic network error. The combined sentiment
+        dashboard uses ``status != "ok"`` to determine source usability, so
+        ``"deprecated"`` correctly signals the source is not usable.
+        """
+        logger.warning(
+            "reddit_source_deprecated",
+            symbol=symbol,
+            reason="403 Blocked - Reddit public-feed is no longer supported (ENG-129)",
+        )
+        return {
+            "symbol": symbol,
+            "fetched_at": fetched_at,
+            "subreddits": list(self.subreddits),
+            "posts": [],
+            "summary": {
+                "total_posts": 0,
+                "avg_sentiment": 0.0,
+                "positive_count": 0,
+                "negative_count": 0,
+                "neutral_count": 0,
+            },
+            "status": "deprecated",
         }
 
     def _error_result(
