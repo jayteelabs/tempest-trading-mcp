@@ -24,6 +24,13 @@ services:
     # For fresh clones / CI validation, override the path with TEMPEST_ENV_FILE=.env.example.
     env_file:
       - ${TEMPEST_ENV_FILE:-.env}
+    environment:
+      # The reddit-adapter runs on the VPS host, not inside this compose stack.
+      # Containers cannot reach the host's 127.0.0.1 directly, so map Docker's
+      # host-gateway alias and point the runtime at that host-local adapter.
+      REDDIT_ADAPTER_URL: ${REDDIT_ADAPTER_URL:-http://host.docker.internal:8080}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       # Safer default: publish to loopback on the host. If you need remote access,
       # expose intentionally behind a reverse proxy, Tailscale, firewall rules,
