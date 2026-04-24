@@ -253,10 +253,10 @@ def fetch_resolved_ohlcv(window: ResolvedBacktestWindow) -> pd.DataFrame:
     DataSourceError
         When data fetch fails after retries.
     """
-    source = HistoricalDataSource()
+    source = HistoricalDataSource(exchange_name=window.exchange)
 
     try:
-        df = source.fetch_ohlcv(
+        ohlcv_data, source_used = source.fetch_ohlcv(
             symbol=window.symbol,
             interval=window.timeframe,
             start=window.start_at_utc.to_pydatetime(),
@@ -266,10 +266,10 @@ def fetch_resolved_ohlcv(window: ResolvedBacktestWindow) -> pd.DataFrame:
         logger.error("OHLCV fetch failed", symbol=window.symbol, error=str(e))
         raise
 
-    if df.empty:
+    if ohlcv_data.empty:
         logger.warning("OHLCV fetch returned empty", symbol=window.symbol)
 
-    return df
+    return ohlcv_data
 
 
 def resolve_and_fetch_backtest_ohlcv(
