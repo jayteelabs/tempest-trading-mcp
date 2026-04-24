@@ -2356,7 +2356,7 @@ wheels = [
 ]
 
 [[package]]
-name = "tempest-tradingview-mcp"
+name = "tempest-trading-mcp"
 version = "1.0.0"
 source = { editable = "." }
 dependencies = [

@@ -1,8 +1,8 @@
 # Architecture Deep-Dive
 
-This document explains the internal structure of `tempest-tradingview-mcp` and how contributors extend it. It is grounded on the live `origin/main` codebase.
+This document explains the internal structure of `tempest-trading-mcp` and how contributors extend it. It is grounded on the live `origin/main` codebase.
 
-> **TradingView note:** Despite the repository name, TradingView is not an active market-data provider in the current architecture. Legacy TradingView compatibility code (`data/tv_adapter.py`) is retained only to avoid breaking older imports. CCXT is the primary live/historical crypto path; yfinance is the fallback/non-crypto path.
+> **TradingView note:** TradingView is not an active market-data provider in the current architecture. Legacy TradingView compatibility code (`data/tv_adapter.py`) is retained only to avoid breaking older imports. CCXT is the primary live/historical crypto path; yfinance is the fallback/non-crypto path.
 
 ---
 

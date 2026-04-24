@@ -4,30 +4,30 @@ Generated: 2026-04-22
 
 ## Container Deployment
 
-**Service:** `tempest-tradingview-mcp` (Docker Compose-managed container)
+**Service:** `tempest-trading-mcp` (Docker Compose-managed container)
 
 **Start command:**
 ```bash
-cd /home/tempest/apps/tempest-tradingview-mcp
+cd /home/tempest/apps/tempest-trading-mcp
 cp .env.example .env
 sg docker -c "docker compose up -d --build"
 ```
 
 **Stop command:**
 ```bash
-cd /home/tempest/apps/tempest-tradingview-mcp
+cd /home/tempest/apps/tempest-trading-mcp
 sg docker -c "docker compose down"
 ```
 
 **View logs:**
 ```bash
-cd /home/tempest/apps/tempest-tradingview-mcp
+cd /home/tempest/apps/tempest-trading-mcp
 sg docker -c "docker compose logs -f"
 ```
 
-**Image:** `tempest-tradingview-mcp:latest` — built from `Dockerfile` in project root.
+**Image:** `tempest-trading-mcp:latest` — built from `Dockerfile` in project root.
 
-**Container naming:** Docker Compose uses its default project-scoped container names. This avoids conflicts with older standalone `docker run --name tempest-tradingview-mcp ...` containers during migration/restarts.
+**Container naming:** Docker Compose uses its default project-scoped container names. This avoids conflicts with older standalone `docker run --name tempest-trading-mcp ...` containers during migration/restarts.
 
 **Important Docker networking note:** the MCP server must bind to `0.0.0.0` inside the container. Binding to `127.0.0.1` only makes SSE/MCP work from inside the container itself and breaks host-side access through Docker port publishing on `9001`.
 
@@ -40,7 +40,7 @@ sg docker -c "docker compose logs -f"
 
 **Fresh-clone validation (without creating `.env`):**
 ```bash
-cd /home/tempest/apps/tempest-tradingview-mcp
+cd /home/tempest/apps/tempest-trading-mcp
 sg docker -c "TEMPEST_ENV_FILE=.env.example docker compose config"
 ```
 
@@ -60,7 +60,7 @@ The service includes a Docker healthcheck that verifies the SSE endpoint respond
 ## Rebuild Image (if needed)
 
 ```bash
-cd /home/tempest/apps/tempest-tradingview-mcp
+cd /home/tempest/apps/tempest-trading-mcp
 sg docker -c "docker compose build"
 sg docker -c "docker compose up -d"
 ```

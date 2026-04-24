@@ -373,7 +373,7 @@ def test_github_api_rejects_malformed_repository() -> None:
     from review.github_api import GitHubApi
 
     try:
-        GitHubApi(token="token", repository="tempest-tradingview-mcp")
+        GitHubApi(token="token", repository="tempest-trading-mcp")
     except ValueError as exc:
         assert "owner/repo" in str(exc)
     else:

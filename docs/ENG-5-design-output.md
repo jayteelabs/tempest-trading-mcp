@@ -10,9 +10,9 @@
 
 ## 1. Overview
 
-This design covers the `server.py` skeleton and 6 tool stubs for the tempest-tradingview-mcp MCP server. All stubs follow the design architecture doc exactly: **pure data/analytics server, NO trading/execution tools**. Stubs return valid JSON responses enabling MCP protocol validation without crashing.
+This design covers the `server.py` skeleton and 6 tool stubs for the tempest-trading-mcp MCP server. All stubs follow the design architecture doc exactly: **pure data/analytics server, NO trading/execution tools**. Stubs return valid JSON responses enabling MCP protocol validation without crashing.
 
-> **Critical Note — C1/C2 Discrepancy:** The existing repo at `/home/tempest/apps/tempest-tradingview-mcp/` contains a **trading bot** implementation (order execution via `connectors/binance.py`, mandatory `TEMPEST_BINANCE_API_KEY/SECRET`). This directly contradicts the design doc which states: *"What this project is NOT: A trading bot. No order execution, no position management."* ENG-5 stubs follow the **design doc**, NOT the existing repo implementations. The full implementations in the repo are ahead-of-scope for this skeleton ticket.
+> **Critical Note — C1/C2 Discrepancy:** The existing repo at `/home/tempest/apps/tempest-trading-mcp/` contains a **trading bot** implementation (order execution via `connectors/binance.py`, mandatory `TEMPEST_BINANCE_API_KEY/SECRET`). This directly contradicts the design doc which states: *"What this project is NOT: A trading bot. No order execution, no position management."* ENG-5 stubs follow the **design doc**, NOT the existing repo implementations. The full implementations in the repo are ahead-of-scope for this skeleton ticket.
 
 ---
 

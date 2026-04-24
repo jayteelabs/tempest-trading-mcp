@@ -1,4 +1,4 @@
-# Contributing to tempest-tradingview-mcp
+# Contributing to tempest-trading-mcp
 
 Thank you for your interest in contributing! This document outlines the development workflow, code standards, and processes for contributing to the project.
 
@@ -28,8 +28,8 @@ If your platform does not have a compatible wheel, follow the upstream installat
 
 ```bash
 # Clone the repository
-git clone https://github.com/jayteelabs/tempest-tradingview-mcp.git
-cd tempest-tradingview-mcp
+git clone https://github.com/jayteelabs/tempest-trading-mcp.git
+cd tempest-trading-mcp
 
 # Install uv (if not already installed)
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -207,7 +207,7 @@ Feature requests should be submitted through Linear with the appropriate project
 
 ## Project Scope
 
-tempest-tradingview-mcp provides market data and analytics via the Model Context Protocol:
+tempest-trading-mcp provides market data and analytics via the Model Context Protocol:
 
 - **In scope**: Technical indicators, backtesting, screening, sentiment analysis
 - **Out of scope**: Trading bots, order execution, position management
@@ -216,5 +216,5 @@ tempest-tradingview-mcp provides market data and analytics via the Model Context
 
 For questions about contributing, reach out via:
 
-- GitHub Issues: https://github.com/jayteelabs/tempest-tradingview-mcp/issues
+- GitHub Issues: https://github.com/jayteelabs/tempest-trading-mcp/issues
 - Email: tempest@jaytee.cloud

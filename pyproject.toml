@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "tempest-tradingview-mcp"
+name = "tempest-trading-mcp"
 version = "1.0.0"
 description = "Market data & analytics MCP server — technical indicators, backtesting, and screening for crypto markets"
 readme = "README.md"
@@ -44,9 +44,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/jayteelabs/tempest-tradingview-mcp"
-Repository = "https://github.com/jayteelabs/tempest-tradingview-mcp"
-Issues = "https://github.com/jayteelabs/tempest-tradingview-mcp/issues"
+Homepage = "https://github.com/jayteelabs/tempest-trading-mcp"
+Repository = "https://github.com/jayteelabs/tempest-trading-mcp"
+Issues = "https://github.com/jayteelabs/tempest-trading-mcp/issues"
 
 [project.scripts]
 tempest-mcp = "tempest_mcp.server:main"

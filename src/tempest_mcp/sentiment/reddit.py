@@ -216,7 +216,7 @@ class RedditSentimentAnalyzer:
         # HTTP client used for adapter fetches; raise_for_status surfaces 4xx/5xx failures.
         self._http_client = httpx.Client(
             timeout=10.0,
-            headers={"User-Agent": "tempest-tradingview-mcp/1.0"},
+            headers={"User-Agent": "tempest-trading-mcp/1.0"},
         )
         # VADER scorer instantiated once per analyzer instance
         from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer

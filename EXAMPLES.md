@@ -1,6 +1,6 @@
 # EXAMPLES.md — Usage Examples for the Public MCP Surface
 
-This document provides practical usage examples for each of the 21 public MCP tools exposed by `tempest-tradingview-mcp`. Examples are grounded in the live tool contracts defined in `src/tempest_mcp/server.py`.
+This document provides practical usage examples for each of the 21 public MCP tools exposed by `tempest-trading-mcp`. Examples are grounded in the live tool contracts defined in `src/tempest_mcp/server.py`.
 
 For high-level tool descriptions and architecture, see [README.md](README.md).
 

@@ -1,4 +1,4 @@
-# Multi-stage Dockerfile for tempest-tradingview-mcp
+# Multi-stage Dockerfile for tempest-trading-mcp
 # D9: uv package manager | D7: HTTP/SSE transport on :9001 | D4: ta-lib from source
 
 # ── Stage 1: Builder — install ta-lib C library + Python dependencies ──
