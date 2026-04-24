@@ -4,6 +4,10 @@
 
 **NOT a trading bot.** No order execution, no position management, no trade placement.
 
+![tempest-trading-mcp capability overview](docs/assets/readme-infographic.png)
+
+> Capability overview: 21 public MCP tools spanning market data, indicators, screening, backtesting, market structure analysis, and sentiment overlays.
+
 ## Public MCP Tools
 
 The server exposes 21 public MCP tools:
