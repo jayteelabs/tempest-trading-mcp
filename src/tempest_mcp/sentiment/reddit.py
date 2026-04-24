@@ -1,7 +1,24 @@
-"""Reddit sentiment analyzer for crypto subreddit monitoring."""
+"""Reddit sentiment analyzer for crypto subreddit monitoring.
+
+This module routes Reddit listing fetches through the VPS-side reddit-adapter
+service (ENG-130) rather than hitting Reddit's public JSON API directly.
+
+**Interim workaround — operational caveats:**
+- The adapter must be running at the configured base URL for Reddit sentiment to work.
+- If the adapter is unavailable, Reddit sentiment degrades to ``status="error"`` rather
+  than pretending Reddit is healthy.
+- This path depends on Josh's local machine and Tailscale exit-node remaining available.
+- This is intentionally brittle and should be replaced with authenticated Reddit access
+  when available.
+
+Runtime configuration:
+  Set ``REDDIT_ADAPTER_URL`` (env var) or pass ``adapter_url`` to the constructor.
+  Defaults to ``http://127.0.0.1:8080`` — the loopback-published reddit-adapter endpoint.
+"""
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -12,6 +29,10 @@ import httpx
 from tempest_mcp.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+#: Default reddit-adapter base URL (ENG-130 stack, loopback-only on VPS).
+DEFAULT_REDDIT_ADAPTER_URL = "http://127.0.0.1:8080"
+
 
 # ---------------------------------------------------------------------------
 # Keyword boost tables
@@ -164,9 +185,14 @@ def _clamp(value: float, lo: float = -1.0, hi: float = 1.0) -> float:
 class RedditSentimentAnalyzer:
     """Deterministic Reddit sentiment analyzer for crypto subreddits.
 
-    Monitors r/CryptoCurrency, r/Bitcoin, r/ethereum, and r/dogecoin using
-    Reddit's public JSON API. Scores post headlines with VADER sentiment
+    Fetches hot posts from configured subreddits through the VPS-side
+    reddit-adapter (ENG-130) and scores headlines with VADER sentiment
     augmented by a deterministic keyword boost layer.
+
+    Args:
+        subreddits: Tuple of subreddit names to monitor.
+        adapter_url: Base URL of the reddit-adapter service.
+            Defaults to ``http://127.0.0.1:8080`` or ``REDDIT_ADAPTER_URL`` env var.
     """
 
     subreddits: tuple[str, ...] = (
@@ -175,11 +201,19 @@ class RedditSentimentAnalyzer:
         "ethereum",
         "dogecoin",
     )
+    adapter_url: str = field(default="")
     _http_client: httpx.Client = field(default=None, init=False, repr=False)
     _vader: Any = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        # HTTP client used for subreddit fetches; raise_for_status surfaces 4xx/5xx failures.
+        # Resolve adapter URL: explicit param > env var > default
+        if self.adapter_url:
+            base = self.adapter_url.rstrip("/")
+        else:
+            base = os.environ.get("REDDIT_ADAPTER_URL", DEFAULT_REDDIT_ADAPTER_URL).rstrip("/")
+        self._adapter_base = base
+
+        # HTTP client used for adapter fetches; raise_for_status surfaces 4xx/5xx failures.
         self._http_client = httpx.Client(
             timeout=10.0,
             headers={"User-Agent": "tempest-tradingview-mcp/1.0"},
@@ -209,10 +243,10 @@ class RedditSentimentAnalyzer:
     def analyze(self, symbol: str) -> dict[str, Any]:
         """Analyze Reddit sentiment for a trading symbol.
 
-        Fetches hot posts from the configured subreddits, filters to posts
-        whose title or selftext mentions the symbol or its base token, scores
-        each title with VADER + keyword boost, and returns a structured result
-        envelope.
+        Fetches hot posts from the configured subreddits via the reddit-adapter,
+        filters to posts whose title or selftext mentions the symbol or its base
+        token, scores each title with VADER + keyword boost, and returns a
+        structured result envelope.
 
         Returns
         -------
@@ -226,6 +260,12 @@ class RedditSentimentAnalyzer:
                 "summary": dict,
                 "status": "ok" | "no_results" | "error"
             }
+
+        Notes
+        -----
+        If the reddit-adapter is unavailable (connection refused, timeout, etc.),
+        returns ``status="error"`` with zeroed summary — truthful degradation rather
+        than false-positive health.
         """
         base_token = _extract_base_token(symbol)
         fetched_at = datetime.now(timezone.utc).isoformat()
@@ -270,15 +310,19 @@ class RedditSentimentAnalyzer:
     # ------------------------------------------------------------------
 
     def _fetch_subreddit_posts(self, subreddit: str) -> list[dict[str, Any]]:
-        """Fetch and return the `children` list from Reddit's hot endpoint."""
-        url = f"https://www.reddit.com/r/{subreddit}/hot.json?limit=25"
+        """Fetch and return the ``children`` list from the reddit-adapter hot endpoint.
+
+        The adapter preserves Reddit's native JSON shape, so the parsing logic
+        is identical to the direct-Reddit path.
+        """
+        url = f"{self._adapter_base}/r/{subreddit}/hot.json?limit=25"
         response = self._http_client.get(url)
         response.raise_for_status()
         try:
             data = response.json()
         except ValueError as exc:
             raise httpx.DecodingError(
-                f"Invalid JSON returned by Reddit for r/{subreddit}",
+                f"Invalid JSON returned by adapter for r/{subreddit}",
                 request=response.request,
             ) from exc
         children = data.get("data", {}).get("children", [])

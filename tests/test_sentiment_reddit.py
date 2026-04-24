@@ -8,6 +8,7 @@ import pytest
 sys.path.insert(0, "src")
 
 from tempest_mcp.sentiment.reddit import (
+    DEFAULT_REDDIT_ADAPTER_URL,
     RedditSentimentAnalyzer,
     _clamp,
     _compute_keyword_boost,
@@ -551,3 +552,275 @@ class TestPackageImportStability:
             assert analyzer._http_client is not None
 
         assert analyzer._http_client is None
+
+
+# ---------------------------------------------------------------------------
+# Reddit Adapter Path tests (ENG-129)
+# ---------------------------------------------------------------------------
+
+
+class TestRedditAdapterUrlConfiguration:
+    """Tests for adapter URL configuration (ENG-129)."""
+
+    def test_default_adapter_url(self):
+        """Default adapter URL is the ENG-130 loopback endpoint."""
+        analyzer = RedditSentimentAnalyzer(subreddits=("CryptoCurrency",))
+        assert analyzer._adapter_base == DEFAULT_REDDIT_ADAPTER_URL
+
+    def test_explicit_adapter_url_param(self):
+        """Explicit adapter_url parameter overrides the default."""
+        analyzer = RedditSentimentAnalyzer(
+            subreddits=("CryptoCurrency",),
+            adapter_url="http://custom-adapter:9090",
+        )
+        assert analyzer._adapter_base == "http://custom-adapter:9090"
+
+    def test_adapter_url_env_var_overrides_default(self):
+        """REDDIT_ADAPTER_URL env var overrides the hard-coded default."""
+        with patch.dict("os.environ", {"REDDIT_ADAPTER_URL": "http://env-adapter:7777"}):
+            analyzer = RedditSentimentAnalyzer(subreddits=("CryptoCurrency",))
+            assert analyzer._adapter_base == "http://env-adapter:7777"
+
+    def test_explicit_param_overrides_env_var(self):
+        """Explicit adapter_url wins over env var."""
+        with patch.dict("os.environ", {"REDDIT_ADAPTER_URL": "http://env-adapter:7777"}):
+            analyzer = RedditSentimentAnalyzer(
+                subreddits=("CryptoCurrency",),
+                adapter_url="http://explicit:8888",
+            )
+            assert analyzer._adapter_base == "http://explicit:8888"
+
+    def test_adapter_url_trailing_slash_stripped(self):
+        """Trailing slashes on adapter URL are stripped for safe concatenation."""
+        analyzer = RedditSentimentAnalyzer(
+            subreddits=("CryptoCurrency",),
+            adapter_url="http://adapter:8080/",
+        )
+        assert analyzer._adapter_base == "http://adapter:8080"
+        # Verify URL construction won't have double slashes
+        assert analyzer._adapter_base + "/r/CryptoCurrency/hot.json" == "http://adapter:8080/r/CryptoCurrency/hot.json"
+
+
+class TestRedditAdapterFetchUrl:
+    """Tests verifying _fetch_subreddit_posts hits the adapter URL (ENG-129)."""
+
+    def test_fetch_hits_adapter_endpoint(self):
+        """_fetch_subreddit_posts must hit the adapter URL, not Reddit direct."""
+        analyzer = RedditSentimentAnalyzer(
+            subreddits=("CryptoCurrency",),
+            adapter_url="http://adapter:8080",
+        )
+        children = [make_child_data("BTC update")]
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = reddit_json_response(children)
+        mock_response.raise_for_status.return_value = None
+        mock_response.request = MagicMock()
+
+        with patch.object(analyzer._http_client, "get", return_value=mock_response) as mock_get:
+            result = analyzer._fetch_subreddit_posts("CryptoCurrency")
+
+        mock_get.assert_called_once()
+        call_url = mock_get.call_args[0][0]
+        # Must use adapter URL, not https://www.reddit.com
+        assert call_url.startswith("http://adapter:8080")
+        assert "/r/CryptoCurrency/hot.json" in call_url
+        assert "www.reddit.com" not in call_url
+        assert result == children
+
+    def test_fetch_uses_custom_adapter_url_from_env(self):
+        """When REDDIT_ADAPTER_URL is set, fetches go through that adapter."""
+        with patch.dict("os.environ", {"REDDIT_ADAPTER_URL": "http://custom:9000"}):
+            analyzer = RedditSentimentAnalyzer(subreddits=("Bitcoin",))
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = reddit_json_response([make_child_data("ETH discussion")])
+        mock_response.raise_for_status.return_value = None
+        mock_response.request = MagicMock()
+
+        with patch.object(analyzer._http_client, "get", return_value=mock_response) as mock_get:
+            analyzer._fetch_subreddit_posts("Bitcoin")
+
+        call_url = mock_get.call_args[0][0]
+        assert "http://custom:9000" in call_url
+        assert "/r/Bitcoin/hot.json" in call_url
+        assert "www.reddit.com" not in call_url
+
+
+class TestRedditAdapterUnavailable:
+    """Tests for reddit-adapter unavailability degradation (ENG-129)."""
+
+    def test_connection_refused_returns_error(self):
+        """Connection refused (adapter down) returns status=error, not crash."""
+        import httpx
+
+        analyzer = RedditSentimentAnalyzer(subreddits=("CryptoCurrency",))
+
+        with patch.object(
+            analyzer._http_client,
+            "get",
+            side_effect=httpx.ConnectError("Connection refused"),
+        ):
+            result = analyzer.analyze("BTC")
+
+        assert result["status"] == "error"
+        assert result["posts"] == []
+        assert result["summary"]["total_posts"] == 0
+
+    def test_adapter_timeout_returns_error(self):
+        """Adapter timeout returns status=error, truthful degradation."""
+        import httpx
+
+        analyzer = RedditSentimentAnalyzer(subreddits=("CryptoCurrency",))
+
+        with patch.object(
+            analyzer._http_client,
+            "get",
+            side_effect=httpx.TimeoutException("timeout"),
+        ):
+            result = analyzer.analyze("BTC")
+
+        assert result["status"] == "error"
+        assert result["posts"] == []
+        assert result["summary"]["total_posts"] == 0
+
+    def test_adapter_dns_failure_returns_error(self):
+        """DNS resolution failure returns status=error."""
+        import httpx
+
+        analyzer = RedditSentimentAnalyzer(subreddits=("CryptoCurrency",))
+
+        with patch.object(
+            analyzer._http_client,
+            "get",
+            side_effect=httpx.ConnectError("DNS failure"),
+        ):
+            result = analyzer.analyze("BTC")
+
+        assert result["status"] == "error"
+
+
+class TestRedditAdapterHTTPError:
+    """Tests for HTTP errors returned by the reddit-adapter (ENG-129)."""
+
+    def test_adapter_502_returns_error(self):
+        """Adapter returns 502 when Reddit upstream fails — status=error."""
+        import httpx
+
+        analyzer = RedditSentimentAnalyzer(subreddits=("CryptoCurrency",))
+
+        with patch.object(
+            analyzer._http_client,
+            "get",
+            side_effect=httpx.HTTPStatusError(
+                "502 Bad Gateway",
+                request=MagicMock(),
+                response=MagicMock(status_code=502),
+            ),
+        ):
+            result = analyzer.analyze("BTC")
+
+        assert result["status"] == "error"
+        assert result["posts"] == []
+        assert result["summary"]["total_posts"] == 0
+
+    def test_adapter_500_returns_error(self):
+        """Adapter returns 500 on internal error — status=error."""
+        import httpx
+
+        analyzer = RedditSentimentAnalyzer(subreddits=("CryptoCurrency",))
+
+        with patch.object(
+            analyzer._http_client,
+            "get",
+            side_effect=httpx.HTTPStatusError(
+                "500 Internal Server Error",
+                request=MagicMock(),
+                response=MagicMock(status_code=500),
+            ),
+        ):
+            result = analyzer.analyze("BTC")
+
+        assert result["status"] == "error"
+
+    def test_adapter_403_returns_error(self):
+        """Even with the adapter, Reddit may still return 403 — status=error."""
+        import httpx
+
+        analyzer = RedditSentimentAnalyzer(subreddits=("CryptoCurrency",))
+
+        with patch.object(
+            analyzer._http_client,
+            "get",
+            side_effect=httpx.HTTPStatusError(
+                "403 Forbidden",
+                request=MagicMock(),
+                response=MagicMock(status_code=403),
+            ),
+        ):
+            result = analyzer.analyze("BTC")
+
+        assert result["status"] == "error"
+
+    def test_adapter_503_returns_error(self):
+        """Adapter returns 503 when Tailscale/exit-node is unavailable — status=error."""
+        import httpx
+
+        analyzer = RedditSentimentAnalyzer(subreddits=("CryptoCurrency",))
+
+        with patch.object(
+            analyzer._http_client,
+            "get",
+            side_effect=httpx.HTTPStatusError(
+                "503 Service Unavailable",
+                request=MagicMock(),
+                response=MagicMock(status_code=503),
+            ),
+        ):
+            result = analyzer.analyze("BTC")
+
+        assert result["status"] == "error"
+
+
+class TestRedditAdapterHappyPathIntegration:
+    """Integration-style tests verifying full adapter-backed analyze() flow (ENG-129)."""
+
+    def test_analyze_through_adapter_returns_ok(self):
+        """Full analyze() call with adapter-mocked response returns ok."""
+        analyzer = RedditSentimentAnalyzer(
+            subreddits=("CryptoCurrency", "Bitcoin"),
+            adapter_url="http://adapter:8080",
+        )
+        children = [
+            make_child_data("BTC is going to the moon!"),
+            make_child_data("Bitcoin dump incoming"),
+        ]
+
+        def fake_fetch(subreddit):
+            if subreddit == "CryptoCurrency":
+                return children
+            return [make_child_data("BTC only in Bitcoin subreddit")]
+
+        with patch.object(analyzer, "_fetch_subreddit_posts", side_effect=fake_fetch):
+            result = analyzer.analyze("BTC")
+
+        assert result["status"] == "ok"
+        assert result["symbol"] == "BTC"
+        assert len(result["posts"]) == 3
+        assert all("sentiment" in p for p in result["posts"])
+
+    def test_combined_sentiment_sees_adapter_as_reddit_usable(self):
+        """When adapter works, CombinedSentimentDashboard sees reddit as usable."""
+
+        analyzer = RedditSentimentAnalyzer(
+            subreddits=("CryptoCurrency",),
+            adapter_url="http://adapter:8080",
+        )
+        children = [make_child_data("BTC to the moon!")]
+
+        with patch.object(analyzer, "_fetch_subreddit_posts", return_value=children):
+            result = analyzer.analyze("BTC")
+
+        # status=ok means source is usable
+        assert result["status"] == "ok"
+        assert result["summary"]["total_posts"] == 1
