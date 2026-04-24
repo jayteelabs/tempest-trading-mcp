@@ -47,7 +47,8 @@ RUN uv venv && \
         "ta-lib>=0.4.0" \
         "structlog>=23.0.0" \
         "httpx>=0.25.0" \
-        "python-dotenv>=1.0.0"
+        "python-dotenv>=1.0.0" \
+        "vaderSentiment>=3.3.2,<4.0.0"
 
 # ── Stage 2: Production — minimal runtime ──
 FROM python:3.12-slim AS production
