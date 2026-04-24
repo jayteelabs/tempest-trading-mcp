@@ -1,4 +1,4 @@
-# tempest-tradingview-mcp
+# tempest-trading-mcp
 
 **Market data & analytics MCP server** — provides technical indicators, backtesting, screening, and sentiment analysis for crypto markets via the Model Context Protocol.
 
@@ -62,8 +62,8 @@ For practical usage examples for all 21 public tools, see [EXAMPLES.md](EXAMPLES
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/jayteelabs/tempest-tradingview-mcp.git
-cd tempest-tradingview-mcp
+git clone https://github.com/jayteelabs/tempest-trading-mcp.git
+cd tempest-trading-mcp
 
 # 2. Install uv (fast Python package manager)
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -98,8 +98,8 @@ cp .env.example .env
 
 **No API keys required** — the active data sources use public endpoints.
 
-> Note: despite the repository name, TradingView is not an active market-data
-> provider in the current architecture. Legacy TradingView compatibility code is
+> Note: TradingView is not an active market-data provider in the current
+> architecture. Legacy TradingView compatibility code is
 > retained only to avoid breaking older imports. Yahoo Finance remains the
 > fallback/historical adapter; CCXT is the primary live-market-data path.
 
@@ -109,10 +109,10 @@ cp .env.example .env
 
 ```bash
 # Build the image
-sg docker -c "docker build -t tempest-tradingview-mcp ."
+sg docker -c "docker build -t tempest-trading-mcp ."
 
 # Run the container with the MCP port published on host loopback
-sg docker -c "docker run --rm -p 127.0.0.1:9001:9001 tempest-tradingview-mcp"
+sg docker -c "docker run --rm -p 127.0.0.1:9001:9001 tempest-trading-mcp"
 ```
 
 Notes:
@@ -146,7 +146,7 @@ sg docker -c "TEMPEST_ENV_FILE=.env.example docker compose config"
 
 The compose stack starts the MCP server on port `9001` with the HTTP/SSE transport (`/sse` for SSE connections, `/messages` for POST requests) and publishes it on host loopback by default (`127.0.0.1:9001:9001`).
 
-Compose uses its default project-scoped container naming so repeated `docker compose up` runs do not collide with an older standalone `docker run --name tempest-tradingview-mcp ...` container.
+Compose uses its default project-scoped container naming so repeated `docker compose up` runs do not collide with an older standalone `docker run --name tempest-trading-mcp ...` container.
 
 **Health check:** The image includes a Dockerfile-level HEALTHCHECK that verifies the SSE endpoint is reachable via a HEAD request to `http://localhost:9001/sse`. The healthcheck exits 0 (healthy) when the endpoint exists (2xx-4xx response) and exits 1 (unhealthy) on 5xx or connection failure. Use `sg docker -c "docker compose ps"` to see the health status.
 
@@ -183,7 +183,7 @@ For a detailed architecture deep-dive, see [ARCHITECTURE.md](docs/ARCHITECTURE.m
 
 ```
 
-tempest-tradingview-mcp/
+tempest-trading-mcp/
 ├── src/tempest_mcp/          # Main package
 │   ├── __init__.py
 │   ├── server.py             # MCP server entry point (HTTP/SSE on :9001)

@@ -206,7 +206,7 @@ class RSSSentimentAnalyzer:
         # HTTP client with timeout and user-agent
         self._http_client = httpx.Client(
             timeout=15.0,
-            headers={"User-Agent": "tempest-tradingview-mcp/1.0"},
+            headers={"User-Agent": "tempest-trading-mcp/1.0"},
         )
         # VADER scorer instantiated once per analyzer instance
         from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer

@@ -1249,7 +1249,7 @@ def create_app() -> Starlette:
 
 
 def main() -> None:
-    logger.info(f"Starting tempest-tradingview-mcp on port {SERVER_PORT}")
+    logger.info(f"Starting tempest-trading-mcp on port {SERVER_PORT}")
     uvicorn.run(create_app(), host=SERVER_HOST, port=SERVER_PORT, log_level="info")
 
 

@@ -1,6 +1,6 @@
 # Release Process
 
-This document describes the release workflow for `tempest-tradingview-mcp` and what happens at each gate.
+This document describes the release workflow for `tempest-trading-mcp` and what happens at each gate.
 
 ## Release Gates
 

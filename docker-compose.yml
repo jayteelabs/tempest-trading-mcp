@@ -1,4 +1,4 @@
-# Docker Compose for tempest-tradingview-mcp
+# Docker Compose for tempest-trading-mcp
 # Single-service stack for local/VPS deployment
 #
 # Usage:
@@ -18,7 +18,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: tempest-tradingview-mcp:latest
+    image: tempest-trading-mcp:latest
     restart: unless-stopped
     # Runtime config comes from .env by default so local edits affect the container.
     # For fresh clones / CI validation, override the path with TEMPEST_ENV_FILE=.env.example.
