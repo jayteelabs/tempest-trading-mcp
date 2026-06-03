@@ -8,6 +8,8 @@ Covers:
     - reuse of existing indicator/strategy logic
 """
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -920,3 +922,31 @@ def _mock_window():
         estimated_bars=168,
         exchange="binance",
     )
+
+
+class TestAnalysisPublicContractNoSourceUsed:
+    """Exact C3 public contract assertions for analysis success envelopes."""
+
+    def _patch_fetch(self, monkeypatch, ohlcv):
+        monkeypatch.setattr(
+            "tempest_mcp.tools.analysis_tools.resolve_and_fetch_backtest_ohlcv",
+            lambda _request: (ohlcv, _mock_window()),
+        )
+
+    def _assert_contract(self, result, expected_keys):
+        assert result["success"] is True
+        assert set(result["data"]) == expected_keys
+        assert set(result["data"]["window"]) == {"start_at_utc", "end_at_utc", "estimated_bars", "exchange"}
+        assert "source_used" not in json.dumps(result)
+
+    @pytest.mark.asyncio
+    async def test_calculate_volume_profile_contract(self, monkeypatch, deterministic_ohlcv):
+        self._patch_fetch(monkeypatch, deterministic_ohlcv)
+        result = await calculate_volume_profile("BTC/USDT", "1h", "2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z")
+        self._assert_contract(result, {"tool", "symbol", "timeframe", "window", "summary", "profile_rows"})
+
+    @pytest.mark.asyncio
+    async def test_detect_order_blocks_contract(self, monkeypatch, order_block_fixture_ohlcv):
+        self._patch_fetch(monkeypatch, order_block_fixture_ohlcv)
+        result = await detect_order_blocks("BTC/USDT", "1h", "2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z")
+        self._assert_contract(result, {"tool", "symbol", "timeframe", "window", "order_blocks", "count"})

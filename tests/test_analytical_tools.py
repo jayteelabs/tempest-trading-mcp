@@ -1627,3 +1627,44 @@ class TestGetMarketStructureEngineReuse:
 
         assert result["success"] is True
         assert call_count == 1
+
+
+class TestAnalyticalPublicContractNoSourceUsed:
+    """Exact C3 public contract assertions for analytical success envelopes."""
+
+    def _patch_fetch(self, monkeypatch, ohlcv):
+        monkeypatch.setattr(
+            "tempest_mcp.tools.analytical_tools.resolve_and_fetch_backtest_ohlcv",
+            lambda _request: (ohlcv, _mock_window()),
+        )
+
+    def _assert_contract(self, result, expected_keys):
+        expected_window_keys = {"start_at_utc", "end_at_utc", "estimated_bars", "exchange"}
+        assert result["success"] is True
+        assert set(result["data"]) == expected_keys
+        assert set(result["data"]["window"]) == expected_window_keys
+        assert "source_used" not in json.dumps(result)
+
+    @pytest.mark.asyncio
+    async def test_calculate_fibonacci_contract(self, monkeypatch, deterministic_ohlcv):
+        self._patch_fetch(monkeypatch, deterministic_ohlcv)
+        result = await calculate_fibonacci("BTC/USDT", "1h", "2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z", 120.0, 100.0)
+        self._assert_contract(result, {"tool", "symbol", "timeframe", "window", "output_mode", "swing_high", "swing_low", "trend_direction", "fib_levels", "count"})
+
+    @pytest.mark.asyncio
+    async def test_calculate_tpo_contract(self, monkeypatch, single_session_ohlcv):
+        self._patch_fetch(monkeypatch, single_session_ohlcv)
+        result = await calculate_tpo("BTC/USDT", "1h", "2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z", 1.0)
+        self._assert_contract(result, {"tool", "symbol", "timeframe", "window", "session", "tpo_rows", "count"})
+
+    @pytest.mark.asyncio
+    async def test_detect_elliot_wave_contract(self, monkeypatch, elliott_wave_ohlcv):
+        self._patch_fetch(monkeypatch, elliott_wave_ohlcv)
+        result = await detect_elliot_wave("BTC/USDT", "1h", "2024-01-01T00:00:00Z", "2024-01-03T00:00:00Z")
+        self._assert_contract(result, {"tool", "symbol", "timeframe", "window", "parameters", "wave_sequences", "count"})
+
+    @pytest.mark.asyncio
+    async def test_get_market_structure_contract(self, monkeypatch, market_structure_ohlcv):
+        self._patch_fetch(monkeypatch, market_structure_ohlcv)
+        result = await get_market_structure("BTC/USDT", "1h", "2024-01-01T00:00:00Z", "2024-01-03T00:00:00Z")
+        self._assert_contract(result, {"tool", "symbol", "timeframe", "window", "summary", "insufficient_data"})

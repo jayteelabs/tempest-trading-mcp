@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from tempest_mcp.backtest.engine import BacktestEngine, SignalAction
+from tempest_mcp.config import ErrorCodes
 from tempest_mcp.tools.backtest_tools import (
     _STRATEGY_SPECS,
     BACKTEST_TOOLS,
@@ -590,3 +591,125 @@ class TestValidateStrategyIds:
         ids, error = _validate_strategy_ids([FakeId("pdh_session"), "pdh_session"])
         assert ids == []
         assert error == "Duplicate strategy_id: pdh_session"
+
+
+class TestCompareStrategiesLifecycleRegression:
+    """Focused C3 lifecycle regression tests for compare_strategies."""
+
+    def _window(self):
+        return ResolvedBacktestWindow(
+            symbol="BTC/USDT",
+            trade_style="day_trade",
+            timeframe="1h",
+            start_at_utc=pd.Timestamp("2024-01-01", tz="UTC"),
+            end_at_utc=pd.Timestamp("2024-01-02", tz="UTC"),
+            estimated_bars=24,
+            exchange="binance",
+        )
+
+    def _ohlcv(self, bars=3):
+        idx = pd.date_range("2024-01-01", periods=bars, freq="h", tz="UTC")
+        return pd.DataFrame(
+            {"open": [100.0] * bars, "high": [101.0] * bars, "low": [99.0] * bars, "close": [100.0] * bars, "volume": [10.0] * bars},
+            index=idx,
+        )
+
+    def _engine(self, total_return):
+        engine = MagicMock()
+        engine.metrics = {"total_return": total_return, "sharpe_ratio": 1.0}
+        engine.trades = [object()]
+        engine.open_position = False
+        engine.initial_capital = 1000.0
+        engine.final_equity = 1000.0 * (1.0 + total_return)
+        return engine
+
+    def _patch_fetch_and_runners(self, monkeypatch, ohlcv=None):
+        calls = {"fetch": 0, "direct": [], "adapter": []}
+        frame = ohlcv if ohlcv is not None else self._ohlcv()
+
+        def fake_fetch(request):
+            calls["fetch"] += 1
+            return frame, self._window()
+
+        def fake_direct(tool_name, received_df, initial_capital, params):
+            calls["direct"].append((tool_name, received_df, initial_capital, params))
+            returns = {"backtest_pdh_session": 0.10, "backtest_vwap": 0.30, "backtest_ema_stack": 0.20, "backtest_elliot_wave": 0.05}
+            return [], self._engine(returns[tool_name])
+
+        def fake_adapter(tool_name, received_df, initial_capital, params):
+            calls["adapter"].append((tool_name, received_df, initial_capital, params))
+            returns = {"backtest_rsi": 0.40, "backtest_order_blocks": 0.15}
+            return [], self._engine(returns[tool_name])
+
+        monkeypatch.setattr("tempest_mcp.tools.backtest_tools.resolve_and_fetch_backtest_ohlcv", fake_fetch)
+        monkeypatch.setattr("tempest_mcp.tools.backtest_tools._run_direct_runner", fake_direct)
+        monkeypatch.setattr("tempest_mcp.tools.backtest_tools._run_adapter", fake_adapter)
+        return calls, frame
+
+    @pytest.mark.asyncio
+    async def test_success_payload_window_keys_single_fetch_ranking_and_no_source_used(self, monkeypatch):
+        calls, frame = self._patch_fetch_and_runners(monkeypatch)
+        result = await BACKTEST_TOOLS["compare_strategies"](
+            symbol="BTC/USDT",
+            trade_style="day_trade",
+            timeframe="1h",
+            start_at="2024-01-01T00:00:00Z",
+            end_at="2024-01-02T00:00:00Z",
+            strategy_ids=["pdh_session", "rsi", "vwap"],
+            initial_capital=1000,
+        )
+
+        assert result["success"] is True
+        data = result["data"]
+        assert set(data) == {"tool", "symbol", "strategy_ids", "window", "ranking_metric", "best_strategy_id", "results"}
+        assert set(data["window"]) == {"trade_style", "timeframe", "start_at_utc", "end_at_utc", "estimated_bars", "exchange"}
+        assert data["best_strategy_id"] == "rsi"
+        assert [item["strategy_id"] for item in data["results"]] == ["rsi", "vwap", "pdh_session"]
+        assert calls["fetch"] == 1
+        assert all(call[1] is frame for call in [*calls["direct"], *calls["adapter"]])
+        assert "source_used" not in json.dumps(result)
+
+    @pytest.mark.asyncio
+    async def test_strategy_param_forwarding_only_to_allowed_strategy(self, monkeypatch):
+        calls, _ = self._patch_fetch_and_runners(monkeypatch)
+        result = await BACKTEST_TOOLS["compare_strategies"](
+            symbol="BTC/USDT",
+            strategy_ids=["pdh_session", "rsi"],
+            atr_period=21,
+            rsi_period=7,
+            ignored_param=True,
+        )
+
+        assert result["success"] is True
+        assert calls["direct"][0][3] == {"atr_period": 21}
+        assert calls["adapter"][0][3] == {"rsi_period": 7}
+
+    @pytest.mark.asyncio
+    async def test_first_value_error_strategy_failure_maps_to_invalid_parameter(self, monkeypatch):
+        self._patch_fetch_and_runners(monkeypatch)
+
+        def fail_direct(*_args, **_kwargs):
+            raise ValueError("bad strategy params")
+
+        monkeypatch.setattr("tempest_mcp.tools.backtest_tools._run_direct_runner", fail_direct)
+        result = await BACKTEST_TOOLS["compare_strategies"](symbol="BTC/USDT", strategy_ids=["pdh_session", "rsi"])
+        assert result == {"success": False, "error": {"code": ErrorCodes.INVALID_PARAMETER, "message": "bad strategy params"}}
+
+    @pytest.mark.asyncio
+    async def test_unexpected_strategy_failure_maps_to_internal_error(self, monkeypatch):
+        self._patch_fetch_and_runners(monkeypatch)
+
+        def fail_direct(*_args, **_kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr("tempest_mcp.tools.backtest_tools._run_direct_runner", fail_direct)
+        result = await BACKTEST_TOOLS["compare_strategies"](symbol="BTC/USDT", strategy_ids=["pdh_session", "rsi"])
+        assert result == {"success": False, "error": {"code": ErrorCodes.INTERNAL_ERROR, "message": "Strategy execution failed"}}
+
+    @pytest.mark.asyncio
+    async def test_insufficient_data_uses_lifecycle_validation_error(self, monkeypatch):
+        self._patch_fetch_and_runners(monkeypatch, ohlcv=self._ohlcv(bars=1))
+        result = await BACKTEST_TOOLS["compare_strategies"](symbol="BTC/USDT", strategy_ids=["pdh_session", "rsi"])
+        assert result["success"] is False
+        assert result["error"]["code"] == ErrorCodes.INVALID_PARAMETER
+        assert result["error"]["message"] == "Insufficient data: only 1 bars returned (minimum 2 required)"

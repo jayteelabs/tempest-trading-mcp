@@ -653,6 +653,7 @@ async def compare_strategies(**kwargs: Any) -> dict[str, Any]:
         callback=_callback,
         sufficiency_check=min_bars_check(2),
         calculation_error_message="Strategy execution failed",
+        fetch_ohlcv=resolve_and_fetch_backtest_ohlcv,
     )
 
 
