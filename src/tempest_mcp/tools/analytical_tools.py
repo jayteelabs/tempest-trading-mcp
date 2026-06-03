@@ -130,15 +130,20 @@ def _analytical_lifecycle_request(
     max_bars: int | None,
 ) -> OhlcvLifecycleRequest:
     """Build the shared C3 lifecycle request for analytical custom windows."""
+    parsed_start_at = _parse_iso_datetime("start_at", start_at)
+    parsed_end_at = _parse_iso_datetime("end_at", end_at)
+    validated_timeframe = validate_timeframe(timeframe)
+    validated_max_bars = validate_max_bars(max_bars)
+
     return OhlcvLifecycleRequest(
         tool_name=tool_name,
         symbol=symbol,
         trade_style="custom",
-        timeframe=validate_timeframe(timeframe),
-        start_at=_parse_iso_datetime("start_at", start_at),
-        end_at=_parse_iso_datetime("end_at", end_at),
+        timeframe=validated_timeframe,
+        start_at=parsed_start_at,
+        end_at=parsed_end_at,
         exchange=exchange,
-        max_bars=validate_max_bars(max_bars),
+        max_bars=validated_max_bars,
     )
 
 

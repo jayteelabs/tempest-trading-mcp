@@ -251,6 +251,70 @@ class TestValidationErrorEnvelope:
         assert result["error"]["message"] == "internal message"
 
 
+@pytest.mark.parametrize(
+    ("handler", "extra_kwargs"),
+    [
+        (calculate_fibonacci, {"swing_high": 110.0, "swing_low": 100.0}),
+        (calculate_tpo, {"row_size": 1.0}),
+        (detect_elliot_wave, {}),
+        (get_market_structure, {}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_analytical_invalid_window_precedence_start_at_before_timeframe(
+    handler, extra_kwargs
+):
+    """Multiple invalid window args preserve pre-refactor first error contract."""
+    result = await handler(
+        symbol="BTC/USDT",
+        timeframe="invalid",
+        start_at="not-a-date",
+        end_at="also-not-a-date",
+        max_bars=0,
+        **extra_kwargs,
+    )
+
+    assert result == {
+        "success": False,
+        "error": {
+            "code": ErrorCodes.INVALID_PARAMETER,
+            "message": "start_at must be a valid ISO 8601 datetime",
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("handler", "extra_kwargs"),
+    [
+        (calculate_fibonacci, {"swing_high": 110.0, "swing_low": 100.0}),
+        (calculate_tpo, {"row_size": 1.0}),
+        (detect_elliot_wave, {}),
+        (get_market_structure, {}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_analytical_invalid_window_precedence_end_at_before_timeframe(
+    handler, extra_kwargs
+):
+    """Invalid end_at remains before timeframe when start_at parses successfully."""
+    result = await handler(
+        symbol="BTC/USDT",
+        timeframe="invalid",
+        start_at="2024-01-01T00:00:00",
+        end_at="not-a-date",
+        max_bars=0,
+        **extra_kwargs,
+    )
+
+    assert result == {
+        "success": False,
+        "error": {
+            "code": ErrorCodes.INVALID_PARAMETER,
+            "message": "end_at must be a valid ISO 8601 datetime",
+        },
+    }
+
+
 # ── calculate_fibonacci handler tests ─────────────────────────────────────────
 
 
