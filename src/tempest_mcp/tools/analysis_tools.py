@@ -18,18 +18,28 @@ from __future__ import annotations
 
 import math
 import re
-from datetime import datetime
 from typing import Any
 
 from structlog import get_logger
 
-from tempest_mcp.config import ErrorCodes
 from tempest_mcp.indicators.volume.volume_profile import (
     calculate_volume_profile as _calculate_volume_profile_indicator,
 )
 from tempest_mcp.strategies.backtest_order_blocks import detect_active_order_blocks
+from tempest_mcp.tools._ohlcv_lifecycle import (
+    OhlcvLifecycleRequest,
+    analysis_window_payload,
+    internal_error,
+    min_bars_check,
+    run_ohlcv_lifecycle,
+)
+from tempest_mcp.tools._ohlcv_lifecycle import (
+    parse_iso_datetime as _parse_iso_datetime,
+)
+from tempest_mcp.tools._ohlcv_lifecycle import (
+    validation_error as _validation_error,
+)
 from tempest_mcp.tools.backtest_window import (
-    BacktestWindowRequest,
     resolve_and_fetch_backtest_ohlcv,
     validate_max_bars,
     validate_timeframe,
@@ -40,6 +50,11 @@ _SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9]+([/-][A-Za-z0-9]+)?$")
 
 logger = get_logger(__name__)
 
+
+def _internal_error(message: str) -> dict[str, Any]:
+    """Compatibility alias for centralized internal error envelope."""
+    return internal_error(message)
+
 # Valid profile types and dynamic modes (shared with indicator)
 VALID_PROFILE_TYPES = ("fixed", "dynamic")
 VALID_DYNAMIC_MODES = ("atr", "pct")
@@ -49,42 +64,6 @@ MAX_BIN_COUNT = 500
 
 
 # ── Validation helpers ──────────────────────────────────────────────────────────
-
-
-def _parse_iso_datetime(field_name: str, value: Any) -> datetime | None:
-    """Parse an optional ISO-8601 datetime string."""
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value
-    if not isinstance(value, str):
-        raise ValueError(f"{field_name} must be a valid ISO 8601 datetime")
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError(f"{field_name} must be a valid ISO 8601 datetime") from exc
-
-
-def _validation_error(message: str) -> dict[str, Any]:
-    """Return a deterministic validation error envelope."""
-    return {
-        "success": False,
-        "error": {
-            "code": ErrorCodes.INVALID_PARAMETER,
-            "message": message,
-        },
-    }
-
-
-def _internal_error(message: str) -> dict[str, Any]:
-    """Return a deterministic internal error envelope."""
-    return {
-        "success": False,
-        "error": {
-            "code": ErrorCodes.INTERNAL_ERROR,
-            "message": message,
-        },
-    }
 
 
 def _validate_symbol(symbol: str) -> None:
@@ -204,8 +183,8 @@ async def calculate_volume_profile(
     if not (0 < value_area_pct <= 1):
         return _validation_error("value_area_pct must be in range (0, 1]")
 
-    # 3. Resolve window + fetch OHLCV (trade_style='custom' forces explicit timestamps)
-    request = BacktestWindowRequest(
+    request = OhlcvLifecycleRequest(
+        tool_name="calculate_volume_profile",
         symbol=symbol,
         trade_style="custom",
         timeframe=validated_timeframe,
@@ -215,24 +194,7 @@ async def calculate_volume_profile(
         max_bars=validated_max_bars,
     )
 
-    try:
-        ohlcv_df, resolved_window = resolve_and_fetch_backtest_ohlcv(request)
-    except ValueError as e:
-        return _validation_error(str(e))
-    except Exception as e:
-        logger.error(
-            "Window resolution/fetch failed", tool="calculate_volume_profile", error=str(e)
-        )
-        return _internal_error("Data fetch failed")
-
-    # 4. Validate fetched data
-    if len(ohlcv_df) < 2:
-        return _validation_error(
-            f"Insufficient data: only {len(ohlcv_df)} bars returned (minimum 2 required)"
-        )
-
-    # 5. Call indicator (reuses existing implementation)
-    try:
+    def _callback(ohlcv_df, resolved_window):
         profile_df = _calculate_volume_profile_indicator(
             ohlcv_df,
             bin_count=bin_count,
@@ -243,43 +205,26 @@ async def calculate_volume_profile(
             range_pct=range_pct,
             value_area_pct=value_area_pct,
         )
-    except ValueError as e:
-        return _validation_error(str(e))
-    except Exception as e:
-        logger.error(
-            "Volume profile calculation failed", tool="calculate_volume_profile", error=str(e)
-        )
-        return _internal_error("Volume profile calculation failed")
-
-    # 6. Serialize result
-    profile_rows = []
-    for row in profile_df.itertuples(index=True):
-        profile_rows.append(
-            {
-                "bin_index": row.Index,
-                "bin_low": float(row.bin_low),
-                "bin_high": float(row.bin_high),
-                "bin_mid": float(row.bin_mid),
-                "bin_volume": float(row.bin_volume),
-                "bin_candle_count": int(row.bin_candle_count),
-                "is_hvn": bool(row.is_hvn),
-                "is_lvn": bool(row.is_lvn),
-                "in_value_area": bool(row.in_value_area),
-            }
-        )
-
-    return {
-        "success": True,
-        "data": {
+        profile_rows = []
+        for row in profile_df.itertuples(index=True):
+            profile_rows.append(
+                {
+                    "bin_index": row.Index,
+                    "bin_low": float(row.bin_low),
+                    "bin_high": float(row.bin_high),
+                    "bin_mid": float(row.bin_mid),
+                    "bin_volume": float(row.bin_volume),
+                    "bin_candle_count": int(row.bin_candle_count),
+                    "is_hvn": bool(row.is_hvn),
+                    "is_lvn": bool(row.is_lvn),
+                    "in_value_area": bool(row.in_value_area),
+                }
+            )
+        return {
             "tool": "calculate_volume_profile",
             "symbol": symbol,
             "timeframe": resolved_window.timeframe,
-            "window": {
-                "start_at_utc": resolved_window.start_at_utc.isoformat(),
-                "end_at_utc": resolved_window.end_at_utc.isoformat(),
-                "estimated_bars": resolved_window.estimated_bars,
-                "exchange": resolved_window.exchange,
-            },
+            "window": analysis_window_payload(resolved_window),
             "summary": {
                 "poc_price": _safe_float(profile_df.attrs.get("poc_price")),
                 "vah_price": _safe_float(profile_df.attrs.get("vah_price")),
@@ -290,8 +235,16 @@ async def calculate_volume_profile(
                 "profile_type": profile_df.attrs.get("profile_type"),
             },
             "profile_rows": profile_rows,
-        },
-    }
+        }
+
+    return run_ohlcv_lifecycle(
+        request,
+        logger=logger,
+        callback=_callback,
+        sufficiency_check=min_bars_check(2),
+        calculation_error_message="Volume profile calculation failed",
+        fetch_ohlcv=resolve_and_fetch_backtest_ohlcv,
+    )
 
 
 # ── detect_order_blocks handler ─────────────────────────────────────────────────
@@ -365,8 +318,8 @@ async def detect_order_blocks(
     if max_zone_age_bars <= 0:
         return _validation_error("max_zone_age_bars must be positive")
 
-    # 3. Resolve window + fetch OHLCV (trade_style='custom' forces explicit timestamps)
-    request = BacktestWindowRequest(
+    request = OhlcvLifecycleRequest(
+        tool_name="detect_order_blocks",
         symbol=symbol,
         trade_style="custom",
         timeframe=validated_timeframe,
@@ -376,52 +329,32 @@ async def detect_order_blocks(
         max_bars=validated_max_bars,
     )
 
-    try:
-        ohlcv_df, resolved_window = resolve_and_fetch_backtest_ohlcv(request)
-    except ValueError as e:
-        return _validation_error(str(e))
-    except Exception as e:
-        logger.error("Window resolution/fetch failed", tool="detect_order_blocks", error=str(e))
-        return _internal_error("Data fetch failed")
+    minimum = max(atr_period, 4)
 
-    # 4. Validate fetched data
-    if len(ohlcv_df) < max(atr_period, 4):
-        return _validation_error(
-            f"Insufficient data: only {len(ohlcv_df)} bars returned "
-            f"(minimum {max(atr_period, 4)} required for ATR + zone detection)"
-        )
-
-    # 5. Call detection helper (read-only analytical boundary)
-    try:
+    def _callback(ohlcv_df, resolved_window):
         order_blocks = detect_active_order_blocks(
             ohlcv_df,
             atr_period=atr_period,
             impulse_atr_mult=impulse_atr_mult,
             max_zone_age_bars=max_zone_age_bars,
         )
-    except ValueError as e:
-        return _validation_error(str(e))
-    except Exception as e:
-        logger.error("Order block detection failed", tool="detect_order_blocks", error=str(e))
-        return _internal_error("Order block detection failed")
-
-    # 6. Serialize result
-    return {
-        "success": True,
-        "data": {
+        return {
             "tool": "detect_order_blocks",
             "symbol": symbol,
             "timeframe": resolved_window.timeframe,
-            "window": {
-                "start_at_utc": resolved_window.start_at_utc.isoformat(),
-                "end_at_utc": resolved_window.end_at_utc.isoformat(),
-                "estimated_bars": resolved_window.estimated_bars,
-                "exchange": resolved_window.exchange,
-            },
+            "window": analysis_window_payload(resolved_window),
             "order_blocks": order_blocks,
             "count": len(order_blocks),
-        },
-    }
+        }
+
+    return run_ohlcv_lifecycle(
+        request,
+        logger=logger,
+        callback=_callback,
+        sufficiency_check=min_bars_check(minimum, "for ATR + zone detection"),
+        calculation_error_message="Order block detection failed",
+        fetch_ohlcv=resolve_and_fetch_backtest_ohlcv,
+    )
 
 
 # ── Serialization helpers ───────────────────────────────────────────────────────

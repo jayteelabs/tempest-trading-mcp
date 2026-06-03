@@ -21,13 +21,11 @@ Architecture:
 from __future__ import annotations
 
 import math
-from datetime import datetime
 from typing import Any
 
 import pandas as pd
 from structlog import get_logger
 
-from tempest_mcp.config import ErrorCodes
 from tempest_mcp.indicators.structure import (
     calculate_fib_extensions,
     calculate_fib_retracements,
@@ -35,14 +33,30 @@ from tempest_mcp.indicators.structure import (
     summarize_market_structure,
 )
 from tempest_mcp.indicators.volume.tpo import calculate_tpo_chart
+from tempest_mcp.tools._ohlcv_lifecycle import (
+    OhlcvLifecycleRequest,
+    analysis_window_payload,
+    min_bars_check,
+    run_ohlcv_lifecycle,
+)
+from tempest_mcp.tools._ohlcv_lifecycle import (
+    internal_error as _internal_error,
+)
+from tempest_mcp.tools._ohlcv_lifecycle import (
+    parse_iso_datetime as _parse_iso_datetime,
+)
+from tempest_mcp.tools._ohlcv_lifecycle import (
+    validation_error as _validation_error,
+)
 from tempest_mcp.tools.backtest_window import (
-    BacktestWindowRequest,
     resolve_and_fetch_backtest_ohlcv,
     validate_max_bars,
     validate_timeframe,
 )
 
 logger = get_logger(__name__)
+# Compatibility alias retained for existing private-helper tests/imports.
+_INTERNAL_ERROR_ALIAS = _internal_error
 
 # Valid output modes for calculate_fibonacci
 VALID_FIB_OUTPUT_MODES = ("retracement", "extension")
@@ -53,42 +67,6 @@ _SESSION_GAP_HOURS = 4  # If gap > 4 hours between bars, consider it a new sessi
 
 
 # ── Validation helpers ──────────────────────────────────────────────────────────
-
-
-def _parse_iso_datetime(field_name: str, value: Any) -> datetime | None:
-    """Parse an optional ISO-8601 datetime string."""
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value
-    if not isinstance(value, str):
-        raise ValueError(f"{field_name} must be a valid ISO 8601 datetime")
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError(f"{field_name} must be a valid ISO 8601 datetime") from exc
-
-
-def _validation_error(message: str) -> dict[str, Any]:
-    """Return a deterministic validation error envelope."""
-    return {
-        "success": False,
-        "error": {
-            "code": ErrorCodes.INVALID_PARAMETER,
-            "message": message,
-        },
-    }
-
-
-def _internal_error(message: str) -> dict[str, Any]:
-    """Return a deterministic internal error envelope."""
-    return {
-        "success": False,
-        "error": {
-            "code": ErrorCodes.INTERNAL_ERROR,
-            "message": message,
-        },
-    }
 
 
 def _validate_symbol(symbol: str) -> None:
@@ -139,6 +117,34 @@ def _detect_sessions(ohlcv: pd.DataFrame) -> int:
             session_count += 1
 
     return session_count
+
+
+def _analytical_lifecycle_request(
+    *,
+    tool_name: str,
+    symbol: str,
+    timeframe: str,
+    start_at: str,
+    end_at: str,
+    exchange: str,
+    max_bars: int | None,
+) -> OhlcvLifecycleRequest:
+    """Build the shared C3 lifecycle request for analytical custom windows."""
+    parsed_start_at = _parse_iso_datetime("start_at", start_at)
+    parsed_end_at = _parse_iso_datetime("end_at", end_at)
+    validated_timeframe = validate_timeframe(timeframe)
+    validated_max_bars = validate_max_bars(max_bars)
+
+    return OhlcvLifecycleRequest(
+        tool_name=tool_name,
+        symbol=symbol,
+        trade_style="custom",
+        timeframe=validated_timeframe,
+        start_at=parsed_start_at,
+        end_at=parsed_end_at,
+        exchange=exchange,
+        max_bars=validated_max_bars,
+    )
 
 
 # ── calculate_fibonacci handler ─────────────────────────────────────────────────
@@ -227,38 +233,22 @@ async def calculate_fibonacci(
                 f"trend_direction must be one of {VALID_TREND_DIRECTIONS}, got {trend_direction!r}"
             )
 
-    # 3. Parse shared window args (needed for metadata)
+    # 3. Build shared lifecycle request (needed for metadata)
     try:
-        parsed_start_at = _parse_iso_datetime("start_at", start_at)
-        parsed_end_at = _parse_iso_datetime("end_at", end_at)
-        validated_timeframe = validate_timeframe(timeframe)
-        validated_max_bars = validate_max_bars(max_bars)
-    except ValueError as e:
-        return _validation_error(str(e))
-
-    # 4. Resolve window + fetch OHLCV for metadata only (Fibonacci is anchor-based)
-    request = BacktestWindowRequest(
-        symbol=symbol,
-        trade_style="custom",
-        timeframe=validated_timeframe,
-        start_at=parsed_start_at,
-        end_at=parsed_end_at,
-        exchange=exchange,
-        max_bars=validated_max_bars,
-    )
-
-    try:
-        ohlcv_df, resolved_window = resolve_and_fetch_backtest_ohlcv(request)
-    except ValueError as e:
-        return _validation_error(str(e))
-    except Exception as e:
-        logger.error(
-            "Window resolution/fetch failed", tool="calculate_fibonacci", error=str(e)
+        request = _analytical_lifecycle_request(
+            tool_name="calculate_fibonacci",
+            symbol=symbol,
+            timeframe=timeframe,
+            start_at=start_at,
+            end_at=end_at,
+            exchange=exchange,
+            max_bars=max_bars,
         )
-        return _internal_error("Data fetch failed")
+    except ValueError as e:
+        return _validation_error(str(e))
 
-    # 5. Calculate Fibonacci levels based on output_mode
-    try:
+    def _callback(_ohlcv_df: pd.DataFrame, resolved_window: Any) -> dict[str, Any]:
+        # Fibonacci remains deterministic anchor-based; OHLCV is fetched for existing window metadata.
         if output_mode == "retracement":
             fib_df = calculate_fib_retracements(
                 swing_high=swing_high,
@@ -272,49 +262,40 @@ async def calculate_fibonacci(
                 trend_direction=trend_direction,
                 levels=levels,
             )
-    except ValueError as e:
-        return _validation_error(str(e))
-    except Exception as e:
-        logger.error(
-            "Fibonacci calculation failed", tool="calculate_fibonacci", error=str(e)
-        )
-        return _internal_error("Fibonacci calculation failed")
 
-    # 6. Serialize result
-    fib_levels = []
-    for row in fib_df.itertuples(index=False):
-        fib_levels.append(
-            {
-                "level_type": row.level_type,
-                "level_ratio": float(row.level_ratio),
-                "price": float(row.price),
-                "swing_high": float(row.swing_high),
-                "swing_low": float(row.swing_low),
-                "trend_direction": row.trend_direction,
-            }
-        )
+        fib_levels = []
+        for row in fib_df.itertuples(index=False):
+            fib_levels.append(
+                {
+                    "level_type": row.level_type,
+                    "level_ratio": float(row.level_ratio),
+                    "price": float(row.price),
+                    "swing_high": float(row.swing_high),
+                    "swing_low": float(row.swing_low),
+                    "trend_direction": row.trend_direction,
+                }
+            )
 
-    return {
-        "success": True,
-        "data": {
+        return {
             "tool": "calculate_fibonacci",
             "symbol": symbol,
             "timeframe": resolved_window.timeframe,
-            "window": {
-                "start_at_utc": resolved_window.start_at_utc.isoformat(),
-                "end_at_utc": resolved_window.end_at_utc.isoformat(),
-                "estimated_bars": resolved_window.estimated_bars,
-                "exchange": resolved_window.exchange,
-            },
+            "window": analysis_window_payload(resolved_window),
             "output_mode": output_mode,
             "swing_high": float(swing_high),
             "swing_low": float(swing_low),
             "trend_direction": trend_direction if output_mode == "extension" else None,
             "fib_levels": fib_levels,
             "count": len(fib_levels),
-        },
-    }
+        }
 
+    return run_ohlcv_lifecycle(
+        request,
+        logger=logger,
+        callback=_callback,
+        calculation_error_message="Fibonacci calculation failed",
+        fetch_ohlcv=resolve_and_fetch_backtest_ohlcv,
+    )
 
 # ── calculate_tpo handler ───────────────────────────────────────────────────────
 
@@ -373,96 +354,57 @@ async def calculate_tpo(
     if not (0 < value_area_pct <= 1):
         return _validation_error("value_area_pct must be in range (0, 1]")
 
-    # 3. Parse shared window args
+    # 3. Build shared lifecycle request
     try:
-        parsed_start_at = _parse_iso_datetime("start_at", start_at)
-        parsed_end_at = _parse_iso_datetime("end_at", end_at)
-        validated_timeframe = validate_timeframe(timeframe)
-        validated_max_bars = validate_max_bars(max_bars)
+        request = _analytical_lifecycle_request(
+            tool_name="calculate_tpo",
+            symbol=symbol,
+            timeframe=timeframe,
+            start_at=start_at,
+            end_at=end_at,
+            exchange=exchange,
+            max_bars=max_bars,
+        )
     except ValueError as e:
         return _validation_error(str(e))
 
-    # 4. Resolve window + fetch OHLCV
-    request = BacktestWindowRequest(
-        symbol=symbol,
-        trade_style="custom",
-        timeframe=validated_timeframe,
-        start_at=parsed_start_at,
-        end_at=parsed_end_at,
-        exchange=exchange,
-        max_bars=validated_max_bars,
-    )
+    def _tpo_sufficiency(ohlcv_df: pd.DataFrame, _resolved_window: Any) -> str | None:
+        session_count = _detect_sessions(ohlcv_df)
+        if session_count > 1:
+            return (
+                f"TPO chart requires a single session, but window spans {session_count} sessions. "
+                "Please narrow the date range to contain only one continuous session."
+            )
+        return min_bars_check(2)(ohlcv_df, _resolved_window)
 
-    try:
-        ohlcv_df, resolved_window = resolve_and_fetch_backtest_ohlcv(request)
-    except ValueError as e:
-        return _validation_error(str(e))
-    except Exception as e:
-        logger.error(
-            "Window resolution/fetch failed", tool="calculate_tpo", error=str(e)
-        )
-        return _internal_error("Data fetch failed")
-
-    # 5. Validate single-session assumption
-    session_count = _detect_sessions(ohlcv_df)
-    if session_count > 1:
-        return _validation_error(
-            f"TPO chart requires a single session, but window spans {session_count} sessions. "
-            "Please narrow the date range to contain only one continuous session."
-        )
-
-    # 6. Validate fetched data
-    if len(ohlcv_df) < 2:
-        return _validation_error(
-            f"Insufficient data: only {len(ohlcv_df)} bars returned (minimum 2 required)"
-        )
-
-    # 7. Calculate TPO chart
-    try:
+    def _callback(ohlcv_df: pd.DataFrame, resolved_window: Any) -> dict[str, Any]:
         tpo_df = calculate_tpo_chart(
             ohlcv=ohlcv_df,
             row_size=row_size,
             value_area_pct=value_area_pct,
         )
-    except ValueError as e:
-        return _validation_error(str(e))
-    except Exception as e:
-        logger.error(
-            "TPO chart calculation failed", tool="calculate_tpo", error=str(e)
-        )
-        return _internal_error("TPO chart calculation failed")
 
-    # 8. Serialize result
-    tpo_rows = []
-    for row in tpo_df.itertuples(index=True):
-        tpo_rows.append(
-            {
-                "row_index": row.Index,
-                "row_low": float(row.row_low),
-                "row_high": float(row.row_high),
-                "row_mid": float(row.row_mid),
-                "tpo_count": int(row.tpo_count),
-                "period_markers": list(row.period_markers),
-                "period_count": int(row.period_count),
-                "in_value_area": bool(row.in_value_area),
-            }
-        )
+        tpo_rows = []
+        for row in tpo_df.itertuples(index=True):
+            tpo_rows.append(
+                {
+                    "row_index": row.Index,
+                    "row_low": float(row.row_low),
+                    "row_high": float(row.row_high),
+                    "row_mid": float(row.row_mid),
+                    "tpo_count": int(row.tpo_count),
+                    "period_markers": list(row.period_markers),
+                    "period_count": int(row.period_count),
+                    "in_value_area": bool(row.in_value_area),
+                }
+            )
 
-    # Extract metadata from DataFrame.attrs
-    attrs = tpo_df.attrs
-
-    return {
-        "success": True,
-        "data": {
+        attrs = tpo_df.attrs
+        return {
             "tool": "calculate_tpo",
             "symbol": symbol,
             "timeframe": resolved_window.timeframe,
-            "window": {
-                "start_at_utc": resolved_window.start_at_utc.isoformat(),
-                "end_at_utc": resolved_window.end_at_utc.isoformat(),
-                "estimated_bars": resolved_window.estimated_bars,
-                "exchange": resolved_window.exchange,
-            },
+            "window": analysis_window_payload(resolved_window),
             "session": {
                 "row_size": float(attrs.get("row_size", row_size)),
                 "marker_count": int(attrs.get("marker_count", 0)),
@@ -476,9 +418,16 @@ async def calculate_tpo(
             },
             "tpo_rows": tpo_rows,
             "count": len(tpo_rows),
-        },
-    }
+        }
 
+    return run_ohlcv_lifecycle(
+        request,
+        logger=logger,
+        callback=_callback,
+        sufficiency_check=_tpo_sufficiency,
+        calculation_error_message="TPO chart calculation failed",
+        fetch_ohlcv=resolve_and_fetch_backtest_ohlcv,
+    )
 
 # ── detect_elliot_wave handler ─────────────────────────────────────────────────
 
@@ -604,43 +553,21 @@ async def detect_elliot_wave(
             "degree_thresholds must satisfy 0 < micro_max < minor_max"
         )
 
-    # 3. Parse shared window args
+    # 3. Build shared lifecycle request
     try:
-        parsed_start_at = _parse_iso_datetime("start_at", start_at)
-        parsed_end_at = _parse_iso_datetime("end_at", end_at)
-        validated_timeframe = validate_timeframe(timeframe)
-        validated_max_bars = validate_max_bars(max_bars)
+        request = _analytical_lifecycle_request(
+            tool_name="detect_elliot_wave",
+            symbol=symbol,
+            timeframe=timeframe,
+            start_at=start_at,
+            end_at=end_at,
+            exchange=exchange,
+            max_bars=max_bars,
+        )
     except ValueError as e:
         return _validation_error(str(e))
 
-    # 4. Resolve window + fetch OHLCV
-    request = BacktestWindowRequest(
-        symbol=symbol,
-        trade_style="custom",
-        timeframe=validated_timeframe,
-        start_at=parsed_start_at,
-        end_at=parsed_end_at,
-        exchange=exchange,
-        max_bars=validated_max_bars,
-    )
-
-    try:
-        ohlcv_df, resolved_window = resolve_and_fetch_backtest_ohlcv(request)
-    except ValueError as e:
-        return _validation_error(str(e))
-    except Exception as e:
-        logger.error(
-            "Window resolution/fetch failed", tool="detect_elliot_wave", error=str(e)
-        )
-        return _internal_error("Data fetch failed")
-
-    # 5. Validate fetched data
-    if len(ohlcv_df) < 10:
-        return _validation_error(
-            f"Insufficient data: only {len(ohlcv_df)} bars returned (minimum 10 required for Elliott Wave detection)"
-        )
-
-    # 6. Set default band values
+    # 4. Preserve existing default band values before callback execution.
     if wave2_retrace_band is None:
         wave2_retrace_band = (0.382, 0.786)
     if waveb_retrace_band is None:
@@ -648,8 +575,7 @@ async def detect_elliot_wave(
     if degree_thresholds is None:
         degree_thresholds = (0.02, 0.08)
 
-    # 7. Detect Elliott Waves
-    try:
+    def _callback(ohlcv_df: pd.DataFrame, resolved_window: Any) -> dict[str, Any]:
         waves_df = detect_elliott_waves(
             ohlcv=ohlcv_df,
             swing_window=swing_window,
@@ -662,52 +588,37 @@ async def detect_elliot_wave(
             degree_thresholds=degree_thresholds,
             include_rejected=include_rejected,
         )
-    except ValueError as e:
-        return _validation_error(str(e))
-    except Exception as e:
-        logger.error(
-            "Elliott Wave detection failed", tool="detect_elliot_wave", error=str(e)
-        )
-        return _internal_error("Elliott Wave detection failed")
 
-    # 8. Serialize result
-    wave_sequences = []
-    for row in waves_df.itertuples(index=False):
-        wave_sequences.append(
-            {
-                "sequence_id": row.sequence_id,
-                "sequence_type": row.sequence_type,
-                "wave_label": row.wave_label,
-                "segment_order": int(row.segment_order),
-                "direction": row.direction,
-                "degree": row.degree,
-                "start_ts": str(row.start_ts) if pd.notna(row.start_ts) else None,
-                "end_ts": str(row.end_ts) if pd.notna(row.end_ts) else None,
-                "start_price": float(row.start_price) if pd.notna(row.start_price) else None,
-                "end_price": float(row.end_price) if pd.notna(row.end_price) else None,
-                "price_delta": float(row.price_delta) if pd.notna(row.price_delta) else None,
-                "retrace_ratio": float(row.retrace_ratio) if pd.notna(row.retrace_ratio) else None,
-                "extension_ratio": float(row.extension_ratio) if pd.notna(row.extension_ratio) else None,
-                "overlap_violation": bool(row.overlap_violation),
-                "invalidation_violation": bool(row.invalidation_violation),
-                "is_rule_compliant": bool(row.is_rule_compliant),
-                "is_accepted_sequence": bool(row.is_accepted_sequence),
-                "rejection_reason": row.rejection_reason if pd.notna(row.rejection_reason) else None,
-            }
-        )
+        wave_sequences = []
+        for row in waves_df.itertuples(index=False):
+            wave_sequences.append(
+                {
+                    "sequence_id": row.sequence_id,
+                    "sequence_type": row.sequence_type,
+                    "wave_label": row.wave_label,
+                    "segment_order": int(row.segment_order),
+                    "direction": row.direction,
+                    "degree": row.degree,
+                    "start_ts": str(row.start_ts) if pd.notna(row.start_ts) else None,
+                    "end_ts": str(row.end_ts) if pd.notna(row.end_ts) else None,
+                    "start_price": float(row.start_price) if pd.notna(row.start_price) else None,
+                    "end_price": float(row.end_price) if pd.notna(row.end_price) else None,
+                    "price_delta": float(row.price_delta) if pd.notna(row.price_delta) else None,
+                    "retrace_ratio": float(row.retrace_ratio) if pd.notna(row.retrace_ratio) else None,
+                    "extension_ratio": float(row.extension_ratio) if pd.notna(row.extension_ratio) else None,
+                    "overlap_violation": bool(row.overlap_violation),
+                    "invalidation_violation": bool(row.invalidation_violation),
+                    "is_rule_compliant": bool(row.is_rule_compliant),
+                    "is_accepted_sequence": bool(row.is_accepted_sequence),
+                    "rejection_reason": row.rejection_reason if pd.notna(row.rejection_reason) else None,
+                }
+            )
 
-    return {
-        "success": True,
-        "data": {
+        return {
             "tool": "detect_elliot_wave",
             "symbol": symbol,
             "timeframe": resolved_window.timeframe,
-            "window": {
-                "start_at_utc": resolved_window.start_at_utc.isoformat(),
-                "end_at_utc": resolved_window.end_at_utc.isoformat(),
-                "estimated_bars": resolved_window.estimated_bars,
-                "exchange": resolved_window.exchange,
-            },
+            "window": analysis_window_payload(resolved_window),
             "parameters": {
                 "swing_window": swing_window,
                 "min_swing_pct": float(min_swing_pct),
@@ -721,9 +632,16 @@ async def detect_elliot_wave(
             },
             "wave_sequences": wave_sequences,
             "count": len(wave_sequences),
-        },
-    }
+        }
 
+    return run_ohlcv_lifecycle(
+        request,
+        logger=logger,
+        callback=_callback,
+        sufficiency_check=min_bars_check(10, "for Elliott Wave detection"),
+        calculation_error_message="Elliott Wave detection failed",
+        fetch_ohlcv=resolve_and_fetch_backtest_ohlcv,
+    )
 
 # ── get_market_structure handler ───────────────────────────────────────────────
 
@@ -825,47 +743,23 @@ async def get_market_structure(
     if not isinstance(breakout_recency_bars, int) or breakout_recency_bars < 1:
         return _validation_error("breakout_recency_bars must be an integer >= 1")
 
-    # 5. Parse shared window args
+    # 5. Build shared lifecycle request
     try:
-        parsed_start_at = _parse_iso_datetime("start_at", start_at)
-        parsed_end_at = _parse_iso_datetime("end_at", end_at)
-        validated_timeframe = validate_timeframe(timeframe)
-        validated_max_bars = validate_max_bars(max_bars)
-    except ValueError as e:
-        return _validation_error(str(e))
-
-    # 6. Resolve window + fetch OHLCV
-    request = BacktestWindowRequest(
-        symbol=symbol,
-        trade_style="custom",
-        timeframe=validated_timeframe,
-        start_at=parsed_start_at,
-        end_at=parsed_end_at,
-        exchange=exchange,
-        max_bars=validated_max_bars,
-    )
-
-    try:
-        ohlcv_df, resolved_window = resolve_and_fetch_backtest_ohlcv(request)
-    except ValueError as e:
-        return _validation_error(str(e))
-    except Exception as e:
-        logger.error(
-            "Window resolution/fetch failed", tool="get_market_structure", error=str(e)
+        request = _analytical_lifecycle_request(
+            tool_name="get_market_structure",
+            symbol=symbol,
+            timeframe=timeframe,
+            start_at=start_at,
+            end_at=end_at,
+            exchange=exchange,
+            max_bars=max_bars,
         )
-        return _internal_error("Data fetch failed")
+    except ValueError as e:
+        return _validation_error(str(e))
 
-    # 7. Validate fetched data - minimum bars for ANY processing
-    # The summarize_market_structure engine requires at least adx_period*2 bars for ADX alone.
-    # If we have fewer bars than this, we can't even start the engine properly.
     min_engine_bars = max(adx_period * 2, range_lookback, 2 * swing_window + 3)
-    if len(ohlcv_df) < min_engine_bars:
-        return _validation_error(
-            f"Insufficient data: only {len(ohlcv_df)} bars returned (minimum {min_engine_bars} required for market structure analysis)"
-        )
 
-    # 8. Get market structure summary
-    try:
+    def _callback(ohlcv_df: pd.DataFrame, resolved_window: Any) -> dict[str, Any]:
         summary_df = summarize_market_structure(
             ohlcv=ohlcv_df,
             swing_window=swing_window,
@@ -879,59 +773,36 @@ async def get_market_structure(
             di_spread_min=di_spread_min,
             breakout_recency_bars=breakout_recency_bars,
         )
-    except ValueError as e:
-        return _validation_error(str(e))
-    except Exception as e:
-        logger.error(
-            "Market structure analysis failed", tool="get_market_structure", error=str(e)
-        )
-        return _internal_error("Market structure analysis failed")
 
-    # 8. Serialize result (single row)
-    if len(summary_df) == 0:
-        return {
-            "success": True,
-            "data": {
+        if len(summary_df) == 0:
+            return {
                 "tool": "get_market_structure",
                 "symbol": symbol,
                 "timeframe": resolved_window.timeframe,
-                "window": {
-                    "start_at_utc": resolved_window.start_at_utc.isoformat(),
-                    "end_at_utc": resolved_window.end_at_utc.isoformat(),
-                    "estimated_bars": resolved_window.estimated_bars,
-                    "exchange": resolved_window.exchange,
-                },
+                "window": analysis_window_payload(resolved_window),
                 "summary": None,
                 "insufficient_data": True,
-            },
-        }
+            }
 
-    row = summary_df.iloc[0]
+        row = summary_df.iloc[0]
 
-    def _safe_val(val):
-        """Convert value to JSON-safe type."""
-        if val is None or (isinstance(val, float) and math.isnan(val)):
-            return None
-        if isinstance(val, pd.Timestamp):
-            return str(val)
-        if isinstance(val, (int, float)):
-            return float(val)
-        if pd.isna(val):
-            return None
-        return val
+        def _safe_val(val):
+            """Convert value to JSON-safe type."""
+            if val is None or (isinstance(val, float) and math.isnan(val)):
+                return None
+            if isinstance(val, pd.Timestamp):
+                return str(val)
+            if isinstance(val, (int, float)):
+                return float(val)
+            if pd.isna(val):
+                return None
+            return val
 
-    return {
-        "success": True,
-        "data": {
+        return {
             "tool": "get_market_structure",
             "symbol": symbol,
             "timeframe": resolved_window.timeframe,
-            "window": {
-                "start_at_utc": resolved_window.start_at_utc.isoformat(),
-                "end_at_utc": resolved_window.end_at_utc.isoformat(),
-                "estimated_bars": resolved_window.estimated_bars,
-                "exchange": resolved_window.exchange,
-            },
+            "window": analysis_window_payload(resolved_window),
             "summary": {
                 "analysis_ts": _safe_val(row.analysis_ts),
                 "window_start_ts": _safe_val(row.window_start_ts),
@@ -957,5 +828,13 @@ async def get_market_structure(
                 "confidence": _safe_val(row.confidence),
             },
             "insufficient_data": False,
-        },
-    }
+        }
+
+    return run_ohlcv_lifecycle(
+        request,
+        logger=logger,
+        callback=_callback,
+        sufficiency_check=min_bars_check(min_engine_bars, "for market structure analysis"),
+        calculation_error_message="Market structure analysis failed",
+        fetch_ohlcv=resolve_and_fetch_backtest_ohlcv,
+    )
