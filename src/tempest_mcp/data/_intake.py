@@ -51,7 +51,8 @@ class CcxtHistoricalAdapter(Protocol):
         since: int | None = None,
         limit: int = MAX_LIMIT,
         params: dict | None = None,
-    ) -> pd.DataFrame: ...
+    ) -> pd.DataFrame:
+        pass
 
 
 class YFinanceHistoricalAdapter(Protocol):
@@ -62,7 +63,8 @@ class YFinanceHistoricalAdapter(Protocol):
         start: datetime | None = None,
         end: datetime | None = None,
         auto_adjust: bool = True,
-    ) -> pd.DataFrame: ...
+    ) -> pd.DataFrame:
+        pass
 
 
 @dataclass(frozen=True, slots=True)

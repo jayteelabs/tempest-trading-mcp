@@ -24,6 +24,10 @@ from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 import structlog
 
+from tempest_mcp.data._factory import get_historical_adapter, get_ohlcv_intake
+from tempest_mcp.data._hist import HistoricalDataAdapter, HistoricalDataSource
+from tempest_mcp.data._intake import OhlcvIntake, OhlcvRequest, OhlcvResult
+
 # Backward-compatible exports from YFAdapter and CCXTAdapter (ENG-4/ENG-6)
 # Must be at module level (not inside TYPE_CHECKING) for runtime exports
 from tempest_mcp.data.ccxt_adapter import CCXTAdapter
@@ -143,7 +147,9 @@ class LiveDataAdapter(Protocol):
         ...
 
 
-def get_live_adapter(exchange_name: Literal["binance", "bybit", "coinbase", "kraken"] = "binance") -> LiveDataAdapter:
+def get_live_adapter(
+    exchange_name: Literal["binance", "bybit", "coinbase", "kraken"] = "binance",
+) -> LiveDataAdapter:
     """Get the active live-market-data adapter for the specified exchange.
 
     The live path uses CCXT for live price, OHLCV, and order book retrieval.
@@ -172,32 +178,8 @@ def __getattr__(name: str):
         "normalize_to_tradingview",
         "normalize_to_yf",
         "validate_symbol",
-        # Historical data exports (D19)
-        "HistoricalDataSource",
-        "HistoricalDataAdapter",
-        "get_historical_adapter",
-        "get_ohlcv_intake",
-        "OhlcvIntake",
-        "OhlcvRequest",
-        "OhlcvResult",
         "DataSourceRouter",
     ):
-        if name in ("HistoricalDataSource", "HistoricalDataAdapter"):
-            import tempest_mcp.data._hist as _hist
-
-            return getattr(_hist, name)
-        if name in ("OhlcvIntake", "OhlcvRequest", "OhlcvResult"):
-            import tempest_mcp.data._intake as _intake
-
-            return getattr(_intake, name)
-        if name == "get_ohlcv_intake":
-            import tempest_mcp.data._factory as _factory
-
-            return getattr(_factory, name)
-        if name == "get_historical_adapter":
-            import tempest_mcp.data._factory as _factory
-
-            return getattr(_factory, name)
         if name == "DataSourceRouter":
             import tempest_mcp.data._router as _router
 

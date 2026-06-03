@@ -5,11 +5,14 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 import pytest
 
+from tempest_mcp.data._intake import OhlcvResult
 from tempest_mcp.tools.backtest_window import (
     SUPPORTED_TIMEFRAMES,
     BacktestWindowRequest,
     ResolvedBacktestWindow,
     _estimate_candle_count,
+    fetch_resolved_ohlcv,
+    resolve_and_fetch_backtest_ohlcv,
     resolve_backtest_window,
 )
 
@@ -306,18 +309,11 @@ class TestResolvedBacktestWindow:
         with pytest.raises(AttributeError):
             window.symbol = "ETH/USDT"
 
+
 class TestFetchResolvedOhlcv:
     """Regression tests for fetch_resolved_ohlcv() through the OHLCV intake seam."""
 
     def test_returns_dataframe_from_intake_result(self, monkeypatch):
-        import tempest_mcp.tools.backtest_window as bw_module
-        from tempest_mcp.data._intake import OhlcvResult
-        from tempest_mcp.tools.backtest_window import (
-            BacktestWindowRequest,
-            fetch_resolved_ohlcv,
-            resolve_backtest_window,
-        )
-
         mock_df = pd.DataFrame(
             {"open": [100], "high": [105], "low": [99], "close": [103], "volume": [1000]},
             index=pd.DatetimeIndex([pd.Timestamp("2024-01-01", tz="UTC")]),
@@ -325,9 +321,14 @@ class TestFetchResolvedOhlcv:
 
         class MockIntake:
             def fetch(self, request):
-                return OhlcvResult(mock_df, request.symbol, request.exchange, request.timeframe, "ccxt")
+                return OhlcvResult(
+                    mock_df, request.symbol, request.exchange, request.timeframe, "ccxt"
+                )
 
-        monkeypatch.setattr(bw_module, "get_ohlcv_intake", lambda exchange_name: MockIntake())
+        monkeypatch.setattr(
+            "tempest_mcp.tools.backtest_window.get_ohlcv_intake",
+            lambda exchange_name: MockIntake(),
+        )
         request = BacktestWindowRequest(
             symbol="BTC/USDT",
             trade_style="custom",
@@ -344,25 +345,19 @@ class TestFetchResolvedOhlcv:
         assert len(result) == 1
 
     def test_exchange_passed_to_intake_factory(self, monkeypatch):
-        import tempest_mcp.tools.backtest_window as bw_module
-        from tempest_mcp.data._intake import OhlcvResult
-        from tempest_mcp.tools.backtest_window import (
-            BacktestWindowRequest,
-            fetch_resolved_ohlcv,
-            resolve_backtest_window,
-        )
-
         captured_exchange_name: list[str] = []
 
         class MockIntake:
             def fetch(self, request):
-                return OhlcvResult(pd.DataFrame(), request.symbol, request.exchange, request.timeframe, "empty")
+                return OhlcvResult(
+                    pd.DataFrame(), request.symbol, request.exchange, request.timeframe, "empty"
+                )
 
         def fake_factory(exchange_name):
             captured_exchange_name.append(exchange_name)
             return MockIntake()
 
-        monkeypatch.setattr(bw_module, "get_ohlcv_intake", fake_factory)
+        monkeypatch.setattr("tempest_mcp.tools.backtest_window.get_ohlcv_intake", fake_factory)
         request = BacktestWindowRequest(
             symbol="ETH/USDT",
             trade_style="custom",
@@ -382,23 +377,27 @@ class TestResolveAndFetchBacktestOhlcv:
     """Regression tests for resolve_and_fetch_backtest_ohlcv() through the intake seam."""
 
     def test_returns_dataframe_not_tuple(self, monkeypatch):
-        import tempest_mcp.tools.backtest_window as bw_module
-        from tempest_mcp.data._intake import OhlcvResult
-        from tempest_mcp.tools.backtest_window import (
-            BacktestWindowRequest,
-            resolve_and_fetch_backtest_ohlcv,
-        )
-
         mock_df = pd.DataFrame(
-            {"open": [100, 101], "high": [105, 106], "low": [99, 100], "close": [103, 104], "volume": [1000, 1100]},
+            {
+                "open": [100, 101],
+                "high": [105, 106],
+                "low": [99, 100],
+                "close": [103, 104],
+                "volume": [1000, 1100],
+            },
             index=pd.DatetimeIndex(["2024-01-01", "2024-01-02"], tz="UTC"),
         )
 
         class MockIntake:
             def fetch(self, request):
-                return OhlcvResult(mock_df, request.symbol, request.exchange, request.timeframe, "ccxt")
+                return OhlcvResult(
+                    mock_df, request.symbol, request.exchange, request.timeframe, "ccxt"
+                )
 
-        monkeypatch.setattr(bw_module, "get_ohlcv_intake", lambda exchange_name: MockIntake())
+        monkeypatch.setattr(
+            "tempest_mcp.tools.backtest_window.get_ohlcv_intake",
+            lambda exchange_name: MockIntake(),
+        )
         request = BacktestWindowRequest(
             symbol="BTC/USDT",
             trade_style="custom",

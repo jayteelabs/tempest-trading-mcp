@@ -30,7 +30,8 @@ class HistoricalDataAdapter(Protocol):
         start: datetime | None = None,
         end: datetime | None = None,
         auto_adjust: bool = True,
-    ) -> pd.DataFrame: ...
+    ) -> pd.DataFrame:
+        pass
 
 
 class HistoricalDataSource:
