@@ -13,6 +13,15 @@ from tempest_mcp.indicators.trend import calculate_ema_result
 from tempest_mcp.indicators.volatility import calculate_bollinger_width
 from tempest_mcp.logging_config import get_logger
 from tempest_mcp.models.indicator import SessionType
+from tempest_mcp.screener._jobs import (
+    ScreeningJobKey,
+    resolve_screening_symbols,
+    run_symbol_jobs,
+    sort_order_block_candidates,
+    sort_order_block_failures,
+    sort_scan_failures_for_session,
+    sort_scan_results,
+)
 
 logger = get_logger(__name__)
 
@@ -113,7 +122,7 @@ _HORIZON_WINDOW_BARS: dict[tuple[str, int], int] = {
 
 def _dedupe_symbols(symbols: tuple[str, ...] | list[str]) -> tuple[str, ...]:
     """Deduplicate symbols deterministically while preserving order."""
-    return tuple(dict.fromkeys(symbols))
+    return resolve_screening_symbols(symbols, ())
 
 
 def _resolve_symbols(
@@ -121,9 +130,7 @@ def _resolve_symbols(
     default_symbols: tuple[str, ...],
 ) -> list[str]:
     """Resolve explicit/default symbols with deterministic deduplication."""
-    if requested_symbols is None:
-        return list(default_symbols)
-    return list(dict.fromkeys(requested_symbols))
+    return list(resolve_screening_symbols(requested_symbols, default_symbols))
 
 
 def _required_order_block_bars(
@@ -180,18 +187,25 @@ class Screener:
             filters=[f.value for f in effective_filters],
         )
 
-        results: list[ScanResult] = []
-        failures: list[ScanFailure] = []
+        def evaluate_symbol(
+            key: ScreeningJobKey, df: pd.DataFrame
+        ) -> tuple[ScanResult | None, ScanFailure | None]:
+            result, failure = self._evaluate_scan_frame(key.symbol, effective_filters, df)
+            if result is not None and result.score < self.min_score:
+                return None, None
+            return result, failure
 
-        for symbol in symbols_to_scan:
-            result, failure = self._scan_symbol(symbol, effective_filters)
-            if failure is not None:
-                failures.append(failure)
-            elif result is not None and result.score >= self.min_score:
-                results.append(result)
-
-        # Deterministic sorting: (-score, -len(filters_matched), symbol, exchange)
-        results.sort(key=lambda r: (-r.score, -len(r.filters_matched), r.symbol, r.exchange))
+        results, failures = run_symbol_jobs(
+            symbols=symbols_to_scan,
+            exchange=self.exchange,
+            fetcher=self.adapter,
+            timeframe="1h",
+            limit=100,
+            empty_failure=lambda key: ScanFailure(key.symbol, key.exchange, "empty_ohlcv"),
+            fetch_failure=lambda key, _exc: ScanFailure(key.symbol, key.exchange, "fetch_error"),
+            evaluate=evaluate_symbol,
+            sort_items=sort_scan_results,
+        )
 
         logger.info(
             "Scan complete",
@@ -204,29 +218,20 @@ class Screener:
     def _scan_symbol(
         self, symbol: str, filters: list[ScanFilter]
     ) -> tuple[ScanResult | None, ScanFailure | None]:
-        """Scan a single symbol against filters.
-
-        Returns:
-            Tuple of (result, failure):
-            - (result, None) on success
-            - (None, failure) on failure
-        """
+        """Compatibility wrapper for scanning a single symbol."""
         try:
             df = self.adapter.fetch_ohlcv_live(symbol, timeframe="1h", limit=100)
             if df.empty:
-                return None, ScanFailure(
-                    symbol=symbol,
-                    exchange=self.exchange,
-                    reason="empty_ohlcv",
-                )
+                return None, ScanFailure(symbol, self.exchange, "empty_ohlcv")
         except Exception as e:
             logger.warning("Fetch failed for symbol", symbol=symbol, error=str(e))
-            return None, ScanFailure(
-                symbol=symbol,
-                exchange=self.exchange,
-                reason="fetch_error",
-            )
+            return None, ScanFailure(symbol, self.exchange, "fetch_error")
+        return self._evaluate_scan_frame(symbol, filters, df)
 
+    def _evaluate_scan_frame(
+        self, symbol: str, filters: list[ScanFilter], df: pd.DataFrame
+    ) -> tuple[ScanResult | None, ScanFailure | None]:
+        """Evaluate already-fetched OHLCV for one multi-factor scan job."""
         close = df["close"].tolist()
         volume = df["volume"].tolist()
 
@@ -630,11 +635,8 @@ class Screener:
                     )
                 )
 
-        # Deterministic sorting: (-score, -len(filters_matched), symbol, exchange)
-        results.sort(key=lambda r: (-r.score, -len(r.filters_matched), r.symbol, r.exchange))
-
-        # Sort failures deterministically: (symbol, exchange)
-        failures.sort(key=lambda f: (f.symbol, f.exchange))
+        results = sort_scan_results(results)
+        failures = sort_scan_failures_for_session(failures)
 
         return results, failures
 
@@ -824,26 +826,8 @@ class Screener:
                     )
                 )
 
-        # Deterministic candidate ordering: (-score, horizon_priority, symbol, exchange)
-        candidates.sort(
-            key=lambda c: (
-                -c.score,
-                _HORIZON_PRIORITY.get((c.timeframe, c.window_days), 99),
-                c.symbol,
-                c.exchange,
-            )
-        )
-
-        # Deterministic failure ordering: (symbol, exchange, timeframe, window_days, reason)
-        failures.sort(
-            key=lambda f: (
-                f.symbol,
-                f.exchange,
-                f.timeframe,
-                f.window_days,
-                f.reason,
-            )
-        )
+        candidates = sort_order_block_candidates(candidates)
+        failures = sort_order_block_failures(failures)
 
         logger.info(
             "Order-block scan complete",
