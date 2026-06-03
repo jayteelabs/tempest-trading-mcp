@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime
 from numbers import Integral, Real
 from typing import Any, Literal
 
@@ -35,8 +34,20 @@ from structlog import get_logger
 
 from tempest_mcp.backtest.engine import BacktestEngine
 from tempest_mcp.config import ErrorCodes
+from tempest_mcp.tools._ohlcv_lifecycle import (
+    OhlcvLifecycleRequest,
+    backtest_window_payload,
+    internal_error,
+    min_bars_check,
+    run_ohlcv_lifecycle,
+)
+from tempest_mcp.tools._ohlcv_lifecycle import (
+    parse_iso_datetime as _parse_iso_datetime,
+)
+from tempest_mcp.tools._ohlcv_lifecycle import (
+    validation_error as _validation_error,
+)
 from tempest_mcp.tools.backtest_window import (
-    BacktestWindowRequest,
     resolve_and_fetch_backtest_ohlcv,
     validate_max_bars,
     validate_timeframe,
@@ -44,6 +55,11 @@ from tempest_mcp.tools.backtest_window import (
 )
 
 logger = get_logger(__name__)
+
+
+def _internal_error(message: str) -> dict[str, Any]:
+    """Compatibility alias for centralized internal error envelope."""
+    return internal_error(message)
 
 # ── Strategy modes ──────────────────────────────────────────────────────────────
 
@@ -167,8 +183,8 @@ def _make_backtest_handler(tool_name: str):
         # 2. Filter to allowed strategy params
         strategy_params = {k: v for k, v in kwargs.items() if k in spec.allowed_params}
 
-        # 3. Resolve window + fetch OHLCV once
-        request = BacktestWindowRequest(
+        request = OhlcvLifecycleRequest(
+            tool_name=tool_name,
             symbol=symbol,
             trade_style=trade_style,
             timeframe=timeframe,
@@ -178,65 +194,33 @@ def _make_backtest_handler(tool_name: str):
             max_bars=max_bars,
         )
 
-        try:
-            ohlcv_df, resolved_window = resolve_and_fetch_backtest_ohlcv(request)
-        except ValueError as e:
-            return _validation_error(str(e))
-        except Exception as e:
-            logger.error("Window resolution/fetch failed", tool=tool_name, error=str(e))
-            return _internal_error("Data fetch failed")
-
-        # 4. Validate fetched data minimum
-        if len(ohlcv_df) < 2:
-            return _validation_error(
-                f"Insufficient data: only {len(ohlcv_df)} bars returned (minimum 2 required)"
-            )
-
-        # 5. Invoke strategy
-        try:
+        def _callback(ohlcv_df: pd.DataFrame, resolved_window: Any) -> dict[str, Any]:
             if spec.mode == "direct_runner":
-                signals, engine = _run_direct_runner(
-                    tool_name,
-                    ohlcv_df,
-                    initial_capital,
-                    strategy_params,
-                )
-            else:  # adapter
-                signals, engine = _run_adapter(
+                _, engine = _run_direct_runner(
                     tool_name, ohlcv_df, initial_capital, strategy_params
                 )
-        except ValueError as e:
-            return _validation_error(str(e))
-        except Exception as e:
-            logger.error("Strategy execution failed", tool=tool_name, error=str(e))
-            return _internal_error("Strategy execution failed")
+            else:
+                _, engine = _run_adapter(tool_name, ohlcv_df, initial_capital, strategy_params)
+            return _serialize_result_data(
+                tool_name=tool_name,
+                strategy_id=spec.strategy_id,
+                symbol=symbol,
+                window=resolved_window,
+                engine=engine,
+                trade_count=len(engine.trades),
+                open_position=engine.open_position,
+            )
 
-        # 6. Serialize result
-        return _serialize_result(
-            tool_name=tool_name,
-            strategy_id=spec.strategy_id,
-            symbol=symbol,
-            window=resolved_window,
-            engine=engine,
-            trade_count=len(engine.trades),
-            open_position=engine.open_position,
+        return run_ohlcv_lifecycle(
+            request,
+            logger=logger,
+            callback=_callback,
+            sufficiency_check=min_bars_check(2),
+            calculation_error_message="Strategy execution failed",
+            fetch_ohlcv=resolve_and_fetch_backtest_ohlcv,
         )
 
     return handler
-
-
-def _parse_iso_datetime(field_name: str, value: Any) -> datetime | None:
-    """Parse an optional ISO-8601 datetime string."""
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value
-    if not isinstance(value, str):
-        raise ValueError(f"{field_name} must be a valid ISO 8601 datetime")
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError(f"{field_name} must be a valid ISO 8601 datetime") from exc
 
 
 def _validate_initial_capital(value: Any) -> float:
@@ -435,7 +419,7 @@ def _sanitize_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
     return {key: _sanitize_metric_value(value) for key, value in metrics.items()}
 
 
-def _serialize_result(
+def _serialize_result_data(
     tool_name: str,
     strategy_id: str,
     symbol: str,
@@ -444,50 +428,23 @@ def _serialize_result(
     trade_count: int,
     open_position: bool,
 ) -> dict[str, Any]:
-    """Serialize a backtest run result into the standard success envelope."""
+    """Serialize a backtest run result data payload."""
     return {
-        "success": True,
-        "data": {
-            "tool": tool_name,
-            "strategy_id": strategy_id,
-            "symbol": symbol,
-            "window": {
-                "trade_style": window.trade_style,
-                "timeframe": window.timeframe,
-                "start_at_utc": window.start_at_utc.isoformat(),
-                "end_at_utc": window.end_at_utc.isoformat(),
-                "estimated_bars": window.estimated_bars,
-                "exchange": window.exchange,
-            },
-            "metrics": _sanitize_metrics(engine.metrics),
-            "trade_count": trade_count,
-            "open_position": open_position,
-            "initial_capital": engine.initial_capital,
-            "final_equity": engine.final_equity,
-        },
+        "tool": tool_name,
+        "strategy_id": strategy_id,
+        "symbol": symbol,
+        "window": backtest_window_payload(window),
+        "metrics": _sanitize_metrics(engine.metrics),
+        "trade_count": trade_count,
+        "open_position": open_position,
+        "initial_capital": engine.initial_capital,
+        "final_equity": engine.final_equity,
     }
 
 
-def _validation_error(message: str) -> dict[str, Any]:
-    """Return a deterministic validation error envelope."""
-    return {
-        "success": False,
-        "error": {
-            "code": ErrorCodes.INVALID_PARAMETER,
-            "message": message,
-        },
-    }
-
-
-def _internal_error(message: str) -> dict[str, Any]:
-    """Return a deterministic internal error envelope."""
-    return {
-        "success": False,
-        "error": {
-            "code": ErrorCodes.INTERNAL_ERROR,
-            "message": message,
-        },
-    }
+def _serialize_result(**kwargs: Any) -> dict[str, Any]:
+    """Compatibility wrapper returning the standard success envelope."""
+    return {"success": True, "data": _serialize_result_data(**kwargs)}
 
 
 # ── Compare Strategies (ENG-25) ───────────────────────────────────────────────
@@ -647,8 +604,8 @@ async def compare_strategies(**kwargs: Any) -> dict[str, Any]:
     except ValueError as e:
         return _validation_error(str(e))
 
-    # 3. Resolve window + fetch OHLCV once (single fetch reuse)
-    request = BacktestWindowRequest(
+    request = OhlcvLifecycleRequest(
+        tool_name="compare_strategies",
         symbol=symbol,
         trade_style=trade_style,
         timeframe=timeframe,
@@ -658,83 +615,45 @@ async def compare_strategies(**kwargs: Any) -> dict[str, Any]:
         max_bars=max_bars,
     )
 
-    try:
-        ohlcv_df, resolved_window = resolve_and_fetch_backtest_ohlcv(request)
-    except ValueError as e:
-        return _validation_error(str(e))
-    except Exception as e:
-        logger.error("Window resolution/fetch failed", tool="compare_strategies", error=str(e))
-        return _internal_error("Data fetch failed")
-
-    # 4. Validate fetched data minimum
-    if len(ohlcv_df) < 2:
-        return _validation_error(
-            f"Insufficient data: only {len(ohlcv_df)} bars returned (minimum 2 required)"
-        )
-
-    # 5. Run each strategy using existing handlers
-    compare_results: list[dict[str, Any]] = []
-
-    for sid in strategy_ids:
-        tool_name = _STRATEGY_ID_TO_TOOL[sid]
-        spec = _STRATEGY_SPECS.get(tool_name)
-
-        if spec is None:
-            # Should not happen since we validated strategy_ids
-            continue
-
-        # Extract strategy-specific params from kwargs
-        strategy_params = {k: v for k, v in kwargs.items() if k in spec.allowed_params}
-
-        try:
+    def _callback(ohlcv_df: pd.DataFrame, resolved_window: Any) -> dict[str, Any]:
+        compare_results: list[dict[str, Any]] = []
+        for sid in strategy_ids:
+            tool_name = _STRATEGY_ID_TO_TOOL[sid]
+            spec = _STRATEGY_SPECS.get(tool_name)
+            if spec is None:
+                continue
+            strategy_params = {k: v for k, v in kwargs.items() if k in spec.allowed_params}
             if spec.mode == "direct_runner":
-                _, engine = _run_direct_runner(
-                    tool_name,
-                    ohlcv_df,
-                    initial_capital,
-                    strategy_params,
-                )
-            else:  # adapter
+                _, engine = _run_direct_runner(tool_name, ohlcv_df, initial_capital, strategy_params)
+            else:
                 _, engine = _run_adapter(tool_name, ohlcv_df, initial_capital, strategy_params)
-        except ValueError as e:
-            return _validation_error(str(e))
-        except Exception as e:
-            logger.error("Strategy execution failed", tool=tool_name, error=str(e))
-            return _internal_error("Strategy execution failed")
-
-        compare_results.append(
-            _serialize_compare_result(
-                strategy_id=sid,
-                engine=engine,
-                trade_count=len(engine.trades),
-                open_position=engine.open_position,
+            compare_results.append(
+                _serialize_compare_result(
+                    strategy_id=sid,
+                    engine=engine,
+                    trade_count=len(engine.trades),
+                    open_position=engine.open_position,
+                )
             )
-        )
-
-    # 6. Rank results deterministically
-    ranked_results = _rank_compare_results(compare_results)
-    best_strategy_id = ranked_results[0]["strategy_id"] if ranked_results else None
-
-    # 7. Return contract envelope
-    return {
-        "success": True,
-        "data": {
+        ranked_results = _rank_compare_results(compare_results)
+        best_strategy_id = ranked_results[0]["strategy_id"] if ranked_results else None
+        return {
             "tool": "compare_strategies",
             "symbol": symbol,
             "strategy_ids": strategy_ids,
-            "window": {
-                "trade_style": resolved_window.trade_style,
-                "timeframe": resolved_window.timeframe,
-                "start_at_utc": resolved_window.start_at_utc.isoformat(),
-                "end_at_utc": resolved_window.end_at_utc.isoformat(),
-                "estimated_bars": resolved_window.estimated_bars,
-                "exchange": resolved_window.exchange,
-            },
+            "window": backtest_window_payload(resolved_window),
             "ranking_metric": "total_return",
             "best_strategy_id": best_strategy_id,
             "results": ranked_results,
-        },
-    }
+        }
+
+    return run_ohlcv_lifecycle(
+        request,
+        logger=logger,
+        callback=_callback,
+        sufficiency_check=min_bars_check(2),
+        calculation_error_message="Strategy execution failed",
+    )
 
 
 # ── Legacy stub (deprecated) ───────────────────────────────────────────────────

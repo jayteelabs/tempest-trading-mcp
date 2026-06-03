@@ -21,13 +21,11 @@ Architecture:
 from __future__ import annotations
 
 import math
-from datetime import datetime
 from typing import Any
 
 import pandas as pd
 from structlog import get_logger
 
-from tempest_mcp.config import ErrorCodes
 from tempest_mcp.indicators.structure import (
     calculate_fib_extensions,
     calculate_fib_retracements,
@@ -35,6 +33,15 @@ from tempest_mcp.indicators.structure import (
     summarize_market_structure,
 )
 from tempest_mcp.indicators.volume.tpo import calculate_tpo_chart
+from tempest_mcp.tools._ohlcv_lifecycle import (
+    internal_error as _internal_error,
+)
+from tempest_mcp.tools._ohlcv_lifecycle import (
+    parse_iso_datetime as _parse_iso_datetime,
+)
+from tempest_mcp.tools._ohlcv_lifecycle import (
+    validation_error as _validation_error,
+)
 from tempest_mcp.tools.backtest_window import (
     BacktestWindowRequest,
     resolve_and_fetch_backtest_ohlcv,
@@ -53,42 +60,6 @@ _SESSION_GAP_HOURS = 4  # If gap > 4 hours between bars, consider it a new sessi
 
 
 # ── Validation helpers ──────────────────────────────────────────────────────────
-
-
-def _parse_iso_datetime(field_name: str, value: Any) -> datetime | None:
-    """Parse an optional ISO-8601 datetime string."""
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value
-    if not isinstance(value, str):
-        raise ValueError(f"{field_name} must be a valid ISO 8601 datetime")
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError(f"{field_name} must be a valid ISO 8601 datetime") from exc
-
-
-def _validation_error(message: str) -> dict[str, Any]:
-    """Return a deterministic validation error envelope."""
-    return {
-        "success": False,
-        "error": {
-            "code": ErrorCodes.INVALID_PARAMETER,
-            "message": message,
-        },
-    }
-
-
-def _internal_error(message: str) -> dict[str, Any]:
-    """Return a deterministic internal error envelope."""
-    return {
-        "success": False,
-        "error": {
-            "code": ErrorCodes.INTERNAL_ERROR,
-            "message": message,
-        },
-    }
 
 
 def _validate_symbol(symbol: str) -> None:
