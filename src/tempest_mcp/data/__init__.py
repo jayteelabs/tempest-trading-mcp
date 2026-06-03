@@ -45,6 +45,10 @@ __all__ = [
     "HistoricalDataSource",
     "HistoricalDataAdapter",
     "get_historical_adapter",
+    "get_ohlcv_intake",
+    "OhlcvIntake",
+    "OhlcvRequest",
+    "OhlcvResult",
     "DataSourceRouter",
     # Symbol utilities
     "normalize_to_ccxt",
@@ -172,12 +176,24 @@ def __getattr__(name: str):
         "HistoricalDataSource",
         "HistoricalDataAdapter",
         "get_historical_adapter",
+        "get_ohlcv_intake",
+        "OhlcvIntake",
+        "OhlcvRequest",
+        "OhlcvResult",
         "DataSourceRouter",
     ):
         if name in ("HistoricalDataSource", "HistoricalDataAdapter"):
             import tempest_mcp.data._hist as _hist
 
             return getattr(_hist, name)
+        if name in ("OhlcvIntake", "OhlcvRequest", "OhlcvResult"):
+            import tempest_mcp.data._intake as _intake
+
+            return getattr(_intake, name)
+        if name == "get_ohlcv_intake":
+            import tempest_mcp.data._factory as _factory
+
+            return getattr(_factory, name)
         if name == "get_historical_adapter":
             import tempest_mcp.data._factory as _factory
 

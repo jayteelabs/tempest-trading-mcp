@@ -6,11 +6,10 @@ from typing import Any
 
 import pandas as pd
 
-from tempest_mcp.data._factory import get_historical_adapter
-from tempest_mcp.data._symbols import (
-    SUPPORTED_TIMEFRAMES,
-    normalize_to_ccxt_market,
-)
+from tempest_mcp.data._contracts import SUPPORTED_EXCHANGES, SUPPORTED_TIMEFRAMES
+from tempest_mcp.data._factory import get_ohlcv_intake
+from tempest_mcp.data._intake import OhlcvRequest
+from tempest_mcp.data._symbols import normalize_to_ccxt_market
 from tempest_mcp.indicators.momentum.rsi import (
     OVERBOUGHT_THRESHOLD,
     OVERSOLD_THRESHOLD,
@@ -19,9 +18,6 @@ from tempest_mcp.indicators.momentum.rsi import (
 from tempest_mcp.logging_config import get_logger
 
 logger = get_logger(__name__)
-
-# Supported exchanges for indicator tools
-SUPPORTED_EXCHANGES: tuple[str, ...] = ("binance", "bybit", "coinbase", "kraken")
 
 # Zone thresholds for RSI interpretation
 _ZONE_OVERSOLD = "oversold"
@@ -159,15 +155,21 @@ async def indicator_rsi(
     # -------------------------------------------------------------------------
 
     try:
-        adapter = get_historical_adapter(exchange_lower)
-        # Fetch enough candles for RSI computation plus buffer
-        # RSI needs `period` warmup candles, we fetch extra for safety
-        ohlcv_df, source_used = adapter.fetch_ohlcv(
-            symbol=canonical_symbol,
-            interval=timeframe,
-            start=None,  # Fetch as much as possible up to limit+period+buffer
-            end=None,
+        intake = get_ohlcv_intake(exchange_lower)
+        # Fetch enough candles for RSI computation plus a small buffer while
+        # keeping `limit` as the public maximum RSI row count.
+        ohlcv_result = intake.fetch(
+            OhlcvRequest(
+                symbol=canonical_symbol,
+                timeframe=timeframe,
+                exchange=exchange_lower,
+                start=None,
+                end=None,
+                limit=limit,
+                warmup_bars=period + 5,
+            )
         )
+        ohlcv_df = ohlcv_result.frame
     except Exception as exc:
         logger.error(
             "indicator_rsi adapter fetch failed",
@@ -276,7 +278,7 @@ async def indicator_rsi(
             "timeframe": timeframe,
             "period": period,
             "limit": limit,
-            "source_used": source_used,
+            "source_used": ohlcv_result.source_used,
             "values": values,
             "latest": latest,
         },
@@ -287,7 +289,7 @@ async def indicator_rsi(
         symbol=response_symbol,
         exchange=exchange_lower,
         values_count=len(values),
-        source_used=source_used,
+        source_used=ohlcv_result.source_used,
     )
 
     return result

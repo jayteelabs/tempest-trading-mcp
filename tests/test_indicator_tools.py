@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
+from tempest_mcp.data._intake import OhlcvResult
 from tempest_mcp.indicators.momentum.rsi import OVERBOUGHT_THRESHOLD, OVERSOLD_THRESHOLD
 from tempest_mcp.tools.indicator_tools import (
     _detect_zone,
@@ -194,11 +195,11 @@ class TestIndicatorRsiValidation:
     )
     def test_symbol_normalization(self, symbol, expected_symbol):
         """Symbol normalization produces canonical CCXT format."""
-        with patch("tempest_mcp.tools.indicator_tools.get_historical_adapter") as mock_get_adapter:
+        with patch("tempest_mcp.tools.indicator_tools.get_ohlcv_intake") as mock_get_adapter:
             # Mock adapter with valid data
             mock_adapter = MagicMock()
             dates = pd.date_range("2024-01-01", periods=50, freq="h", tz="UTC")
-            mock_adapter.fetch_ohlcv.return_value = (
+            mock_adapter.fetch.return_value = OhlcvResult(
                 pd.DataFrame(
                     {
                         "open": [100.0] * 50,
@@ -209,6 +210,9 @@ class TestIndicatorRsiValidation:
                     },
                     index=dates,
                 ),
+                "BTC/USDT",
+                "binance",
+                "1h",
                 "ccxt",
             )
             mock_get_adapter.return_value = mock_adapter
@@ -249,9 +253,9 @@ class TestIndicatorRsiSuccess:
         """Basic successful RSI calculation."""
         ohlcv_data, source = mock_adapter_with_data
 
-        with patch("tempest_mcp.tools.indicator_tools.get_historical_adapter") as mock_get_adapter:
+        with patch("tempest_mcp.tools.indicator_tools.get_ohlcv_intake") as mock_get_adapter:
             mock_adapter = MagicMock()
-            mock_adapter.fetch_ohlcv.return_value = (ohlcv_data, source)
+            mock_adapter.fetch.return_value = OhlcvResult(ohlcv_data, "BTC/USDT", "binance", "1h", source)
             mock_get_adapter.return_value = mock_adapter
 
             result = _run_async(indicator_rsi(symbol="BTCUSDT", period=14, exchange="binance"))
@@ -274,9 +278,9 @@ class TestIndicatorRsiSuccess:
         """limit parameter controls returned row count."""
         ohlcv_data, source = mock_adapter_with_data
 
-        with patch("tempest_mcp.tools.indicator_tools.get_historical_adapter") as mock_get_adapter:
+        with patch("tempest_mcp.tools.indicator_tools.get_ohlcv_intake") as mock_get_adapter:
             mock_adapter = MagicMock()
-            mock_adapter.fetch_ohlcv.return_value = (ohlcv_data, source)
+            mock_adapter.fetch.return_value = OhlcvResult(ohlcv_data, "BTC/USDT", "binance", "1h", source)
             mock_get_adapter.return_value = mock_adapter
 
             # Request only 5 rows
@@ -288,11 +292,11 @@ class TestIndicatorRsiSuccess:
 
     def test_limit_clamp_to_1000(self):
         """limit > 1000 returns validation failure code 1005."""
-        with patch("tempest_mcp.tools.indicator_tools.get_historical_adapter") as mock_get_adapter:
+        with patch("tempest_mcp.tools.indicator_tools.get_ohlcv_intake") as mock_get_adapter:
             mock_adapter = MagicMock()
             dates = pd.date_range("2024-01-01", periods=2000, freq="h", tz="UTC")
             close_prices = [100.0 + i * 0.1 for i in range(2000)]
-            mock_adapter.fetch_ohlcv.return_value = (
+            mock_adapter.fetch.return_value = OhlcvResult(
                 pd.DataFrame(
                     {
                         "open": close_prices,
@@ -303,6 +307,9 @@ class TestIndicatorRsiSuccess:
                     },
                     index=dates,
                 ),
+                "BTC/USDT",
+                "binance",
+                "1h",
                 "ccxt",
             )
             mock_get_adapter.return_value = mock_adapter
@@ -316,9 +323,9 @@ class TestIndicatorRsiSuccess:
         """source_used reflects actual data source."""
         ohlcv_data, _ = mock_adapter_with_data
 
-        with patch("tempest_mcp.tools.indicator_tools.get_historical_adapter") as mock_get_adapter:
+        with patch("tempest_mcp.tools.indicator_tools.get_ohlcv_intake") as mock_get_adapter:
             mock_adapter = MagicMock()
-            mock_adapter.fetch_ohlcv.return_value = (ohlcv_data, "yfinance")
+            mock_adapter.fetch.return_value = OhlcvResult(ohlcv_data, "BTC/USDT", "binance", "1h", "yfinance")
             mock_get_adapter.return_value = mock_adapter
 
             result = _run_async(indicator_rsi(symbol="BTCUSDT", period=14, exchange="binance"))
@@ -330,7 +337,7 @@ class TestIndicatorRsiSuccess:
         """Latest RSI in oversold zone returns zone='oversold'."""
         ohlcv_data, _ = mock_adapter_with_data
 
-        with patch("tempest_mcp.tools.indicator_tools.get_historical_adapter") as mock_get_adapter:
+        with patch("tempest_mcp.tools.indicator_tools.get_ohlcv_intake") as mock_get_adapter:
             mock_adapter = MagicMock()
             # Create data that will produce RSI <= 30
             dates = pd.date_range("2024-01-01", periods=100, freq="h", tz="UTC")
@@ -346,7 +353,7 @@ class TestIndicatorRsiSuccess:
                 },
                 index=dates,
             )
-            mock_adapter.fetch_ohlcv.return_value = (ohlcv_data, "ccxt")
+            mock_adapter.fetch.return_value = OhlcvResult(ohlcv_data, "BTC/USDT", "binance", "1h", "ccxt")
             mock_get_adapter.return_value = mock_adapter
 
             result = _run_async(indicator_rsi(symbol="BTCUSDT", period=14, exchange="binance"))
@@ -357,7 +364,7 @@ class TestIndicatorRsiSuccess:
 
     def test_zone_detection_overbought(self, mock_adapter_with_data):
         """Latest RSI in overbought zone returns zone='overbought'."""
-        with patch("tempest_mcp.tools.indicator_tools.get_historical_adapter") as mock_get_adapter:
+        with patch("tempest_mcp.tools.indicator_tools.get_ohlcv_intake") as mock_get_adapter:
             mock_adapter = MagicMock()
             # Create data that will produce RSI >= 70
             dates = pd.date_range("2024-01-01", periods=100, freq="h", tz="UTC")
@@ -373,7 +380,7 @@ class TestIndicatorRsiSuccess:
                 },
                 index=dates,
             )
-            mock_adapter.fetch_ohlcv.return_value = (ohlcv_data, "ccxt")
+            mock_adapter.fetch.return_value = OhlcvResult(ohlcv_data, "BTC/USDT", "binance", "1h", "ccxt")
             mock_get_adapter.return_value = mock_adapter
 
             result = _run_async(indicator_rsi(symbol="BTCUSDT", period=14, exchange="binance"))
@@ -386,9 +393,9 @@ class TestIndicatorRsiSuccess:
         """Response uses canonical CCXT symbol format BTC/USDT."""
         ohlcv_data, _ = mock_adapter_with_data
 
-        with patch("tempest_mcp.tools.indicator_tools.get_historical_adapter") as mock_get_adapter:
+        with patch("tempest_mcp.tools.indicator_tools.get_ohlcv_intake") as mock_get_adapter:
             mock_adapter = MagicMock()
-            mock_adapter.fetch_ohlcv.return_value = (ohlcv_data, "ccxt")
+            mock_adapter.fetch.return_value = OhlcvResult(ohlcv_data, "BTC/USDT", "binance", "1h", "ccxt")
             mock_get_adapter.return_value = mock_adapter
 
             result = _run_async(indicator_rsi(symbol="btcusdt", exchange="binance"))
@@ -402,9 +409,9 @@ class TestIndicatorRsiSuccess:
         """values list is ordered oldest → newest."""
         ohlcv_data, _ = mock_adapter_with_data
 
-        with patch("tempest_mcp.tools.indicator_tools.get_historical_adapter") as mock_get_adapter:
+        with patch("tempest_mcp.tools.indicator_tools.get_ohlcv_intake") as mock_get_adapter:
             mock_adapter = MagicMock()
-            mock_adapter.fetch_ohlcv.return_value = (ohlcv_data, "ccxt")
+            mock_adapter.fetch.return_value = OhlcvResult(ohlcv_data, "BTC/USDT", "binance", "1h", "ccxt")
             mock_get_adapter.return_value = mock_adapter
 
             result = _run_async(indicator_rsi(symbol="BTCUSDT", period=14, limit=10, exchange="binance"))
@@ -428,9 +435,9 @@ class TestIndicatorRsiFailure:
 
     def test_empty_ohlcv_from_adapter(self):
         """Empty DataFrame from adapter returns code 2001."""
-        with patch("tempest_mcp.tools.indicator_tools.get_historical_adapter") as mock_get_adapter:
+        with patch("tempest_mcp.tools.indicator_tools.get_ohlcv_intake") as mock_get_adapter:
             mock_adapter = MagicMock()
-            mock_adapter.fetch_ohlcv.return_value = (pd.DataFrame(), "ccxt")
+            mock_adapter.fetch.return_value = OhlcvResult(pd.DataFrame(), "BTC/USDT", "binance", "1h", "empty")
             mock_get_adapter.return_value = mock_adapter
 
             result = _run_async(indicator_rsi(symbol="BTCUSDT", period=14, exchange="binance"))
@@ -439,11 +446,11 @@ class TestIndicatorRsiFailure:
 
     def test_insufficient_candles_for_rsi(self):
         """Fewer candles than period returns code 2001."""
-        with patch("tempest_mcp.tools.indicator_tools.get_historical_adapter") as mock_get_adapter:
+        with patch("tempest_mcp.tools.indicator_tools.get_ohlcv_intake") as mock_get_adapter:
             mock_adapter = MagicMock()
             # Only 5 candles - not enough for period=14 RSI
             dates = pd.date_range("2024-01-01", periods=5, freq="h", tz="UTC")
-            mock_adapter.fetch_ohlcv.return_value = (
+            mock_adapter.fetch.return_value = OhlcvResult(
                 pd.DataFrame(
                     {
                         "open": [100.0] * 5,
@@ -454,6 +461,9 @@ class TestIndicatorRsiFailure:
                     },
                     index=dates,
                 ),
+                "BTC/USDT",
+                "binance",
+                "1h",
                 "ccxt",
             )
             mock_get_adapter.return_value = mock_adapter
@@ -464,9 +474,9 @@ class TestIndicatorRsiFailure:
 
     def test_adapter_exception(self):
         """Exception from adapter returns code 2001."""
-        with patch("tempest_mcp.tools.indicator_tools.get_historical_adapter") as mock_get_adapter:
+        with patch("tempest_mcp.tools.indicator_tools.get_ohlcv_intake") as mock_get_adapter:
             mock_adapter = MagicMock()
-            mock_adapter.fetch_ohlcv.side_effect = RuntimeError("Network error")
+            mock_adapter.fetch.side_effect = RuntimeError("Network error")
             mock_get_adapter.return_value = mock_adapter
 
             result = _run_async(indicator_rsi(symbol="BTCUSDT", period=14, exchange="binance"))
@@ -503,9 +513,9 @@ class TestIndicatorRsiFormatterCompatibility:
 
         ohlcv_data, source = mock_adapter_with_data
 
-        with patch("tempest_mcp.tools.indicator_tools.get_historical_adapter") as mock_get_adapter:
+        with patch("tempest_mcp.tools.indicator_tools.get_ohlcv_intake") as mock_get_adapter:
             mock_adapter = MagicMock()
-            mock_adapter.fetch_ohlcv.return_value = (ohlcv_data, source)
+            mock_adapter.fetch.return_value = OhlcvResult(ohlcv_data, "BTC/USDT", "binance", "1h", source)
             mock_get_adapter.return_value = mock_adapter
 
             result = _run_async(indicator_rsi(symbol="BTCUSDT", period=14, exchange="binance"))
@@ -547,9 +557,9 @@ class TestIndicatorRsiExchangeAware:
             index=dates,
         )
 
-        with patch("tempest_mcp.tools.indicator_tools.get_historical_adapter") as mock_get_adapter:
+        with patch("tempest_mcp.tools.indicator_tools.get_ohlcv_intake") as mock_get_adapter:
             mock_adapter = MagicMock()
-            mock_adapter.fetch_ohlcv.return_value = (ohlcv_data, "ccxt")
+            mock_adapter.fetch.return_value = OhlcvResult(ohlcv_data, "BTC/USDT", "binance", "1h", "ccxt")
             mock_get_adapter.return_value = mock_adapter
 
             result = _run_async(indicator_rsi(symbol="BTCUSDT", period=14, exchange=exchange))
@@ -572,9 +582,9 @@ class TestIndicatorRsiExchangeAware:
             index=dates,
         )
 
-        with patch("tempest_mcp.tools.indicator_tools.get_historical_adapter") as mock_get_adapter:
+        with patch("tempest_mcp.tools.indicator_tools.get_ohlcv_intake") as mock_get_adapter:
             mock_adapter = MagicMock()
-            mock_adapter.fetch_ohlcv.return_value = (ohlcv_data, "ccxt")
+            mock_adapter.fetch.return_value = OhlcvResult(ohlcv_data, "BTC/USDT", "binance", "1h", "ccxt")
             mock_get_adapter.return_value = mock_adapter
 
             result = _run_async(indicator_rsi(symbol="BTCUSDT", period=14, exchange="Binance"))

@@ -6,9 +6,7 @@ from functools import lru_cache
 from typing import Literal
 
 from tempest_mcp.data._hist import HistoricalDataSource
-
-# Supported exchange names
-SUPPORTED_EXCHANGES: tuple[str, ...] = ("binance", "bybit", "coinbase", "kraken")
+from tempest_mcp.data._intake import OhlcvIntake
 
 
 @lru_cache(maxsize=4)
@@ -31,6 +29,12 @@ def get_live_adapter(exchange_name: Literal["binance", "bybit", "coinbase", "kra
     from tempest_mcp.data.ccxt_adapter import CCXTAdapter
 
     return CCXTAdapter(exchange_name=exchange_name)
+
+
+@lru_cache(maxsize=4)
+def get_ohlcv_intake(exchange_name: Literal["binance", "bybit", "coinbase", "kraken"] = "binance") -> OhlcvIntake:
+    """Get the historical OHLCV intake seam for the specified exchange."""
+    return OhlcvIntake(exchange_name=exchange_name)
 
 
 @lru_cache(maxsize=4)

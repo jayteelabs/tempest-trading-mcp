@@ -20,7 +20,9 @@ from typing import Literal
 import pandas as pd
 from structlog import get_logger
 
-from tempest_mcp.data._hist import HistoricalDataSource
+from tempest_mcp.data._contracts import TIMEFRAME_SECONDS
+from tempest_mcp.data._factory import get_ohlcv_intake
+from tempest_mcp.data._intake import OhlcvRequest
 from tempest_mcp.time_utils import coerce_window_datetime_to_utc
 
 logger = get_logger(__name__)
@@ -46,17 +48,7 @@ SUPPORTED_TIMEFRAMES: tuple[Timeframe, ...] = (
     "1wk",
     "1mo",
 )
-TIMEFRAME_SECONDS: dict[Timeframe, int] = {
-    "1m": 60,
-    "5m": 300,
-    "15m": 900,
-    "30m": 1800,
-    "1h": 3600,
-    "4h": 14400,
-    "1d": 86400,
-    "1wk": 604800,
-    "1mo": 2592000,  # approximate
-}
+# Shared data-layer timeframe seconds are imported from _contracts.
 
 # ── Preset defaults ─────────────────────────────────────────────────────────────
 
@@ -253,21 +245,28 @@ def fetch_resolved_ohlcv(window: ResolvedBacktestWindow) -> pd.DataFrame:
     DataSourceError
         When data fetch fails after retries.
     """
-    source = HistoricalDataSource(exchange_name=window.exchange)
+    intake = get_ohlcv_intake(exchange_name=window.exchange)
 
     try:
-        ohlcv_data, source_used = source.fetch_ohlcv(
-            symbol=window.symbol,
-            interval=window.timeframe,
-            start=window.start_at_utc.to_pydatetime(),
-            end=window.end_at_utc.to_pydatetime(),
+        result = intake.fetch(
+            OhlcvRequest(
+                symbol=window.symbol,
+                timeframe=window.timeframe,
+                exchange=window.exchange,
+                start=window.start_at_utc.to_pydatetime(),
+                end=window.end_at_utc.to_pydatetime(),
+                limit=None,
+            )
         )
+        ohlcv_data = result.frame
     except Exception as e:
         logger.error("OHLCV fetch failed", symbol=window.symbol, error=str(e))
         raise
 
     if ohlcv_data.empty:
         logger.warning("OHLCV fetch returned empty", symbol=window.symbol)
+    else:
+        logger.info("OHLCV fetch succeeded", symbol=window.symbol, source_used=result.source_used)
 
     return ohlcv_data
 

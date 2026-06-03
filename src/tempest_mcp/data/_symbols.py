@@ -21,6 +21,14 @@ from typing import Literal, TypedDict
 
 import structlog
 
+from tempest_mcp.data._contracts import (
+    CCXT_TIMEFRAME_MAP,
+    MAX_LIMIT,
+    MIN_LIMIT,
+    SUPPORTED_TIMEFRAMES,
+    YF_INTERVAL_MAP,
+)
+
 logger = structlog.get_logger()
 
 # Supported exchange types
@@ -29,47 +37,7 @@ ExchangeName = Literal["binance", "bybit", "coinbase", "kraken"]
 # Symbol format type
 SymbolFormat = Literal["tradingview", "ccxt"]
 
-# Supported timeframe strings
-SUPPORTED_TIMEFRAMES: frozenset[str] = frozenset(
-    {
-        "1m",
-        "5m",
-        "15m",
-        "30m",
-        "1h",
-        "4h",
-        "1d",
-        "1wk",
-        "1mo",
-    }
-)
-
-CCXT_TIMEFRAME_MAP: dict[str, str] = {
-    "1m": "1m",
-    "5m": "5m",
-    "15m": "15m",
-    "30m": "30m",
-    "1h": "1h",
-    "4h": "4h",
-    "1d": "1d",
-    "1wk": "1w",
-    "1mo": "1M",
-}
-
-YF_INTERVAL_MAP: dict[str, str] = {
-    "1m": "1m",
-    "5m": "5m",
-    "15m": "15m",
-    "30m": "30m",
-    "1h": "1h",
-    "1d": "1d",
-    "1wk": "1wk",
-    "1mo": "1mo",
-}
-
-# Limit bounds
-MIN_LIMIT: int = 1
-MAX_LIMIT: int = 1000
+# Timeframe/limit constants are owned by _contracts and imported here for compatibility.
 
 
 class SymbolMapping(TypedDict):
