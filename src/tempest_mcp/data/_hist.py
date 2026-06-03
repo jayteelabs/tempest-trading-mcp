@@ -1,28 +1,19 @@
-"""Historical data source abstraction layer.
+"""Backward-compatible historical data source wrapper.
 
-Data Source Priority (D3):
-- Primary: CCXT via Binance/Bybit public REST (all crypto + stocks)
-- Fallback: yfinance (for stocks and data gaps CCXT doesn't cover)
-
-CCXT is tried first. If it returns empty DataFrame, yfinance is used as fallback.
-
-Limitation: yfinance does not support "4h" interval. Use "1h" and aggregate
-client-side, or use CCXT directly for 4h data.
+New historical OHLCV callers should use :mod:`tempest_mcp.data._intake`.
+This module remains for legacy imports that expect ``fetch_ohlcv`` to return a
+``(DataFrame, source_used)`` tuple.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Literal, Protocol, runtime_checkable
 
 import pandas as pd
-import structlog
 
 from tempest_mcp.data._contracts import empty_ohlcv_frame
-from tempest_mcp.data._symbols import normalize_to_ccxt_market, normalize_to_yf
-from tempest_mcp.time_utils import BUSINESS_TZ_NAME, coerce_window_datetime_to_utc
-
-logger = structlog.get_logger()
+from tempest_mcp.data._intake import OhlcvIntake, OhlcvRequest
 
 
 def _empty_ohlcv() -> pd.DataFrame:
@@ -32,12 +23,6 @@ def _empty_ohlcv() -> pd.DataFrame:
 
 @runtime_checkable
 class HistoricalDataAdapter(Protocol):
-    """Protocol defining the interface for historical data adapters.
-
-    All adapters must implement:
-    - fetch_ohlcv: Get historical OHLCV candlestick data
-    """
-
     def fetch_ohlcv(
         self,
         symbol: str,
@@ -46,120 +31,24 @@ class HistoricalDataAdapter(Protocol):
         end: datetime | None = None,
         auto_adjust: bool = True,
     ) -> pd.DataFrame:
-        """Fetch historical OHLCV data.
-
-        Args:
-            symbol: Asset symbol in any supported format (CCXT or yfinance native)
-            interval: Data interval (1m, 5m, 15m, 30m, 1h, 4h*, 1d, 1wk, 1mo)
-                * Note: "4h" is supported by CCXT but NOT by yfinance (fallback).
-                  For 4h via yfinance, aggregate from 1h or use CCXT directly.
-            start: Start datetime for the request window. Naive datetimes are
-                interpreted in America/New_York, then converted to UTC.
-            end: End datetime for the request window. Naive datetimes are
-                interpreted in America/New_York, then converted to UTC.
-            auto_adjust: Whether to adjust for splits/dividends (yfinance only;
-                CCXT always returns split-adjusted spot prices)
-
-        Returns:
-            DataFrame with [open, high, low, close, volume] and UTC-aware index,
-            or empty DataFrame on error
-        """
-        ...
-
-
-# Supported exchange names
-SUPPORTED_EXCHANGES: tuple[str, ...] = ("binance", "bybit", "coinbase", "kraken")
+        pass
 
 
 class HistoricalDataSource:
-    """Primary CCXT + fallback yfinance historical data source.
+    """Compatibility wrapper around the historical OHLCV intake seam."""
 
-    This class wraps CCXT as the primary historical data adapter with
-    automatic fallback to yfinance when CCXT fails or returns empty data.
-
-    Data Source Priority (D3):
-    - Primary: CCXT via Binance/Bybit public REST (no API keys required)
-    - Fallback: yfinance (for stocks and data gaps CCXT doesn't cover)
-
-    Usage:
-        >>> source = HistoricalDataSource()
-        >>> df = source.fetch_ohlcv("BTC/USDT", interval="1d", start=start, end=end)
-    """
-
-    # Intervals supported by CCXT (and their yfinance compatibility)
     _CCXT_INTERVALS = frozenset({"1m", "5m", "15m", "30m", "1h", "4h", "1d", "1wk", "1mo"})
-    _YF_INTERVALS = frozenset({"1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"})  # 4h excluded
+    _YF_INTERVALS = frozenset({"1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"})
 
-    def __init__(self, exchange_name: Literal["binance", "bybit", "coinbase", "kraken"] = "binance") -> None:
-        """Initialize HistoricalDataSource with exchange-specific CCXT adapter.
-
-        Args:
-            exchange_name: Exchange to use for CCXT primary (default: "binance")
-        """
-        from tempest_mcp.data.ccxt_adapter import CCXTAdapter
-
+    def __init__(
+        self,
+        exchange_name: Literal["binance", "bybit", "coinbase", "kraken"] = "binance",
+        *,
+        intake: OhlcvIntake | None = None,
+    ) -> None:
         self.exchange_name = exchange_name
-        self._ccxt = CCXTAdapter(exchange_name=exchange_name)
-
-    def _ccxt_timeframe(self, interval: str) -> str:
-        """Map generic interval to CCXT timeframe string.
-
-        Returns:
-            CCXT timeframe string. Invalid intervals default to "1d" with a warning.
-        """
-        mapping = {
-            "1m": "1m",
-            "5m": "5m",
-            "15m": "15m",
-            "30m": "30m",
-            "1h": "1h",
-            "4h": "4h",
-            "1d": "1d",
-            "1wk": "1w",
-            "1mo": "1M",
-        }
-        mapped = mapping.get(interval)
-        if mapped is None:
-            logger.warning(
-                "unsupported_interval_defaulting",
-                interval=interval,
-                supported=sorted(self._CCXT_INTERVALS),
-                default="1d",
-            )
-            return "1d"
-        return mapped
-
-    def _ensure_utc(self, dt: datetime | None, name: str) -> datetime | None:
-        """Normalize datetime to UTC-aware.
-
-        Naive request-window datetimes are interpreted in the default business
-        timezone (America/New_York).
-        """
-        if dt is None:
-            return None
-        if dt.tzinfo is None:
-            logger.warning(
-                "naive_datetime_interpreted_as_business_tz",
-                param=name,
-                dt=str(dt),
-                timezone=BUSINESS_TZ_NAME,
-            )
-        return coerce_window_datetime_to_utc(dt)
-
-    def _interval_seconds(self, interval: str) -> int:
-        """Get interval duration in seconds."""
-        mapping = {
-            "1m": 60,
-            "5m": 300,
-            "15m": 900,
-            "30m": 1800,
-            "1h": 3600,
-            "4h": 14400,
-            "1d": 86400,
-            "1wk": 604800,
-            "1mo": 2592000,
-        }
-        return mapping.get(interval, 86400)
+        self._ccxt = None
+        self._intake = intake or OhlcvIntake(exchange_name=exchange_name)
 
     def fetch_ohlcv(
         self,
@@ -169,161 +58,25 @@ class HistoricalDataSource:
         end: datetime | None = None,
         auto_adjust: bool = True,
     ) -> tuple[pd.DataFrame, str]:
-        """Fetch historical OHLCV data via CCXT primary, yfinance fallback.
+        """Fetch OHLCV data and return the legacy tuple shape.
 
-        Tries CCXT first (supports Binance/Bybit public REST). On failure
-        or empty result, falls back to yfinance for stocks and data gaps.
-
-        Args:
-            symbol: Asset symbol (CCXT format preferred, e.g. BTC/USDT)
-            interval: Data interval (1m, 5m, 15m, 30m, 1h, 4h, 1d, 1wk, 1mo)
-            start: Start datetime for the request window. Naive datetimes are
-                interpreted in America/New_York, then converted to UTC.
-            end: End datetime for the request window. Naive datetimes are
-                interpreted in America/New_York, then converted to UTC.
-            auto_adjust: Whether to adjust for splits/dividends (yfinance only;
-                CCXT always returns split-adjusted spot prices)
-
-        Returns:
-            Tuple of (DataFrame with [open, high, low, close, volume] and UTC-aware index,
-            source_used: str indicating "ccxt" or "yfinance").
-            Returns (empty DataFrame, source_used) on error.
-
-        Note:
-            "4h" is supported by CCXT but NOT by yfinance. If CCXT returns
-            empty for 4h, the yfinance fallback will also return empty.
+        ``source_used='empty'`` is internal to the new seam; legacy callers only
+        know ``ccxt`` / ``yfinance``, so empty seam results map back to ``ccxt``.
         """
-        from tempest_mcp.data.yf_adapter import fetch_ohlcv as _yf_fetch_ohlcv
-
-        # Normalize/validate interval
-        if interval not in self._CCXT_INTERVALS:
-            logger.warning(
-                "invalid_interval_defaulting",
-                interval=interval,
-                supported=sorted(self._CCXT_INTERVALS),
-                default="1d",
-            )
-            interval = "1d"
-
-        # Normalize timezones to UTC
-        start_utc = self._ensure_utc(start, "start")
-        end_utc = self._ensure_utc(end, "end")
-
-        # If caller supplied yfinance-style USD symbol, skip CCXT to avoid
-        # rewriting USD-priced instruments into USDT markets.
-        if isinstance(symbol, str) and symbol.strip().upper().endswith("-USD"):
-            try:
-                yf_symbol = normalize_to_yf(symbol)
-            except ValueError as exc:
-                logger.error(
-                    "invalid_yfinance_symbol",
-                    symbol=symbol,
-                    error=str(exc),
-                )
-                return _empty_ohlcv(), "ccxt"
-            logger.info(
-                "historical_fetch_yfinance_direct",
-                symbol=yf_symbol,
-                reason="yfinance_symbol_input",
-            )
-            df = _yf_fetch_ohlcv(
-                symbol=yf_symbol,
-                interval=interval,
-                start=start_utc,
-                end=end_utc,
+        intake = (
+            OhlcvIntake(exchange_name=self.exchange_name, ccxt_adapter=self._ccxt)
+            if self._ccxt is not None
+            else self._intake
+        )
+        result = intake.fetch(
+            OhlcvRequest(
+                symbol=symbol,
+                timeframe=interval,
+                exchange=self.exchange_name,
+                start=start,
+                end=end,
                 auto_adjust=auto_adjust,
             )
-            return df, "yfinance"
-
-        # Normalize to CCXT symbol format
-        try:
-            ccxt_symbol = normalize_to_ccxt_market(symbol)
-        except ValueError as exc:
-            logger.error(
-                "invalid_symbol",
-                symbol=symbol,
-                error=str(exc),
-            )
-            return _empty_ohlcv(), "ccxt"
-        timeframe = self._ccxt_timeframe(interval)
-
-        # Compute since/until timestamps for CCXT
-        since_ms: int | None = None
-        until_ms: int | None = None
-        if start_utc is not None:
-            since_ms = int(start_utc.timestamp() * 1000)
-        if end_utc is not None:
-            until_ms = int(end_utc.timestamp() * 1000)
-            # Warn if until is unreasonably far in the future
-            now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-            if until_ms > now_ms + 60000:  # > 1 minute in future
-                logger.warning(
-                    "until_timestamp_in_future",
-                    until_ms=until_ms,
-                    now_ms=now_ms,
-                )
-
-        # Calculate limit needed for the date range (if both start and end are provided)
-        limit = 1000
-        if since_ms is not None and until_ms is not None:
-            range_ms = until_ms - since_ms
-            interval_sec = self._interval_seconds(interval)
-            interval_ms = interval_sec * 1000
-            # Ceiling division: ensure we always get enough candles
-            needed = (range_ms + interval_ms - 1) // interval_ms
-            limit = min(needed, 1000)
-
-        # Build CCXT params with until for date range filtering
-        ccxt_params: dict = {}
-        if until_ms is not None:
-            ccxt_params["until"] = until_ms
-
-        # Try CCXT primary
-        logger.info(
-            "ccxt_fetch_historical_attempt",
-            symbol=ccxt_symbol,
-            timeframe=timeframe,
-            since_ms=since_ms,
-            until_ms=until_ms,
-            limit=limit,
         )
-        ccxt_result = self._ccxt.fetch_ohlcv_historical(
-            symbol=ccxt_symbol,
-            timeframe=timeframe,
-            since=since_ms,
-            limit=limit,
-            params=ccxt_params,
-        )
-
-        if not ccxt_result.empty:
-            logger.info(
-                "historical_fetch_ccxt_success",
-                symbol=ccxt_symbol,
-                rows=len(ccxt_result),
-                source="ccxt",
-            )
-            return ccxt_result, "ccxt"
-
-        # CCXT failed or empty — fallback to yfinance (pass UTC-normalized datetimes)
-        try:
-            yf_symbol = normalize_to_yf(ccxt_symbol)
-        except ValueError as exc:
-            logger.error(
-                "invalid_yfinance_symbol",
-                symbol=ccxt_symbol,
-                error=str(exc),
-            )
-            return _empty_ohlcv(), "ccxt"
-        logger.info(
-            "historical_fetch_fallback_yfinance",
-            symbol=yf_symbol,
-            reason="CCXT returned empty",
-        )
-        yf_result = _yf_fetch_ohlcv(
-            symbol=yf_symbol,
-            interval=interval,
-            start=start_utc,
-            end=end_utc,
-            auto_adjust=auto_adjust,
-        )
-        return yf_result, "yfinance"
+        source_used = "ccxt" if result.source_used == "empty" else result.source_used
+        return result.frame, source_used

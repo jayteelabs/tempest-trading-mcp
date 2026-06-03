@@ -5,11 +5,14 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 import pytest
 
+from tempest_mcp.data._intake import OhlcvResult
 from tempest_mcp.tools.backtest_window import (
     SUPPORTED_TIMEFRAMES,
     BacktestWindowRequest,
     ResolvedBacktestWindow,
     _estimate_candle_count,
+    fetch_resolved_ohlcv,
+    resolve_and_fetch_backtest_ohlcv,
     resolve_backtest_window,
 )
 
@@ -306,30 +309,26 @@ class TestResolvedBacktestWindow:
         with pytest.raises(AttributeError):
             window.symbol = "ETH/USDT"
 
+
 class TestFetchResolvedOhlcv:
-    """Regression tests for fetch_resolved_ohlcv() — ENG-127 fix.
+    """Regression tests for fetch_resolved_ohlcv() through the OHLCV intake seam."""
 
-    Verifies that:
-    1. fetch_resolved_ohlcv unpacks the tuple returned by HistoricalDataSource.fetch_ohlcv
-    2. window.exchange is passed to HistoricalDataSource
-    3. Only the DataFrame is returned (not the tuple)
-    """
-
-    def test_unpacks_tuple_and_returns_dataframe(self, monkeypatch):
-        """fetch_resolved_ohlcv must unpack (DataFrame, source_used) tuple, not return it.
-
-        Prior to the ENG-127 fix, fetch_resolved_ohlcv stored the tuple directly
-        as df, causing every downstream caller to receive a tuple instead of a DataFrame.
-        """
-        import pandas as pd
-
-        from tempest_mcp.tools.backtest_window import (
-            BacktestWindowRequest,
-            fetch_resolved_ohlcv,
-            resolve_backtest_window,
+    def test_returns_dataframe_from_intake_result(self, monkeypatch):
+        mock_df = pd.DataFrame(
+            {"open": [100], "high": [105], "low": [99], "close": [103], "volume": [1000]},
+            index=pd.DatetimeIndex([pd.Timestamp("2024-01-01", tz="UTC")]),
         )
 
-        # Build a minimal resolved window
+        class MockIntake:
+            def fetch(self, request):
+                return OhlcvResult(
+                    mock_df, request.symbol, request.exchange, request.timeframe, "ccxt"
+                )
+
+        monkeypatch.setattr(
+            "tempest_mcp.tools.backtest_window.get_ohlcv_intake",
+            lambda exchange_name: MockIntake(),
+        )
         request = BacktestWindowRequest(
             symbol="BTC/USDT",
             trade_style="custom",
@@ -340,47 +339,25 @@ class TestFetchResolvedOhlcv:
         )
         resolved = resolve_backtest_window(request)
 
-        # Mock HistoricalDataSource to return the tuple that _hist.py actually returns
-        mock_df = pd.DataFrame(
-            {"open": [100], "high": [105], "low": [99], "close": [103], "volume": [1000]},
-            index=pd.DatetimeIndex([pd.Timestamp("2024-01-01", tz="UTC")]),
-        )
-
-        class MockHistoricalDataSource:
-            def __init__(self, exchange_name: str = "binance"):
-                self.exchange_name = exchange_name
-
-            def fetch_ohlcv(self, symbol, interval, start, end):
-                # Must return tuple[DataFrame, str] as _hist.py now does
-                return mock_df, "ccxt"
-
-        # More precise: replace the class in the module
-        import tempest_mcp.tools.backtest_window as bw_module
-        bw_module.HistoricalDataSource = MockHistoricalDataSource  # type: ignore
-
         result = fetch_resolved_ohlcv(resolved)
 
-        # The fix ensures result is a DataFrame, not a tuple
-        assert isinstance(result, pd.DataFrame), (
-            f"fetch_resolved_ohlcv must return pd.DataFrame, got {type(result).__name__}. "
-            "ENG-127: tuple unpacking regression."
-        )
+        assert isinstance(result, pd.DataFrame)
         assert len(result) == 1
 
-    def test_exchange_passed_to_historical_data_source(self, monkeypatch):
-        """window.exchange must be forwarded to HistoricalDataSource constructor.
+    def test_exchange_passed_to_intake_factory(self, monkeypatch):
+        captured_exchange_name: list[str] = []
 
-        Prior to the ENG-127 fix, HistoricalDataSource() was called with no arguments,
-        always defaulting to 'binance' regardless of the resolved window's exchange.
-        """
-        import pandas as pd
+        class MockIntake:
+            def fetch(self, request):
+                return OhlcvResult(
+                    pd.DataFrame(), request.symbol, request.exchange, request.timeframe, "empty"
+                )
 
-        from tempest_mcp.tools.backtest_window import (
-            BacktestWindowRequest,
-            fetch_resolved_ohlcv,
-            resolve_backtest_window,
-        )
+        def fake_factory(exchange_name):
+            captured_exchange_name.append(exchange_name)
+            return MockIntake()
 
+        monkeypatch.setattr("tempest_mcp.tools.backtest_window.get_ohlcv_intake", fake_factory)
         request = BacktestWindowRequest(
             symbol="ETH/USDT",
             trade_style="custom",
@@ -391,58 +368,36 @@ class TestFetchResolvedOhlcv:
         )
         resolved = resolve_backtest_window(request)
 
-        captured_exchange_name: list[str] = []
-
-        class MockHistoricalDataSource:
-            def __init__(self, exchange_name: str = "binance"):
-                captured_exchange_name.append(exchange_name)
-
-            def fetch_ohlcv(self, symbol, interval, start, end):
-                return pd.DataFrame(), "ccxt"
-
-        import tempest_mcp.tools.backtest_window as bw_module
-        bw_module.HistoricalDataSource = MockHistoricalDataSource  # type: ignore
-
         fetch_resolved_ohlcv(resolved)
 
-        assert captured_exchange_name == ["bybit"], (
-            f"HistoricalDataSource must be instantiated with window.exchange='bybit', "
-            f"got {captured_exchange_name!r}. ENG-127: exchange plumbing regression."
-        )
+        assert captured_exchange_name == ["bybit"]
 
 
 class TestResolveAndFetchBacktestOhlcv:
-    """Regression tests for resolve_and_fetch_backtest_ohlcv() — ENG-127 fix."""
+    """Regression tests for resolve_and_fetch_backtest_ohlcv() through the intake seam."""
 
     def test_returns_dataframe_not_tuple(self, monkeypatch):
-        """resolve_and_fetch_backtest_ohlcv must return (DataFrame, window) not (tuple, window).
-
-        This is the canonical entry point used by all backtest and analytical tools.
-        The bug caused all callers to receive a (tuple[DataFrame, str], window) instead
-        of (DataFrame, window), collapsing every affected tool into a code-9000 failure.
-        """
-        import pandas as pd
-
-        from tempest_mcp.tools.backtest_window import (
-            BacktestWindowRequest,
-            resolve_and_fetch_backtest_ohlcv,
-        )
-
         mock_df = pd.DataFrame(
-            {"open": [100, 101], "high": [105, 106], "low": [99, 100], "close": [103, 104], "volume": [1000, 1100]},
+            {
+                "open": [100, 101],
+                "high": [105, 106],
+                "low": [99, 100],
+                "close": [103, 104],
+                "volume": [1000, 1100],
+            },
             index=pd.DatetimeIndex(["2024-01-01", "2024-01-02"], tz="UTC"),
         )
 
-        class MockHistoricalDataSource:
-            def __init__(self, exchange_name: str = "binance"):
-                pass
+        class MockIntake:
+            def fetch(self, request):
+                return OhlcvResult(
+                    mock_df, request.symbol, request.exchange, request.timeframe, "ccxt"
+                )
 
-            def fetch_ohlcv(self, symbol, interval, start, end):
-                return mock_df, "ccxt"
-
-        import tempest_mcp.tools.backtest_window as bw_module
-        bw_module.HistoricalDataSource = MockHistoricalDataSource  # type: ignore
-
+        monkeypatch.setattr(
+            "tempest_mcp.tools.backtest_window.get_ohlcv_intake",
+            lambda exchange_name: MockIntake(),
+        )
         request = BacktestWindowRequest(
             symbol="BTC/USDT",
             trade_style="custom",
@@ -453,9 +408,6 @@ class TestResolveAndFetchBacktestOhlcv:
 
         ohlcv_df, resolved_window = resolve_and_fetch_backtest_ohlcv(request)
 
-        assert isinstance(ohlcv_df, pd.DataFrame), (
-            f"resolve_and_fetch_backtest_ohlcv must return DataFrame as first tuple element, "
-            f"got {type(ohlcv_df).__name__}. ENG-127 regression."
-        )
+        assert isinstance(ohlcv_df, pd.DataFrame)
         assert len(ohlcv_df) == 2
         assert resolved_window.symbol == "BTC/USDT"

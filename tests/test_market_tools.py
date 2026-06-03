@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
+from tempest_mcp.data._intake import OhlcvResult
 from tempest_mcp.tools.market_tools import (
     fetch_klines,
     fetch_orderbook,
@@ -276,9 +277,9 @@ class TestFetchKlinesSuccess:
             index=pd.to_datetime(["2026-04-23T10:00:00+00:00", "2026-04-23T11:00:00+00:00"], utc=True),
         )
 
-        with patch("tempest_mcp.tools.market_tools.get_historical_adapter") as mock_get_hist:
+        with patch("tempest_mcp.tools.market_tools.get_ohlcv_intake") as mock_get_hist:
             mock_hist = MagicMock()
-            mock_hist.fetch_ohlcv.return_value = (df, "ccxt")
+            mock_hist.fetch.return_value = OhlcvResult(df, "BTC/USDT", "binance", "1h", "ccxt")
             mock_get_hist.return_value = mock_hist
 
             result = _run_async(fetch_klines(symbol="BTCUSDT", exchange="binance"))

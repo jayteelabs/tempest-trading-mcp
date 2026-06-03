@@ -10,18 +10,14 @@ from datetime import datetime, timezone
 
 import structlog
 
-from tempest_mcp.data import (
-    get_historical_adapter,
-    get_live_adapter,
-)
-from tempest_mcp.data._symbols import SUPPORTED_TIMEFRAMES, normalize_to_ccxt_market
+from tempest_mcp.data import get_live_adapter
+from tempest_mcp.data._contracts import SUPPORTED_EXCHANGES, SUPPORTED_TIMEFRAMES
+from tempest_mcp.data._factory import get_ohlcv_intake
+from tempest_mcp.data._intake import OhlcvRequest
+from tempest_mcp.data._symbols import normalize_to_ccxt_market
 from tempest_mcp.time_utils import BUSINESS_TZ_NAME, coerce_window_datetime_to_utc
 
 logger = structlog.get_logger()
-
-# Supported exchanges for market tools
-SUPPORTED_EXCHANGES: frozenset[str] = frozenset({"binance", "bybit", "coinbase", "kraken"})
-
 
 def _failure_envelope(code: int, message: str) -> dict:
     """Create a deterministic MCP failure envelope."""
@@ -234,17 +230,20 @@ async def fetch_klines(
         return _failure_envelope(1004, "since must be a valid ISO-8601 datetime string")
     since_iso = since_dt.isoformat() if since_dt is not None else None
 
-    # Get exchange-aware historical adapter
-    hist_adapter = get_historical_adapter(exchange_name=exchange_lower)
-
-    # Fetch OHLCV
-    df, source_used = hist_adapter.fetch_ohlcv(
-        symbol=ccxt_symbol,
-        interval=timeframe,
-        start=since_dt,
-        end=None,
-        auto_adjust=True,
+    # Fetch OHLCV through the historical intake seam.
+    intake = get_ohlcv_intake(exchange_name=exchange_lower)
+    ohlcv_result = intake.fetch(
+        OhlcvRequest(
+            symbol=ccxt_symbol,
+            timeframe=timeframe,
+            exchange=exchange_lower,
+            start=since_dt,
+            end=None,
+            limit=limit,
+            auto_adjust=True,
+        )
     )
+    df = ohlcv_result.frame
 
     # Check for empty result
     if df.empty:
@@ -273,13 +272,13 @@ async def fetch_klines(
         "success": True,
         "data": {
             "tool": "fetch_klines",
-            "symbol": ccxt_symbol,
+            "symbol": ohlcv_result.canonical_symbol,
             "exchange": exchange_lower,
             "timeframe": timeframe,
             "limit": limit,
             "since": since_iso,
             "source": source,
-            "source_used": source_used,
+            "source_used": ohlcv_result.source_used,
             "rows": rows,
         },
     }
