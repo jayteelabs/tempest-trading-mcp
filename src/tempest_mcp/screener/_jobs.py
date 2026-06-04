@@ -41,15 +41,30 @@ class ScreeningOutcome(Generic[TItem, TFailure]):
 
 
 class LiveOhlcvFetcher(Protocol):
-    def fetch_ohlcv_live(self, symbol: str, timeframe: str, limit: int) -> pd.DataFrame: ...
+    def fetch_ohlcv_live(self, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
+        pass
 
 
-def resolve_screening_symbols(requested_symbols: Sequence[str] | None, default_symbols: Sequence[str]) -> tuple[str, ...]:
+def resolve_screening_symbols(
+    requested_symbols: Sequence[str] | None, default_symbols: Sequence[str]
+) -> tuple[str, ...]:
     """Resolve explicit/default symbols with order-preserving deduplication."""
     return tuple(dict.fromkeys(default_symbols if requested_symbols is None else requested_symbols))
 
 
-def run_symbol_jobs(*, symbols: Sequence[str], exchange: str, fetcher: LiveOhlcvFetcher, timeframe: str, limit: int, empty_failure: Callable[[ScreeningJobKey], TFailure], fetch_failure: Callable[[ScreeningJobKey, Exception], TFailure], evaluate: Callable[[ScreeningJobKey, pd.DataFrame], tuple[TItem | None, TFailure | None]], sort_items: Callable[[Iterable[TItem]], list[TItem]], sort_failures: Callable[[Iterable[TFailure]], list[TFailure]] | None = None) -> tuple[list[TItem], list[TFailure]]:
+def run_symbol_jobs(
+    *,
+    symbols: Sequence[str],
+    exchange: str,
+    fetcher: LiveOhlcvFetcher,
+    timeframe: str,
+    limit: int,
+    empty_failure: Callable[[ScreeningJobKey], TFailure],
+    fetch_failure: Callable[[ScreeningJobKey, Exception], TFailure],
+    evaluate: Callable[[ScreeningJobKey, pd.DataFrame], tuple[TItem | None, TFailure | None]],
+    sort_items: Callable[[Iterable[TItem]], list[TItem]],
+    sort_failures: Callable[[Iterable[TFailure]], list[TFailure]] | None = None,
+) -> tuple[list[TItem], list[TFailure]]:
     """Run per-symbol live OHLCV jobs without owning scan-specific math."""
     items: list[TItem] = []
     failures: list[TFailure] = []
@@ -72,7 +87,19 @@ def run_symbol_jobs(*, symbols: Sequence[str], exchange: str, fetcher: LiveOhlcv
     return sort_items(items), sorted_failures
 
 
-def run_symbol_horizon_jobs(*, symbols: Sequence[str], exchange: str, fetcher: LiveOhlcvFetcher, horizons: Sequence[tuple[str, int]], limit_for_horizon: Callable[[str, int], int], empty_failure: Callable[[ScreeningJobKey], TFailure], fetch_failure: Callable[[ScreeningJobKey, Exception], TFailure], evaluate: Callable[[ScreeningJobKey, pd.DataFrame, int], tuple[TItem | None, TFailure | None]], sort_items: Callable[[Iterable[TItem]], list[TItem]], sort_failures: Callable[[Iterable[TFailure]], list[TFailure]]) -> tuple[list[TItem], list[TFailure]]:
+def run_symbol_horizon_jobs(
+    *,
+    symbols: Sequence[str],
+    exchange: str,
+    fetcher: LiveOhlcvFetcher,
+    horizons: Sequence[tuple[str, int]],
+    limit_for_horizon: Callable[[str, int], int],
+    empty_failure: Callable[[ScreeningJobKey], TFailure],
+    fetch_failure: Callable[[ScreeningJobKey, Exception], TFailure],
+    evaluate: Callable[[ScreeningJobKey, pd.DataFrame, int], tuple[TItem | None, TFailure | None]],
+    sort_items: Callable[[Iterable[TItem]], list[TItem]],
+    sort_failures: Callable[[Iterable[TFailure]], list[TFailure]],
+) -> tuple[list[TItem], list[TFailure]]:
     """Run per-symbol/per-horizon live OHLCV jobs."""
     items: list[TItem] = []
     failures: list[TFailure] = []
@@ -106,15 +133,33 @@ def sort_scan_failures_for_session(failures: Iterable[Any]) -> list[Any]:
 
 def sort_order_block_candidates(candidates: Iterable[Any]) -> list[Any]:
     horizon_priority = {("4h", 7): 0, ("1h", 1): 1}
-    return sorted(candidates, key=lambda c: (-c.score, horizon_priority.get((c.timeframe, c.window_days), 99), c.symbol, c.exchange))
+    return sorted(
+        candidates,
+        key=lambda c: (
+            -c.score,
+            horizon_priority.get((c.timeframe, c.window_days), 99),
+            c.symbol,
+            c.exchange,
+        ),
+    )
 
 
 def sort_order_block_failures(failures: Iterable[Any]) -> list[Any]:
-    return sorted(failures, key=lambda f: (f.symbol, f.exchange, f.timeframe, f.window_days, f.reason))
+    return sorted(
+        failures, key=lambda f: (f.symbol, f.exchange, f.timeframe, f.window_days, f.reason)
+    )
 
 
 def serialize_scan_result(result: Any) -> dict[str, Any]:
-    return {"symbol": result.symbol, "exchange": result.exchange, "timestamp": result.timestamp, "price": result.price, "filters_matched": result.filters_matched, "indicator_values": result.indicator_values, "score": result.score}
+    return {
+        "symbol": result.symbol,
+        "exchange": result.exchange,
+        "timestamp": result.timestamp,
+        "price": result.price,
+        "filters_matched": result.filters_matched,
+        "indicator_values": result.indicator_values,
+        "score": result.score,
+    }
 
 
 def serialize_scan_failure(failure: Any) -> dict[str, Any]:
@@ -122,11 +167,29 @@ def serialize_scan_failure(failure: Any) -> dict[str, Any]:
 
 
 def serialize_order_block_candidate(candidate: Any) -> dict[str, Any]:
-    return {"symbol": candidate.symbol, "exchange": candidate.exchange, "timeframe": candidate.timeframe, "window_days": candidate.window_days, "timestamp": candidate.timestamp, "price": candidate.price, "zone_type": candidate.zone_type, "zone_high": candidate.zone_high, "zone_low": candidate.zone_low, "freshness_candles": candidate.freshness_candles, "score": candidate.score}
+    return {
+        "symbol": candidate.symbol,
+        "exchange": candidate.exchange,
+        "timeframe": candidate.timeframe,
+        "window_days": candidate.window_days,
+        "timestamp": candidate.timestamp,
+        "price": candidate.price,
+        "zone_type": candidate.zone_type,
+        "zone_high": candidate.zone_high,
+        "zone_low": candidate.zone_low,
+        "freshness_candles": candidate.freshness_candles,
+        "score": candidate.score,
+    }
 
 
 def serialize_order_block_failure(failure: Any) -> dict[str, Any]:
-    return {"symbol": failure.symbol, "exchange": failure.exchange, "timeframe": failure.timeframe, "window_days": failure.window_days, "reason": failure.reason}
+    return {
+        "symbol": failure.symbol,
+        "exchange": failure.exchange,
+        "timeframe": failure.timeframe,
+        "window_days": failure.window_days,
+        "reason": failure.reason,
+    }
 
 
 def screening_success(items: Sequence[Any], failures: Sequence[Any]) -> bool:

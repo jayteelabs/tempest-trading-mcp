@@ -444,7 +444,7 @@ class Screener:
                 )
             except Exception as e:
                 logger.warning("Session scan failed", symbol=key.symbol, error=str(e))
-                return None, ScanFailure(key.symbol, key.exchange, "fetch_error")
+                return None, ScanFailure(key.symbol, key.exchange, "indicator_error")
 
         return run_symbol_jobs(
             symbols=symbols_to_scan,
@@ -561,7 +561,9 @@ class Screener:
         return ScanResult(
             symbol=symbol,
             exchange=self.exchange,
-            timestamp=latest_ts.timestamp() if isinstance(latest_ts, pd.Timestamp) else float(latest_ts),
+            timestamp=latest_ts.timestamp()
+            if isinstance(latest_ts, pd.Timestamp)
+            else float(latest_ts),
             price=current_price,
             filters_matched=filters_matched,
             indicator_values={
@@ -586,7 +588,9 @@ class Screener:
     ) -> tuple[list[OrderBlockCandidate], list[OrderBlockFailure]]:
         """Execute order-block screener across symbols and fixed horizons."""
         symbols_to_scan = _resolve_symbols(symbols, self.symbols)
-        logger.info("Starting order-block scan", symbols=len(symbols_to_scan), horizons=ORDER_BLOCK_HORIZONS)
+        logger.info(
+            "Starting order-block scan", symbols=len(symbols_to_scan), horizons=ORDER_BLOCK_HORIZONS
+        )
 
         def make_failure(key: ScreeningJobKey, reason: str) -> OrderBlockFailure:
             return OrderBlockFailure(
@@ -657,10 +661,20 @@ class Screener:
                 max_zone_age_bars=max_zone_age_bars,
             )
         except ValueError as e:
-            logger.warning("Order-block validation failed", symbol=key.symbol, timeframe=key.timeframe, error=str(e))
+            logger.warning(
+                "Order-block validation failed",
+                symbol=key.symbol,
+                timeframe=key.timeframe,
+                error=str(e),
+            )
             return None, failure("order_block_validation_failed")
         except Exception as e:
-            logger.warning("Order-block detection error", symbol=key.symbol, timeframe=key.timeframe, error=str(e))
+            logger.warning(
+                "Order-block detection error",
+                symbol=key.symbol,
+                timeframe=key.timeframe,
+                error=str(e),
+            )
             return None, failure("internal_error")
 
         if not active_zones:
@@ -680,7 +694,9 @@ class Screener:
             exchange=key.exchange,
             timeframe=key.timeframe or "",
             window_days=key.window_days or 0,
-            timestamp=latest_ts.timestamp() if hasattr(latest_ts, "timestamp") else float(latest_ts),
+            timestamp=latest_ts.timestamp()
+            if hasattr(latest_ts, "timestamp")
+            else float(latest_ts),
             price=df["close"].tolist()[-1],
             zone_type=best_zone["type"],
             zone_high=best_zone["zone_high"],
