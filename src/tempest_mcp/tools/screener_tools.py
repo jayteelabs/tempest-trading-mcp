@@ -6,6 +6,14 @@ from typing import Any
 from tempest_mcp.config import ErrorCodes
 from tempest_mcp.logging_config import get_logger
 from tempest_mcp.models.indicator import SessionType
+from tempest_mcp.screener._jobs import (
+    screening_success,
+    serialize_order_block_candidate,
+    serialize_order_block_failure,
+    serialize_scan_failure,
+    serialize_scan_result,
+    sort_scan_failures_for_session,
+)
 from tempest_mcp.screener.scanner import (
     DEFAULT_FILTER_PRESET,
     ORDER_BLOCK_HORIZONS,
@@ -157,24 +165,12 @@ def _validate_volume_multiplier(volume_multiplier: float) -> str | None:
 
 def _serialize_scan_result(result: Any) -> dict[str, Any]:
     """Serialize a ScanResult to a JSON-serializable dict."""
-    return {
-        "symbol": result.symbol,
-        "exchange": result.exchange,
-        "timestamp": result.timestamp,
-        "price": result.price,
-        "filters_matched": result.filters_matched,
-        "indicator_values": result.indicator_values,
-        "score": result.score,
-    }
+    return serialize_scan_result(result)
 
 
 def _serialize_scan_failure(failure: ScanFailure) -> dict[str, Any]:
     """Serialize a ScanFailure to a JSON-serializable dict."""
-    return {
-        "symbol": failure.symbol,
-        "exchange": failure.exchange,
-        "reason": failure.reason,
-    }
+    return serialize_scan_failure(failure)
 
 
 def _validate_atr_period(atr_period: int) -> str | None:
@@ -208,30 +204,12 @@ def _validate_max_zone_age_bars(max_zone_age_bars: int) -> str | None:
 
 def _serialize_order_block_candidate(candidate: OrderBlockCandidate) -> dict[str, Any]:
     """Serialize an OrderBlockCandidate to a JSON-serializable dict."""
-    return {
-        "symbol": candidate.symbol,
-        "exchange": candidate.exchange,
-        "timeframe": candidate.timeframe,
-        "window_days": candidate.window_days,
-        "timestamp": candidate.timestamp,
-        "price": candidate.price,
-        "zone_type": candidate.zone_type,
-        "zone_high": candidate.zone_high,
-        "zone_low": candidate.zone_low,
-        "freshness_candles": candidate.freshness_candles,
-        "score": candidate.score,
-    }
+    return serialize_order_block_candidate(candidate)
 
 
 def _serialize_order_block_failure(failure: OrderBlockFailure) -> dict[str, Any]:
     """Serialize an OrderBlockFailure to a JSON-serializable dict."""
-    return {
-        "symbol": failure.symbol,
-        "exchange": failure.exchange,
-        "timeframe": failure.timeframe,
-        "window_days": failure.window_days,
-        "reason": failure.reason,
-    }
+    return serialize_order_block_failure(failure)
 
 
 async def screener_scan(
@@ -305,11 +283,8 @@ async def screener_scan(
     # ── Determine success/failure ────────────────────────────────────────────
     # Partial success: at least one symbol returned usable data
     # Full failure: nothing usable came back (all symbols failed)
-    has_results = len(results) > 0
-    has_failures = len(failures) > 0
-
     # Success if we got at least some results OR if all symbols failed but no exceptions
-    success = has_results or not has_failures
+    success = screening_success(results, failures)
 
     # Build applied config (shows what filters were actually used)
     applied_filters = [
@@ -445,9 +420,7 @@ async def session_breakout_scan(
         )
 
     # ── Determine success/failure ────────────────────────────────────────────
-    has_results = len(results) > 0
-    has_failures = len(failures) > 0
-    success = has_results or not has_failures
+    success = screening_success(results, failures)
 
     response: dict[str, Any] = {
         "success": success,
@@ -483,10 +456,7 @@ async def session_breakout_scan(
                 "volume_multiplier": volume_multiplier,
             },
             "results": [],
-            "failures": sorted(
-                [_serialize_scan_failure(f) for f in failures],
-                key=lambda x: (x["symbol"], x["exchange"]),
-            ),
+            "failures": [_serialize_scan_failure(f) for f in sort_scan_failures_for_session(failures)],
         }
 
     logger.info(
@@ -584,9 +554,7 @@ async def order_block_screener_scan(
         )
 
     # ── Determine success/failure ────────────────────────────────────────────
-    has_candidates = len(candidates) > 0
-    has_failures = len(failures) > 0
-    success = has_candidates or not has_failures
+    success = screening_success(candidates, failures)
 
     # Build applied config showing fixed horizons
     applied_horizons = [{"timeframe": tf, "window_days": wd} for tf, wd in ORDER_BLOCK_HORIZONS]

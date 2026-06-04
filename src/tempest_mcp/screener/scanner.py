@@ -13,6 +13,16 @@ from tempest_mcp.indicators.trend import calculate_ema_result
 from tempest_mcp.indicators.volatility import calculate_bollinger_width
 from tempest_mcp.logging_config import get_logger
 from tempest_mcp.models.indicator import SessionType
+from tempest_mcp.screener._jobs import (
+    ScreeningJobKey,
+    resolve_screening_symbols,
+    run_symbol_horizon_jobs,
+    run_symbol_jobs,
+    sort_order_block_candidates,
+    sort_order_block_failures,
+    sort_scan_failures_for_session,
+    sort_scan_results,
+)
 
 logger = get_logger(__name__)
 
@@ -113,7 +123,7 @@ _HORIZON_WINDOW_BARS: dict[tuple[str, int], int] = {
 
 def _dedupe_symbols(symbols: tuple[str, ...] | list[str]) -> tuple[str, ...]:
     """Deduplicate symbols deterministically while preserving order."""
-    return tuple(dict.fromkeys(symbols))
+    return resolve_screening_symbols(symbols, ())
 
 
 def _resolve_symbols(
@@ -121,9 +131,7 @@ def _resolve_symbols(
     default_symbols: tuple[str, ...],
 ) -> list[str]:
     """Resolve explicit/default symbols with deterministic deduplication."""
-    if requested_symbols is None:
-        return list(default_symbols)
-    return list(dict.fromkeys(requested_symbols))
+    return list(resolve_screening_symbols(requested_symbols, default_symbols))
 
 
 def _required_order_block_bars(
@@ -180,18 +188,25 @@ class Screener:
             filters=[f.value for f in effective_filters],
         )
 
-        results: list[ScanResult] = []
-        failures: list[ScanFailure] = []
+        def evaluate_symbol(
+            key: ScreeningJobKey, df: pd.DataFrame
+        ) -> tuple[ScanResult | None, ScanFailure | None]:
+            result, failure = self._evaluate_scan_frame(key.symbol, effective_filters, df)
+            if result is not None and result.score < self.min_score:
+                return None, None
+            return result, failure
 
-        for symbol in symbols_to_scan:
-            result, failure = self._scan_symbol(symbol, effective_filters)
-            if failure is not None:
-                failures.append(failure)
-            elif result is not None and result.score >= self.min_score:
-                results.append(result)
-
-        # Deterministic sorting: (-score, -len(filters_matched), symbol, exchange)
-        results.sort(key=lambda r: (-r.score, -len(r.filters_matched), r.symbol, r.exchange))
+        results, failures = run_symbol_jobs(
+            symbols=symbols_to_scan,
+            exchange=self.exchange,
+            fetcher=self.adapter,
+            timeframe="1h",
+            limit=100,
+            empty_failure=lambda key: ScanFailure(key.symbol, key.exchange, "empty_ohlcv"),
+            fetch_failure=lambda key, _exc: ScanFailure(key.symbol, key.exchange, "fetch_error"),
+            evaluate=evaluate_symbol,
+            sort_items=sort_scan_results,
+        )
 
         logger.info(
             "Scan complete",
@@ -204,29 +219,20 @@ class Screener:
     def _scan_symbol(
         self, symbol: str, filters: list[ScanFilter]
     ) -> tuple[ScanResult | None, ScanFailure | None]:
-        """Scan a single symbol against filters.
-
-        Returns:
-            Tuple of (result, failure):
-            - (result, None) on success
-            - (None, failure) on failure
-        """
+        """Compatibility wrapper for scanning a single symbol."""
         try:
             df = self.adapter.fetch_ohlcv_live(symbol, timeframe="1h", limit=100)
             if df.empty:
-                return None, ScanFailure(
-                    symbol=symbol,
-                    exchange=self.exchange,
-                    reason="empty_ohlcv",
-                )
+                return None, ScanFailure(symbol, self.exchange, "empty_ohlcv")
         except Exception as e:
             logger.warning("Fetch failed for symbol", symbol=symbol, error=str(e))
-            return None, ScanFailure(
-                symbol=symbol,
-                exchange=self.exchange,
-                reason="fetch_error",
-            )
+            return None, ScanFailure(symbol, self.exchange, "fetch_error")
+        return self._evaluate_scan_frame(symbol, filters, df)
 
+    def _evaluate_scan_frame(
+        self, symbol: str, filters: list[ScanFilter], df: pd.DataFrame
+    ) -> tuple[ScanResult | None, ScanFailure | None]:
+        """Evaluate already-fetched OHLCV for one multi-factor scan job."""
         close = df["close"].tolist()
         volume = df["volume"].tolist()
 
@@ -422,34 +428,50 @@ class Screener:
         proximity_pct: float = 1.0,
         volume_multiplier: float = 2.0,
     ) -> tuple[list[ScanResult], list[ScanFailure]]:
-        """Execute session breakout scan across symbols.
+        """Execute session breakout scan across symbols."""
+        symbols_to_scan = _resolve_symbols(symbols, self.symbols)
 
-        Evaluates symbols against the requested session (asia, london, ny) using
-        detect_session_levels() for session high/low and detect_pdh_pdl() for
-        previous-day context. Breakout/proximity flags are computed against both
-        session and PDH/PDL levels, with volume confirmation.
+        def evaluate_session(
+            key: ScreeningJobKey, df: pd.DataFrame
+        ) -> tuple[ScanResult | None, ScanFailure | None]:
+            try:
+                return self._evaluate_session_breakout_frame(
+                    key.symbol,
+                    session,
+                    df,
+                    proximity_pct=proximity_pct,
+                    volume_multiplier=volume_multiplier,
+                )
+            except Exception as e:
+                logger.warning("Session scan failed", symbol=key.symbol, error=str(e))
+                return None, ScanFailure(key.symbol, key.exchange, "indicator_error")
 
-        Args:
-            session: Session type (asia, london, ny). Accepts 'new_york' alias normalized to 'ny'.
-            symbols: List of symbols to scan. Defaults to screener's configured symbol universe.
-            proximity_pct: Percentage threshold for near-breakout detection (default 1.0).
-                Price within proximity_pct% of session high/low is flagged as near-breakout.
-            volume_multiplier: Volume threshold multiplier for confirmation (default 2.0).
-                Current volume must be >= volume_multiplier * prior_window_avg.
+        return run_symbol_jobs(
+            symbols=symbols_to_scan,
+            exchange=self.exchange,
+            fetcher=self.adapter,
+            timeframe="1h",
+            limit=48,
+            empty_failure=lambda key: ScanFailure(key.symbol, key.exchange, "empty_ohlcv"),
+            fetch_failure=lambda key, _exc: ScanFailure(key.symbol, key.exchange, "fetch_error"),
+            evaluate=evaluate_session,
+            sort_items=sort_scan_results,
+            sort_failures=sort_scan_failures_for_session,
+        )
 
-        Returns:
-            Tuple of (results, failures) where:
-            - results: List of ScanResult sorted by (-score, -len(filters_matched), symbol, exchange)
-            - failures: List of ScanFailure for symbols that could not be scanned
-        """
+    def _evaluate_session_breakout_frame(
+        self,
+        symbol: str,
+        session: SessionType,
+        df: pd.DataFrame,
+        *,
+        proximity_pct: float,
+        volume_multiplier: float,
+    ) -> tuple[ScanResult | None, ScanFailure | None]:
+        """Evaluate already-fetched OHLCV for one session breakout job."""
         from tempest_mcp.indicators.session_levels import detect_pdh_pdl, detect_session_levels
 
-        symbols_to_scan = _resolve_symbols(symbols, self.symbols)
-        results: list[ScanResult] = []
-        failures: list[ScanFailure] = []
-
-        # Fixed filter name order for deterministic filters_matched ordering
-        FILTER_ORDER = (
+        filter_order = (
             "session_high_breakout",
             "session_high_near_breakout",
             "session_low_breakout",
@@ -460,183 +482,102 @@ class Screener:
             "pdl_near_breakout",
             "volume_confirmation",
         )
+        close = df["close"].tolist()
+        volume = df["volume"].tolist()
+        current_price = close[-1]
 
-        for symbol in symbols_to_scan:
-            try:
-                df = self.adapter.fetch_ohlcv_live(symbol, timeframe="1h", limit=48)
-                if df.empty:
-                    failures.append(
-                        ScanFailure(
-                            symbol=symbol,
-                            exchange=self.exchange,
-                            reason="empty_ohlcv",
-                        )
-                    )
-                    continue
+        session_result = detect_session_levels(df, session.value)
+        session_high = float(session_result.get("high") or 0.0)
+        session_low = float(session_result.get("low") or 0.0)
+        session_bars = session_result.get("bars", 0)
+        if session_bars == 0:
+            return None, ScanFailure(symbol, self.exchange, "insufficient_session_data")
 
-                close = df["close"].tolist()
-                volume = df["volume"].tolist()
-                current_price = close[-1]
-                session_key = session.value
+        pdh_pdl_result = detect_pdh_pdl(df)
+        pdh = float(pdh_pdl_result.get("previous_day_high") or 0.0)
+        pdl = float(pdh_pdl_result.get("previous_day_low") or 0.0)
+        if pdh_pdl_result.get("position", "insufficient_data") == "insufficient_data":
+            return None, ScanFailure(symbol, self.exchange, "insufficient_pdh_pdl_data")
 
-                # ── Session levels ───────────────────────────────────────────────
-                session_result = detect_session_levels(df, session_key)
-                session_high = float(session_result.get("high") or 0.0)
-                session_low = float(session_result.get("low") or 0.0)
-                session_bars = session_result.get("bars", 0)
+        filters_matched: list[str] = []
 
-                if session_bars == 0:
-                    failures.append(
-                        ScanFailure(
-                            symbol=symbol,
-                            exchange=self.exchange,
-                            reason="insufficient_session_data",
-                        )
-                    )
-                    continue
+        def append_match(filter_name: str) -> None:
+            if filter_name in filters_matched:
+                return
+            target_idx = filter_order.index(filter_name)
+            for idx, existing in enumerate(filters_matched):
+                if filter_order.index(existing) > target_idx:
+                    filters_matched.insert(idx, filter_name)
+                    return
+            filters_matched.append(filter_name)
 
-                # ── PDH/PDL context ──────────────────────────────────────────────
-                pdh_pdl_result = detect_pdh_pdl(df)
-                pdh = float(pdh_pdl_result.get("previous_day_high") or 0.0)
-                pdl = float(pdh_pdl_result.get("previous_day_low") or 0.0)
-                pdh_position = pdh_pdl_result.get("position", "insufficient_data")
+        if session_high > 0:
+            if current_price > session_high:
+                append_match("session_high_breakout")
+            elif proximity_pct > 0 and current_price >= session_high * (1 - proximity_pct / 100):
+                append_match("session_high_near_breakout")
+        if session_low > 0:
+            if current_price < session_low:
+                append_match("session_low_breakout")
+            elif proximity_pct > 0 and current_price <= session_low * (1 + proximity_pct / 100):
+                append_match("session_low_near_breakout")
+        if pdh > 0:
+            if current_price > pdh:
+                append_match("pdh_breakout")
+            elif proximity_pct > 0 and current_price >= pdh * (1 - proximity_pct / 100):
+                append_match("pdh_near_breakout")
+        if pdl > 0:
+            if current_price < pdl:
+                append_match("pdl_breakout")
+            elif proximity_pct > 0 and current_price <= pdl * (1 + proximity_pct / 100):
+                append_match("pdl_near_breakout")
 
-                if pdh_position == "insufficient_data":
-                    failures.append(
-                        ScanFailure(
-                            symbol=symbol,
-                            exchange=self.exchange,
-                            reason="insufficient_pdh_pdl_data",
-                        )
-                    )
-                    continue
+        lookback = min(20, len(volume))
+        volume_confirmed = False
+        if lookback >= 5:
+            avg_volume = sum(volume[-lookback:-1]) / (lookback - 1)
+            current_volume = volume[-1]
+            if avg_volume > 0 and current_volume >= avg_volume * volume_multiplier:
+                append_match("volume_confirmation")
+                volume_confirmed = True
 
-                # ── Breakout / Proximity checks ───────────────────────────────────
-                filters_matched: list[str] = []
+        score = 0.0
+        score_values = {
+            "session_high_breakout": 30.0,
+            "session_low_breakout": 30.0,
+            "pdh_breakout": 20.0,
+            "pdl_breakout": 20.0,
+            "session_high_near_breakout": 15.0,
+            "session_low_near_breakout": 15.0,
+            "pdh_near_breakout": 10.0,
+            "pdl_near_breakout": 10.0,
+            "volume_confirmation": 10.0,
+        }
+        for filter_name in filters_matched:
+            score += score_values[filter_name]
+        score = min(100.0, max(0.0, score))
 
-                def append_match(filter_name: str, matched_list: list[str]) -> None:
-                    """Append filter in fixed order (no duplicates)."""
-                    if filter_name not in matched_list:
-                        # Insert at correct position to maintain deterministic ordering
-                        target_idx = FILTER_ORDER.index(filter_name)
-                        inserted = False
-                        for i, existing in enumerate(matched_list):
-                            if FILTER_ORDER.index(existing) > target_idx:
-                                matched_list.insert(i, filter_name)
-                                inserted = True
-                                break
-                        if not inserted:
-                            matched_list.append(filter_name)
-
-                # Session high breakout / near-breakout
-                if session_high > 0:
-                    if current_price > session_high:
-                        append_match("session_high_breakout", filters_matched)
-                    elif proximity_pct > 0 and current_price >= session_high * (
-                        1 - proximity_pct / 100
-                    ):
-                        append_match("session_high_near_breakout", filters_matched)
-
-                # Session low breakout / near-breakout
-                if session_low > 0:
-                    if current_price < session_low:
-                        append_match("session_low_breakout", filters_matched)
-                    elif proximity_pct > 0 and current_price <= session_low * (
-                        1 + proximity_pct / 100
-                    ):
-                        append_match("session_low_near_breakout", filters_matched)
-
-                # PDH breakout / near-breakout
-                if pdh > 0:
-                    if current_price > pdh:
-                        append_match("pdh_breakout", filters_matched)
-                    elif proximity_pct > 0 and current_price >= pdh * (1 - proximity_pct / 100):
-                        append_match("pdh_near_breakout", filters_matched)
-
-                # PDL breakout / near-breakout
-                if pdl > 0:
-                    if current_price < pdl:
-                        append_match("pdl_breakout", filters_matched)
-                    elif proximity_pct > 0 and current_price <= pdl * (1 + proximity_pct / 100):
-                        append_match("pdl_near_breakout", filters_matched)
-
-                # ── Volume confirmation ───────────────────────────────────────────
-                lookback = min(20, len(volume))
-                volume_confirmed = False
-                if lookback >= 5:
-                    avg_volume = sum(volume[-lookback:-1]) / (lookback - 1)
-                    current_volume = volume[-1]
-                    if avg_volume > 0 and current_volume >= avg_volume * volume_multiplier:
-                        append_match("volume_confirmation", filters_matched)
-                        volume_confirmed = True
-
-                # ── Score calculation ───────────────────────────────────────────
-                # Breakout = 30pts each, near-breakout = 15pts each, volume = 10pts
-                # Max score = 100, min score = 0
-                score = 0.0
-                for f in filters_matched:
-                    if f == "session_high_breakout":
-                        score += 30.0
-                    elif f == "session_low_breakout":
-                        score += 30.0
-                    elif f == "pdh_breakout":
-                        score += 20.0
-                    elif f == "pdl_breakout":
-                        score += 20.0
-                    elif f == "session_high_near_breakout":
-                        score += 15.0
-                    elif f == "session_low_near_breakout":
-                        score += 15.0
-                    elif f == "pdh_near_breakout":
-                        score += 10.0
-                    elif f == "pdl_near_breakout":
-                        score += 10.0
-                    elif f == "volume_confirmation":
-                        score += 10.0
-
-                score = min(100.0, max(0.0, score))
-
-                latest_ts = df.index[-1]
-                results.append(
-                    ScanResult(
-                        symbol=symbol,
-                        exchange=self.exchange,
-                        timestamp=latest_ts.timestamp()
-                        if isinstance(latest_ts, pd.Timestamp)
-                        else float(latest_ts),
-                        price=current_price,
-                        filters_matched=filters_matched,
-                        indicator_values={
-                            "session_high": session_high,
-                            "session_low": session_low,
-                            "session_bars": session_bars,
-                            "previous_day_high": pdh,
-                            "previous_day_low": pdl,
-                            "volume_confirmed": float(volume_confirmed),
-                            "volume_multiplier": volume_multiplier,
-                            "proximity_pct": proximity_pct,
-                        },
-                        score=score,
-                    )
-                )
-
-            except Exception as e:
-                logger.warning("Session scan failed", symbol=symbol, error=str(e))
-                failures.append(
-                    ScanFailure(
-                        symbol=symbol,
-                        exchange=self.exchange,
-                        reason="fetch_error",
-                    )
-                )
-
-        # Deterministic sorting: (-score, -len(filters_matched), symbol, exchange)
-        results.sort(key=lambda r: (-r.score, -len(r.filters_matched), r.symbol, r.exchange))
-
-        # Sort failures deterministically: (symbol, exchange)
-        failures.sort(key=lambda f: (f.symbol, f.exchange))
-
-        return results, failures
+        latest_ts = df.index[-1]
+        return ScanResult(
+            symbol=symbol,
+            exchange=self.exchange,
+            timestamp=latest_ts.timestamp()
+            if isinstance(latest_ts, pd.Timestamp)
+            else float(latest_ts),
+            price=current_price,
+            filters_matched=filters_matched,
+            indicator_values={
+                "session_high": session_high,
+                "session_low": session_low,
+                "session_bars": session_bars,
+                "previous_day_high": pdh,
+                "previous_day_low": pdl,
+                "volume_confirmed": float(volume_confirmed),
+                "volume_multiplier": volume_multiplier,
+                "proximity_pct": proximity_pct,
+            },
+            score=score,
+        ), None
 
     def order_block_scan(
         self,
@@ -645,210 +586,121 @@ class Screener:
         impulse_atr_mult: float = 1.0,
         max_zone_age_bars: int = 20,
     ) -> tuple[list[OrderBlockCandidate], list[OrderBlockFailure]]:
-        """Execute order-block screener across symbols and fixed horizons.
+        """Execute order-block screener across symbols and fixed horizons."""
+        symbols_to_scan = _resolve_symbols(symbols, self.symbols)
+        logger.info(
+            "Starting order-block scan", symbols=len(symbols_to_scan), horizons=ORDER_BLOCK_HORIZONS
+        )
 
-        Each symbol is evaluated across two fixed horizons:
-        - day_trade pass: 1h timeframe over 1d window
-        - swing_trade pass: 4h timeframe over 7d window
+        def make_failure(key: ScreeningJobKey, reason: str) -> OrderBlockFailure:
+            return OrderBlockFailure(
+                symbol=key.symbol,
+                exchange=key.exchange,
+                timeframe=key.timeframe or "",
+                window_days=key.window_days or 0,
+                reason=reason,
+            )
 
-        For each (symbol, horizon) job, emits either one best candidate
-        (deterministic best zone selection) or one failure record.
+        def evaluate_order_block(
+            key: ScreeningJobKey, df: pd.DataFrame, limit: int
+        ) -> tuple[OrderBlockCandidate | None, OrderBlockFailure | None]:
+            if len(df) < limit:
+                return None, make_failure(key, "insufficient_bars")
+            return self._evaluate_order_block_frame(
+                key,
+                df,
+                atr_period=atr_period,
+                impulse_atr_mult=impulse_atr_mult,
+                max_zone_age_bars=max_zone_age_bars,
+            )
 
-        Args:
-            symbols: List of symbols to scan. Defaults to screener's configured universe.
-            atr_period: ATR period for order-block detection (default 14).
-            impulse_atr_mult: Impulse ATR multiplier (default 1.0).
-            max_zone_age_bars: Max zone age in bars (default 20).
+        candidates, failures = run_symbol_horizon_jobs(
+            symbols=symbols_to_scan,
+            exchange=self.exchange,
+            fetcher=self.adapter,
+            horizons=ORDER_BLOCK_HORIZONS,
+            limit_for_horizon=lambda timeframe, window_days: _required_order_block_bars(
+                timeframe, window_days, atr_period
+            ),
+            empty_failure=lambda key: make_failure(key, "data_unavailable"),
+            fetch_failure=lambda key, _exc: make_failure(key, "data_unavailable"),
+            evaluate=evaluate_order_block,
+            sort_items=sort_order_block_candidates,
+            sort_failures=sort_order_block_failures,
+        )
 
-        Returns:
-            Tuple of (candidates, failures) where:
-            - candidates: List of OrderBlockCandidate sorted by (-score, horizon_priority, symbol, exchange)
-            - failures: List of OrderBlockFailure sorted by (symbol, exchange, timeframe, window_days, reason)
-        """
+        logger.info("Order-block scan complete", candidates=len(candidates), failures=len(failures))
+        return candidates, failures
+
+    def _evaluate_order_block_frame(
+        self,
+        key: ScreeningJobKey,
+        df: pd.DataFrame,
+        *,
+        atr_period: int,
+        impulse_atr_mult: float,
+        max_zone_age_bars: int,
+    ) -> tuple[OrderBlockCandidate | None, OrderBlockFailure | None]:
+        """Evaluate already-fetched OHLCV for one order-block horizon job."""
         from tempest_mcp.strategies.backtest_order_blocks import detect_active_order_blocks
 
-        symbols_to_scan = _resolve_symbols(symbols, self.symbols)
-        candidates: list[OrderBlockCandidate] = []
-        failures: list[OrderBlockFailure] = []
-
-        logger.info(
-            "Starting order-block scan",
-            symbols=len(symbols_to_scan),
-            horizons=ORDER_BLOCK_HORIZONS,
-        )
-
-        for symbol in symbols_to_scan:
-            for timeframe, window_days in ORDER_BLOCK_HORIZONS:
-                bar_limit = _required_order_block_bars(timeframe, window_days, atr_period)
-
-                try:
-                    df = self.adapter.fetch_ohlcv_live(symbol, timeframe=timeframe, limit=bar_limit)
-
-                    if df.empty:
-                        failures.append(
-                            OrderBlockFailure(
-                                symbol=symbol,
-                                exchange=self.exchange,
-                                timeframe=timeframe,
-                                window_days=window_days,
-                                reason="data_unavailable",
-                            )
-                        )
-                        continue
-
-                    if len(df) < bar_limit:
-                        failures.append(
-                            OrderBlockFailure(
-                                symbol=symbol,
-                                exchange=self.exchange,
-                                timeframe=timeframe,
-                                window_days=window_days,
-                                reason="insufficient_bars",
-                            )
-                        )
-                        continue
-
-                except Exception as e:
-                    logger.warning(
-                        "OHLCV fetch failed for order-block scan",
-                        symbol=symbol,
-                        timeframe=timeframe,
-                        error=str(e),
-                    )
-                    failures.append(
-                        OrderBlockFailure(
-                            symbol=symbol,
-                            exchange=self.exchange,
-                            timeframe=timeframe,
-                            window_days=window_days,
-                            reason="data_unavailable",
-                        )
-                    )
-                    continue
-
-                try:
-                    active_zones = detect_active_order_blocks(
-                        df,
-                        atr_period=atr_period,
-                        impulse_atr_mult=impulse_atr_mult,
-                        max_zone_age_bars=max_zone_age_bars,
-                    )
-                except ValueError as e:
-                    logger.warning(
-                        "Order-block validation failed",
-                        symbol=symbol,
-                        timeframe=timeframe,
-                        error=str(e),
-                    )
-                    failures.append(
-                        OrderBlockFailure(
-                            symbol=symbol,
-                            exchange=self.exchange,
-                            timeframe=timeframe,
-                            window_days=window_days,
-                            reason="order_block_validation_failed",
-                        )
-                    )
-                    continue
-                except Exception as e:
-                    logger.warning(
-                        "Order-block detection error",
-                        symbol=symbol,
-                        timeframe=timeframe,
-                        error=str(e),
-                    )
-                    failures.append(
-                        OrderBlockFailure(
-                            symbol=symbol,
-                            exchange=self.exchange,
-                            timeframe=timeframe,
-                            window_days=window_days,
-                            reason="internal_error",
-                        )
-                    )
-                    continue
-
-                if not active_zones:
-                    failures.append(
-                        OrderBlockFailure(
-                            symbol=symbol,
-                            exchange=self.exchange,
-                            timeframe=timeframe,
-                            window_days=window_days,
-                            reason="no_active_order_blocks",
-                        )
-                    )
-                    continue
-
-                # Select deterministic best zone:
-                # 1. lowest freshness_candles (fresher preferred)
-                # 2. latest timestamp (higher index = later)
-                # 3. zone_type lexical ("bearish" < "bullish") as final tie-break
-                best_zone = min(
-                    active_zones,
-                    key=lambda z: (
-                        z["freshness_candles"],
-                        -pd.Timestamp(z["date"]).value,
-                        z["type"],
-                    ),
-                )
-
-                # Compute score: higher = fresher
-                # score = round(max(0, max_zone_age_bars - freshness) / max_zone_age_bars, 6)
-                score = round(
-                    max(0, max_zone_age_bars - best_zone["freshness_candles"]) / max_zone_age_bars,
-                    6,
-                )
-
-                # Current price from last bar
-                close_prices = df["close"].tolist()
-                current_price = close_prices[-1]
-                latest_ts = df.index[-1]
-                timestamp = (
-                    latest_ts.timestamp() if hasattr(latest_ts, "timestamp") else float(latest_ts)
-                )
-
-                candidates.append(
-                    OrderBlockCandidate(
-                        symbol=symbol,
-                        exchange=self.exchange,
-                        timeframe=timeframe,
-                        window_days=window_days,
-                        timestamp=timestamp,
-                        price=current_price,
-                        zone_type=best_zone["type"],
-                        zone_high=best_zone["zone_high"],
-                        zone_low=best_zone["zone_low"],
-                        freshness_candles=best_zone["freshness_candles"],
-                        score=score,
-                    )
-                )
-
-        # Deterministic candidate ordering: (-score, horizon_priority, symbol, exchange)
-        candidates.sort(
-            key=lambda c: (
-                -c.score,
-                _HORIZON_PRIORITY.get((c.timeframe, c.window_days), 99),
-                c.symbol,
-                c.exchange,
+        def failure(reason: str) -> OrderBlockFailure:
+            return OrderBlockFailure(
+                symbol=key.symbol,
+                exchange=key.exchange,
+                timeframe=key.timeframe or "",
+                window_days=key.window_days or 0,
+                reason=reason,
             )
-        )
 
-        # Deterministic failure ordering: (symbol, exchange, timeframe, window_days, reason)
-        failures.sort(
-            key=lambda f: (
-                f.symbol,
-                f.exchange,
-                f.timeframe,
-                f.window_days,
-                f.reason,
+        try:
+            active_zones = detect_active_order_blocks(
+                df,
+                atr_period=atr_period,
+                impulse_atr_mult=impulse_atr_mult,
+                max_zone_age_bars=max_zone_age_bars,
             )
-        )
+        except ValueError as e:
+            logger.warning(
+                "Order-block validation failed",
+                symbol=key.symbol,
+                timeframe=key.timeframe,
+                error=str(e),
+            )
+            return None, failure("order_block_validation_failed")
+        except Exception as e:
+            logger.warning(
+                "Order-block detection error",
+                symbol=key.symbol,
+                timeframe=key.timeframe,
+                error=str(e),
+            )
+            return None, failure("internal_error")
 
-        logger.info(
-            "Order-block scan complete",
-            candidates=len(candidates),
-            failures=len(failures),
-        )
+        if not active_zones:
+            return None, failure("no_active_order_blocks")
 
-        return candidates, failures
+        best_zone = min(
+            active_zones,
+            key=lambda z: (z["freshness_candles"], -pd.Timestamp(z["date"]).value, z["type"]),
+        )
+        score = round(
+            max(0, max_zone_age_bars - best_zone["freshness_candles"]) / max_zone_age_bars,
+            6,
+        )
+        latest_ts = df.index[-1]
+        return OrderBlockCandidate(
+            symbol=key.symbol,
+            exchange=key.exchange,
+            timeframe=key.timeframe or "",
+            window_days=key.window_days or 0,
+            timestamp=latest_ts.timestamp()
+            if hasattr(latest_ts, "timestamp")
+            else float(latest_ts),
+            price=df["close"].tolist()[-1],
+            zone_type=best_zone["type"],
+            zone_high=best_zone["zone_high"],
+            zone_low=best_zone["zone_low"],
+            freshness_candles=best_zone["freshness_candles"],
+            score=score,
+        ), None
