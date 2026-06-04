@@ -124,6 +124,13 @@ def test_validation_routing_examples_are_preserved():
         assert catalogue.validate_tool_arguments(name, arguments) == expected
 
 
+def test_limit_validation_rejects_boolean_values():
+    assert (
+        catalogue.validate_tool_arguments("fetch_klines", {"symbol": "BTC/USDT", "limit": True})
+        == "limit must be an integer"
+    )
+
+
 async def test_dispatch_unknown_tool_envelope():
     assert _payload(await catalogue.dispatch_tool_call("missing", {})) == {
         "success": False,

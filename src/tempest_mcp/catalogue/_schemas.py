@@ -339,7 +339,7 @@ TOOL_SCHEMAS: list[Tool] = [
             "required": ["symbol", "strategy_ids"],
         },
     ),
-    # ── Legacy deprecated tool (not listed in TOOL_SCHEMAS, handled in call_tool) ──
+    # ── Legacy deprecated tool (handled separately in call_tool) ──
     Tool(
         name="screener_scan",
         description="Multi-factor crypto screener.",

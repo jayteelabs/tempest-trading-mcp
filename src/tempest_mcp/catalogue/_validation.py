@@ -53,7 +53,7 @@ def _validate_limit(limit: Any, field_name: str = "limit", min_val: int = 1, max
     """Validate limit parameter."""
     if limit is None:
         return None
-    if not isinstance(limit, int):
+    if isinstance(limit, bool) or not isinstance(limit, int):
         return f"{field_name} must be an integer"
     if limit < min_val or limit > max_val:
         return f"{field_name} must be between {min_val} and {max_val}"
