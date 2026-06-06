@@ -27,32 +27,18 @@ from typing import Any
 import httpx
 
 from tempest_mcp.logging_config import get_logger
+from tempest_mcp.sentiment.text_scoring import (
+    clamp_score,
+    coerce_scoring_text,
+    compute_keyword_boost,
+    score_sentiment_text,
+)
 
 logger = get_logger(__name__)
 
 #: Default reddit-adapter base URL (ENG-130 stack, loopback-only on VPS).
 DEFAULT_REDDIT_ADAPTER_URL = "http://127.0.0.1:8080"
 
-
-# ---------------------------------------------------------------------------
-# Keyword boost tables
-# ---------------------------------------------------------------------------
-# Each term is applied at most once per post.
-# Terms are ordered longest-first so phrases win over their shorter substrings.
-# Matching is case-insensitive and overlap-aware.
-_ALL_BOOST_TERMS: list[tuple[str, float]] = [
-    ("to the moon", 0.15),
-    ("alts are up", 0.15),
-    ("bullish", 0.15),
-    ("moon", 0.15),
-    ("pump", 0.15),
-    ("rugpull", -0.15),
-    ("bearish", -0.15),
-    ("dump", -0.15),
-    ("crash", -0.15),
-    ("rug", -0.15),
-    ("bear", -0.15),
-]
 
 _SYMBOL_ALIASES: dict[str, tuple[str, ...]] = {
     "BTC": ("bitcoin",),
@@ -93,11 +79,7 @@ def _extract_base_token(symbol: str) -> str:
 
 def _coerce_text(value: Any) -> str:
     """Return a deterministic string for Reddit text fields."""
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    return str(value)
+    return coerce_scoring_text(value)
 
 
 def _default_if_none(value: Any, default: Any) -> Any:
@@ -132,48 +114,13 @@ def _post_mentions_symbol(symbol: str, base_token: str, title: str, selftext: st
     )
 
 
-# Deduplicated boost map: term -> boost (first occurrence wins for determinism)
-_BOOST_MAP: dict[str, float] = dict(_ALL_BOOST_TERMS)
-# Ordered list for deterministic iteration
-_BOOST_TERMS: list[tuple[str, float]] = list(_BOOST_MAP.items())
-
-
 def _compute_keyword_boost(title: str) -> float:
-    """Compute deterministic keyword modifier for a post title.
-
-    Each known term is applied at most once. Boosts are summed and clamped
-    to [-1.0, 1.0]. Matching is case-insensitive and overlap-aware.
-    Longer phrases are evaluated first so they win over shorter substrings.
-    """
-    lower_title = _coerce_text(title).lower()
-    occupied_spans: list[tuple[int, int]] = []
-    boost = 0.0
-
-    def overlaps(span: tuple[int, int]) -> bool:
-        start, end = span
-        for other_start, other_end in occupied_spans:
-            if start < other_end and end > other_start:
-                return True
-        return False
-
-    for term, value in _BOOST_TERMS:
-        pattern = (
-            re.compile(rf"\b{re.escape(term)}\b") if term.isalpha() else re.compile(re.escape(term))
-        )
-        match = pattern.search(lower_title)
-        if match is None:
-            continue
-        span = match.span()
-        if overlaps(span):
-            continue
-        occupied_spans.append(span)
-        boost += value
-
-    return max(-1.0, min(1.0, boost))
+    """Compatibility wrapper for the shared keyword boost scorer."""
+    return compute_keyword_boost(title)
 
 
 def _clamp(value: float, lo: float = -1.0, hi: float = 1.0) -> float:
-    return max(lo, min(hi, value))
+    return clamp_score(value, lo=lo, hi=hi)
 
 
 # ---------------------------------------------------------------------------
@@ -334,10 +281,6 @@ class RedditSentimentAnalyzer:
 
     def _build_post_record(self, subreddit: str, raw: dict[str, Any], title: str) -> dict[str, Any]:
         """Normalize a Reddit post into the required schema shape."""
-        vader_scores = self._vader.polarity_scores(title)
-        keyword_boost = _compute_keyword_boost(title)
-        final_score = _clamp(vader_scores["compound"] + keyword_boost)
-
         return {
             "subreddit": subreddit,
             "title": title,
@@ -346,14 +289,7 @@ class RedditSentimentAnalyzer:
             "upvote_ratio": _default_if_none(raw.get("upvote_ratio"), 0.0),
             "flair": raw.get("link_flair_text"),
             "created_utc": _default_if_none(raw.get("created_utc"), 0.0),
-            "sentiment": {
-                "vader_pos": round(vader_scores["pos"], 4),
-                "vader_neu": round(vader_scores["neu"], 4),
-                "vader_neg": round(vader_scores["neg"], 4),
-                "vader_compound": round(vader_scores["compound"], 4),
-                "keyword_boost": round(keyword_boost, 4),
-                "final_score": round(final_score, 4),
-            },
+            "sentiment": score_sentiment_text(title, self._vader).as_dict(),
         }
 
     def _summarize_posts(self, posts: list[dict[str, Any]]) -> dict[str, Any]:

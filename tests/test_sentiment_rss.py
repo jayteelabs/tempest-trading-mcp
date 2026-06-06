@@ -282,6 +282,23 @@ class TestRSSSentimentAnalyzerHappyPath:
         assert result["status"] == "ok"
         assert len(result["items"]) == 1
 
+    def test_description_is_inclusion_only_not_scoring_input(self):
+        analyzer = RSSSentimentAnalyzer(feeds=("https://example.com/rss",))
+        entries = [
+            make_rss_entry(
+                "News update",
+                description="BTC is bullish and going to the moon",
+            ),
+        ]
+
+        with patch.object(analyzer, "_fetch_and_parse_feed", return_value=entries):
+            result = analyzer.analyze("BTC")
+
+        assert result["status"] == "ok"
+        sentiment = result["items"][0]["sentiment"]
+        assert sentiment["keyword_boost"] == 0.0
+        assert sentiment["final_score"] == sentiment["vader_compound"]
+
     def test_summary_counts(self):
         analyzer = RSSSentimentAnalyzer(feeds=("https://example.com/rss",))
         entries = [

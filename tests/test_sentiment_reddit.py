@@ -246,6 +246,23 @@ class TestRedditSentimentAnalyzerHappyPath:
         assert result["status"] == "ok"
         assert len(result["posts"]) == 1
 
+    def test_selftext_is_inclusion_only_not_scoring_input(self):
+        analyzer = RedditSentimentAnalyzer(subreddits=("CryptoCurrency",))
+        children = [
+            {
+                **make_child_data("Weekend thread"),
+                "selftext": "BTC is bullish and going to the moon",
+            }
+        ]
+
+        with patch.object(analyzer, "_fetch_subreddit_posts", return_value=children):
+            result = analyzer.analyze("BTC")
+
+        assert result["status"] == "ok"
+        sentiment = result["posts"][0]["sentiment"]
+        assert sentiment["keyword_boost"] == 0.0
+        assert sentiment["final_score"] == sentiment["vader_compound"]
+
     def test_summary_counts(self):
         analyzer = RedditSentimentAnalyzer(subreddits=("CryptoCurrency",))
         children = [
