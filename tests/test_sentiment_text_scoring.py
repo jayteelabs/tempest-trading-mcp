@@ -42,6 +42,19 @@ def test_overlap_aware_matching_prefers_phrase() -> None:
 
 
 @pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("to the moon moon", 0.30),
+        ("moon to the moon", 0.30),
+        ("to the moon pump moon", 0.45),
+        ("to the moon bullish", 0.30),
+    ],
+)
+def test_later_non_overlapping_match_is_discovered(text: str, expected: float) -> None:
+    assert compute_keyword_boost(text) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
     "text",
     [
         "DOGE to the moondust",

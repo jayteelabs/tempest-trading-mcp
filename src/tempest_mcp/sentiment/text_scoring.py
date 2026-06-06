@@ -86,14 +86,13 @@ def compute_keyword_boost(text: Any) -> float:
         pattern = (
             re.compile(rf"\b{re.escape(term)}\b") if alpha_phrase else re.compile(re.escape(term))
         )
-        match = pattern.search(lower_text)
-        if match is None:
-            continue
-        span = match.span()
-        if overlaps(span):
-            continue
-        occupied_spans.append(span)
-        boost += value
+        for match in pattern.finditer(lower_text):
+            span = match.span()
+            if overlaps(span):
+                continue
+            occupied_spans.append(span)
+            boost += value
+            break
 
     return clamp_score(boost)
 
