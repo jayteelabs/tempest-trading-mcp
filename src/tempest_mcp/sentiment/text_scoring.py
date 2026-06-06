@@ -11,7 +11,9 @@ from typing import Any, Protocol
 class VaderLike(Protocol):
     """Protocol for the subset of VADER used by the shared scorer."""
 
-    def polarity_scores(self, text: str) -> Mapping[str, float]: ...
+    def polarity_scores(self, text: str) -> Mapping[str, float]:
+        """Return VADER polarity scores for the supplied text."""
+        raise NotImplementedError
 
 
 @dataclass(frozen=True)
@@ -80,8 +82,9 @@ def compute_keyword_boost(text: Any) -> float:
         return False
 
     for term, value in KEYWORD_BOOST_TERMS:
+        alpha_phrase = term.replace(" ", "").isalpha()
         pattern = (
-            re.compile(rf"\b{re.escape(term)}\b") if term.isalpha() else re.compile(re.escape(term))
+            re.compile(rf"\b{re.escape(term)}\b") if alpha_phrase else re.compile(re.escape(term))
         )
         match = pattern.search(lower_text)
         if match is None:

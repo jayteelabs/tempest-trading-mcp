@@ -41,6 +41,18 @@ def test_overlap_aware_matching_prefers_phrase() -> None:
     assert compute_keyword_boost("DOGE to the moon") == pytest.approx(0.15)
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "DOGE to the moondust",
+        "go to the moonshot",
+        "alts are upside",
+    ],
+)
+def test_multi_word_terms_require_word_boundaries(text: str) -> None:
+    assert compute_keyword_boost(text) == pytest.approx(0.0)
+
+
 def test_term_applies_once_per_record() -> None:
     assert compute_keyword_boost("BTC bullish bullish bullish") == pytest.approx(0.15)
 
